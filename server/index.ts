@@ -11,10 +11,13 @@ export const DESCRIPTION = `Run one type-checked TypeScript program that calls t
 
 The program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call starts fresh.
 
-Tools inside the program:
-- pi.read(path | {path, offset?, limit?}) -> string. At most 2000 lines; a notice says how to continue with offset.
-- pi.grep(pattern | {pattern, path?, glob?, ignoreCase?, context?, limit?}) -> string (ripgrep, "file:line:text").
-- pi.bash(command | {command, timeout?, cwd?, settle?}) -> {ok, output, details}. Rejects on a nonzero exit unless settle: true.
+Tools inside the program (same names and fields as Claude Code's tools; a single string means the main field):
+- Read({file_path, offset?, limit?}) -> string numbered like cat -n, at most 2000 lines; a notice says how to continue.
+- Write({file_path, content}) -> string.
+- Edit({file_path, old_string, new_string, replace_all?}) -> string. old_string must match exactly once unless replace_all.
+- Grep({pattern, path?, glob?, type?, output_mode?, "-i"?, "-A"?, "-B"?, "-C"?, head_limit?}) -> string. output_mode defaults to "files_with_matches"; "content" gives file:line:text.
+- Glob({pattern, path?}) -> string[] of paths, newest first.
+- Bash({command, timeout?, allowFailure?}) -> {output, exitCode}. timeout is in ms. Rejects on a nonzero exit unless allowFailure: true.
 - print(...values) adds a line to the output.
 - π.<key> reads a string from this call's payloads argument. Put long or syntax-heavy text there instead of in code.
 

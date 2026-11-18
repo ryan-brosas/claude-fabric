@@ -1,8 +1,8 @@
 # claude-fabric
 
 One tool call for everything in Claude Code. `fabric_exec` runs a type-checked TypeScript
-program on Bun. The program calls tools (`pi.read`, `pi.edit`, `pi.bash`, ...) and returns one
-bounded result. It replaces Claude Code's native code mode.
+program on Bun. The program calls tools with Claude Code's own names and fields (`Read`, `Write`, `Edit`, `Grep`,
+`Glob`, `Bash`) and returns one bounded result. It replaces Claude Code's native code mode.
 
 Status: phase 1. The plugin exposes `fabric_exec` to Claude Code. Fabric's self-correcting
 modules (argument repair, code repair, output budget, type-error guidance) come next.
@@ -35,9 +35,9 @@ Needs Bun 1.4+ and ripgrep.
 ## Layout
 
 - `kernel/check.ts`: wraps a program and type-checks it with a warm TypeScript program.
-- `kernel/worker.ts`: one fresh Bun Worker per call; `pi.*` calls cross to the host.
+- `kernel/worker.ts`: one fresh Bun Worker per call; tool calls cross to the host.
 - `kernel/host.ts`: check, run, time out, bound the result.
-- `kernel/tools.ts`: `pi.*` tool implementations.
+- `kernel/tools.ts`: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash` inside programs.
 - `server/index.ts`: MCP server with the one `fabric_exec` tool.
 - `server/start.sh`: plugin entry; installs dependencies on first start.
 

@@ -2,16 +2,16 @@ import { run } from "./host.ts";
 
 const cwd = process.argv[2] ?? process.cwd();
 const programs: Record<string, string> = {
-  read: `const pkg = JSON.parse(await pi.read("package.json")); return { name: pkg.name, deps: Object.keys(pkg.dependencies ?? {}) };`,
-  parallel: `const [hits, status, head] = await Promise.all([
-  pi.grep({ pattern: "export function", path: "kernel" }),
-  pi.bash("git status --short"),
-  pi.read("README.md", { limit: 3 }),
+  read: `const head = await Read({ file_path: "package.json", limit: 3 }); return head;`,
+  parallel: `const [files, status, kernel] = await Promise.all([
+  Grep({ pattern: "export function", path: "kernel" }),
+  Bash("git status --short"),
+  Glob("kernel/*.ts"),
 ]);
-print("grep hits:", hits.split("\\n").filter(Boolean).length);
-return { status: status.output.trim(), head };`,
-  typeError: `const n: number = await pi.read("package.json"); return n;`,
-  bashFail: `return await pi.bash("exit 3");`,
+print("grep files:", files.split("\\n").filter(Boolean).length);
+return { status: status.output.trim(), kernelFiles: kernel.length };`,
+  typeError: `const n: number = await Read("package.json"); return n;`,
+  bashFail: `return await Bash("exit 3");`,
 };
 
 const rows: Record<string, unknown>[] = [];
@@ -27,10 +27,10 @@ console.log(JSON.stringify({ rows, warmMeanMs: +(warm.reduce((a, b) => a + b, 0)
 // Each sample program has one expected outcome; any mismatch fails the run.
 const by = Object.fromEntries(rows.map((r) => [r.name, r])) as Record<string, { ok: boolean; calls: number; text: string }>;
 const expectations: [string, boolean][] = [
-  ["read returns package name", by.read.ok && by.read.text.includes('"claude-fabric"')],
-  ["parallel makes 3 calls and keeps print output", by.parallel.ok && by.parallel.calls === 3 && by.parallel.text.startsWith("grep hits:")],
+  ["Read numbers lines", by.read.ok && by.read.text.startsWith("     1\t{")],
+  ["parallel makes 3 calls and keeps print output", by.parallel.ok && by.parallel.calls === 3 && by.parallel.text.startsWith("grep files:")],
   ["type error stops before running", !by.typeError.ok && by.typeError.calls === 0 && by.typeError.text.includes("not assignable")],
-  ["nonzero bash rejects", !by.bashFail.ok && by.bashFail.text.includes("exited 3")],
+  ["nonzero Bash rejects", !by.bashFail.ok && by.bashFail.text.includes("exited 3")],
 ];
 const failed = expectations.filter(([, pass]) => !pass).map(([name]) => name);
 if (failed.length) { console.error("FAILED: " + failed.join("; ")); process.exit(1); }
