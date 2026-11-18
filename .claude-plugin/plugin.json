@@ -1,7 +1,7 @@
 {
   "name": "fabric",
   "version": "0.1.0",
-  "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything, run on Bun",
+  "description": "pi-fabric's fabric_exec for Claude Code: Claude writes one type-checked TypeScript program instead of many tool calls, and gets back only the result",
   "author": {
     "name": "Ryan Brosas"
   },

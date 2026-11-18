@@ -7,8 +7,8 @@
     {
       "name": "fabric",
       "source": "./",
-      "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything, run on Bun"
+      "description": "pi-fabric's fabric_exec for Claude Code: Claude writes one type-checked TypeScript program instead of many tool calls, and gets back only the result"
     }
   ],
-  "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything"
+  "description": "pi-fabric's fabric_exec, ported to Claude Code"
 }
