@@ -1,16 +1,47 @@
 # claude-fabric
 
-[pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s `fabric_exec`, ported to Claude Code as a
-plugin. Claude writes one type-checked TypeScript program instead of many tool calls, and only
-the program's result comes back. Inside the program, tools keep Claude Code's names. It is meant
-to replace Claude Code's native code mode.
+A Claude Code plugin that brings [pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s
+`fabric_exec` to Claude Code. The goal is for Claude to use it instead of Claude Code's native
+code mode. It has to earn that in the benchmark (step 4 below); until then, that it saves tokens
+is a hypothesis.
+
+## What we're building
+
+- **One tool, `fabric_exec`.** Claude sends one TypeScript program. The program reads, searches,
+  edits and runs commands through `Read`, `Write`, `Edit`, `Grep`, `Glob` and `Bash`, with the
+  same names and fields as Claude Code's own tools. Independent calls run in parallel with
+  `Promise.all`. Only what the program returns or prints comes back, cut to a fixed size, so file
+  contents and command output it only passes through never enter Claude's context.
+- **Checked before it runs.** Every program is type-checked first. A type error comes back with
+  line numbers, and no tool call has happened.
+- **Shipped as a plugin.** A Claude Code plugin can add a tool only through an MCP server, so
+  the plugin starts one MCP server (`server/`) with one tool. The tool shows up as
+  `mcp__plugin_fabric_fabric__fabric_exec`.
+- **Only `fabric_exec` from pi-fabric.** pi-fabric is a whole runtime for the Pi agent (agents,
+  actors, mesh, workflows, memory). We take `fabric_exec` and the modules that make it correct
+  itself, and nothing else. Pi names (`pi.read`, `pi.bash`) never appear.
+
+Where it stands:
+
+1. **Done:** the kernel (check, fresh Bun Worker per call, bounded result), the MCP server and
+   plugin, and Claude Code tool names inside programs.
+2. **Next:** port pi-fabric's self-correcting modules: argument repair, code repair, output
+   budget, type-error guidance and a repeat guard. Copy them with MIT credit.
+3. **Then:** `store`/`load` between calls, `__bun` with logged writes and spawns, and
+   `mcp.<server>.<tool>()` inside programs.
+4. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
+   the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
+   with at most 10% more tokens.
+5. **Last:** turn native code mode off and run the benchmark again.
+
+Each step's details and the things we chose not to build are in
+[docs/internals/decisions.md](docs/internals/decisions.md).
 
 The user's global `AGENTS.md` supplies standing rules. This file adds project context, not
 exceptions. If a rule here fights the task, say so loudly.
 
 Words: [CONTEXT.md](CONTEXT.md) is the glossary. Use its terms in code, tests and PR text.
-Decisions and non-goals: [docs/internals/decisions.md](docs/internals/decisions.md). Read it
-before you add scope.
+Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add scope.
 
 ## What we never compromise on
 
