@@ -1,0 +1,17 @@
+{
+  "name": "claude-fabric",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "spike": "bun kernel/spike.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "6.0.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4"
+  }
+}
