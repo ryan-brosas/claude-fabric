@@ -9,3 +9,5 @@ declare const pi: {
   bash(command: string | PiBashOptions, options?: Omit<PiBashOptions, "command">): Promise<PiEnvelope>;
 };
 declare function print(...values: unknown[]): void;
+/** String payloads passed in the same call's `payloads` argument. */
+declare const π: Readonly<Record<string, string>>;

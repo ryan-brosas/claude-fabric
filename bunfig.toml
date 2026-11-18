@@ -1,0 +1,3 @@
+[test]
+# Only this repo's tests; upstream/ holds the pi-fabric reference clone.
+root = "./test"

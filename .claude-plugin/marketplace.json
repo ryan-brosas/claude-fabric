@@ -1,0 +1,14 @@
+{
+  "name": "fabric-exec",
+  "owner": {
+    "name": "Ryan Brosas"
+  },
+  "plugins": [
+    {
+      "name": "fabric",
+      "source": "./",
+      "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything, run on Bun"
+    }
+  ],
+  "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything"
+}

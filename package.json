@@ -6,10 +6,13 @@
   "license": "MIT",
   "scripts": {
     "spike": "bun kernel/spike.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./test"
   },
   "dependencies": {
-    "typescript": "6.0.3"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "typescript": "6.0.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4"

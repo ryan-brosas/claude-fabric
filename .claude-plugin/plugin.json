@@ -1,0 +1,24 @@
+{
+  "name": "fabric",
+  "version": "0.1.0",
+  "description": "fabric_exec for Claude Code: one type-checked TypeScript tool call for everything, run on Bun",
+  "author": {
+    "name": "Ryan Brosas"
+  },
+  "homepage": "https://github.com/ryan-brosas/claude-fabric",
+  "repository": "https://github.com/ryan-brosas/claude-fabric",
+  "license": "MIT",
+  "keywords": [
+    "code-mode",
+    "typescript",
+    "bun"
+  ],
+  "mcpServers": {
+    "fabric": {
+      "command": "bash",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/start.sh"
+      ]
+    }
+  }
+}
