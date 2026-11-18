@@ -1,4 +1,4 @@
-// One fresh Worker per fabric_exec call. Every pi.* call crosses to the host.
+// One fresh Worker per fabric_exec call. Every tool call crosses to the host.
 export {};
 declare const self: Worker;
 let next = 0;
@@ -12,7 +12,8 @@ const call = (ref: string, args: unknown[]) =>
     self.postMessage({ kind: "call", id, ref, args });
   });
 
-const pi = new Proxy({}, { get: (_t, name: string) => (...args: unknown[]) => call("pi." + name, args) });
+const TOOL_NAMES = ["Read", "Write", "Edit", "Grep", "Glob", "Bash"] as const;
+const toolFns = TOOL_NAMES.map((name) => (...args: unknown[]) => call(name, args));
 const print = (...values: unknown[]) => { logs.push(values.map((v) => typeof v === "string" ? v : JSON.stringify(v)).join(" ")); };
 
 self.onmessage = async (event: MessageEvent) => {
@@ -33,8 +34,8 @@ self.onmessage = async (event: MessageEvent) => {
           throw new Error(`π.${key} is not in this call's payloads. Provided keys: ${Object.keys(t).join(", ") || "(none)"}`);
         },
       });
-      const run = new Function("pi", "print", "π", "return " + msg.js);
-      const value = await run(pi, print, π);
+      const run = new Function(...TOOL_NAMES, "print", "π", "return " + msg.js);
+      const value = await run(...toolFns, print, π);
       self.postMessage({ kind: "done", value, logs });
     } catch (error) {
       self.postMessage({ kind: "done", error: error instanceof Error ? error.message : String(error), logs });
