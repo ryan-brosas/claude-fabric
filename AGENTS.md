@@ -1,9 +1,9 @@
 # claude-fabric
 
-A Claude Code plugin that adds one MCP tool, `fabric_exec`. It runs a type-checked TypeScript
-program on Bun, and the program calls tools by Claude Code's own names. It is a lean port of
-[pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s `fabric_exec`, meant to replace
-Claude Code's native code mode.
+[pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s `fabric_exec`, ported to Claude Code as a
+plugin. Claude writes one type-checked TypeScript program instead of many tool calls, and only
+the program's result comes back. Inside the program, tools keep Claude Code's names. It is meant
+to replace Claude Code's native code mode.
 
 The user's global `AGENTS.md` supplies standing rules. This file adds project context, not
 exceptions. If a rule here fights the task, say so loudly.
