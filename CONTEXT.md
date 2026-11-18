@@ -40,9 +40,10 @@ The server-side half of a call. It runs the check, starts the worker, serves too
 cuts the result.
 
 **Worker**:
-The fresh Bun `Worker` thread a program runs in, one per call. It is a JS sandbox thread, not
-an agent.
-_Avoid_: agent, child, sandbox process
+The fresh Bun `Worker` thread a program runs in, one per call. It is an execution thread, not
+an agent and not a security sandbox: a program can reach Bun's globals, not only the program
+tools.
+_Avoid_: agent, child, sandbox
 
 **Payloads**:
 Named strings sent beside `code`, which a program reads as `π.<key>`. They carry long or
