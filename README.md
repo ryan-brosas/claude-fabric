@@ -4,14 +4,30 @@ One tool call for everything in Claude Code. `fabric_exec` runs a type-checked T
 program on Bun. The program calls tools (`pi.read`, `pi.edit`, `pi.bash`, ...) and returns one
 bounded result. It replaces Claude Code's native code mode.
 
-Status: phase 0. The kernel works; the MCP server and plugin come next.
+Status: phase 1. The plugin exposes `fabric_exec` to Claude Code. Fabric's self-correcting
+modules (argument repair, code repair, output budget, type-error guidance) come next.
 
-## Try the kernel
+## Install
+
+In Claude Code:
+
+```
+/plugin marketplace add ryan-brosas/claude-fabric
+/plugin install fabric@fabric-exec
+```
+
+Needs Bun 1.4+ and ripgrep on PATH. The first start runs `bun install` inside the plugin folder.
+The tool shows up as `mcp__plugin_fabric_fabric__fabric_exec`.
+
+To try a local checkout: `claude --plugin-dir /path/to/claude-fabric`.
+
+## Develop
 
 ```sh
 bun install
 bun run spike      # runs sample programs against this repo and prints timings
 bun run typecheck
+bun run test       # starts the MCP server over stdio and calls fabric_exec
 ```
 
 Needs Bun 1.4+ and ripgrep.
@@ -22,6 +38,8 @@ Needs Bun 1.4+ and ripgrep.
 - `kernel/worker.ts`: one fresh Bun Worker per call; `pi.*` calls cross to the host.
 - `kernel/host.ts`: check, run, time out, bound the result.
 - `kernel/tools.ts`: `pi.*` tool implementations.
+- `server/index.ts`: MCP server with the one `fabric_exec` tool.
+- `server/start.sh`: plugin entry; installs dependencies on first start.
 
 ## Credit
 

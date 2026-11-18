@@ -6,7 +6,8 @@ const MAX_RESULT_CHARS = 20_000;
 
 export interface RunResult { ok: boolean; text: string; ms: { check: number; run: number }; calls: number }
 
-export async function run(code: string, cwd: string, timeoutMs = 120_000): Promise<RunResult> {
+export async function run(code: string, cwd: string, options: { payloads?: Record<string, string>; timeoutMs?: number } = {}): Promise<RunResult> {
+  const timeoutMs = options.timeoutMs ?? 120_000;
   const t0 = performance.now();
   const checked = check(code);
   const checkMs = performance.now() - t0;
@@ -32,7 +33,7 @@ export async function run(code: string, cwd: string, timeoutMs = 120_000): Promi
           }
         }
       };
-      worker.postMessage({ kind: "run", js: transpile(code) });
+      worker.postMessage({ kind: "run", js: transpile(code), payloads: options.payloads ?? {} });
     });
     const body = done.error ? "Error: " + done.error : typeof done.value === "string" ? done.value : JSON.stringify(done.value, null, 2) ?? "undefined";
     let text = [...done.logs, body].join("\n");

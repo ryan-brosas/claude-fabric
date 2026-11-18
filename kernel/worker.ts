@@ -26,8 +26,15 @@ self.onmessage = async (event: MessageEvent) => {
   }
   if (msg.kind === "run") {
     try {
-      const run = new Function("pi", "print", "return " + msg.js);
-      const value = await run(pi, print);
+      const payloads: Record<string, string> = msg.payloads ?? {};
+      const π = new Proxy(payloads, {
+        get: (t, key) => {
+          if (typeof key !== "string" || key in t) return (t as Record<string | symbol, unknown>)[key];
+          throw new Error(`π.${key} is not in this call's payloads. Provided keys: ${Object.keys(t).join(", ") || "(none)"}`);
+        },
+      });
+      const run = new Function("pi", "print", "π", "return " + msg.js);
+      const value = await run(pi, print, π);
       self.postMessage({ kind: "done", value, logs });
     } catch (error) {
       self.postMessage({ kind: "done", error: error instanceof Error ? error.message : String(error), logs });

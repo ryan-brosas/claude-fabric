@@ -12,7 +12,9 @@
     ]
   },
   "include": [
-    "kernel/**/*.ts"
+    "kernel/**/*.ts",
+    "server/**/*.ts",
+    "test/**/*.ts"
   ],
   "exclude": [
     "kernel/guest.d.ts"
