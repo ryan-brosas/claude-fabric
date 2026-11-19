@@ -1,6 +1,6 @@
 import type { Register } from "claude-code";
 import { compact } from "../compaction/compact.ts";
-import { bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
+import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
 import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
 import {
   answerOf,
@@ -29,6 +29,8 @@ export const register: Register = (on) => {
   // Between hook bodies: the catalog to publish, and this session's socket once it is known.
   let state = emptyState();
   let socket: BridgePaths | undefined;
+  // The session the socket belongs to: a secret file that names another session is not ours.
+  let ownSession = "";
   // Whether the last tool list held fabric_exec: only then is the deferred list shortened.
   let fabricInPool = false;
 
@@ -74,12 +76,13 @@ export const register: Register = (on) => {
         return;
       }
       socket = paths;
+      ownSession = sessionId;
 
       let failures = 0;
       for (;;) {
         try {
-          const secret = (await $.fs.read(paths.secret)).trim();
-          if (secret === "") throw new Error("the bridge secret is empty");
+          const secret = boundSecret(await $.fs.read(paths.secret), sessionId);
+          if (secret === undefined) throw new Error("the bridge secret is empty or names another session");
           state = notedSecret(state, secret);
           const plan = publishPlan(state);
           if (plan !== undefined) {
@@ -161,8 +164,8 @@ export const register: Register = (on) => {
     // Published here as well as by the loop: the loop may be parked in its long poll, and a program
     // that runs meanwhile would otherwise find no catalog.
     if (socket !== undefined) {
-      const secret = (await $.fs.read(socket.secret).catch(() => "")).trim();
-      if (secret !== "") {
+      const secret = boundSecret(await $.fs.read(socket.secret).catch(() => ""), ownSession);
+      if (secret !== undefined) {
         state = notedSecret(state, secret);
         const plan = publishPlan(state);
         if (plan !== undefined) {

@@ -2,6 +2,8 @@
 // inside Claude Code, is its client. Both sides build the same paths and send the same JSON, so
 // neither can drift from the other, and a test can move the whole bridge into a temporary folder.
 
+import { bridgeBindingVerdict } from "../kernel/verified/bridge-binding.ts";
+
 /** The header every request carries: the per-session secret the server wrote beside the socket. */
 export const BRIDGE_HEADER = "x-fabric-bridge";
 
@@ -47,6 +49,19 @@ export function bridgePaths(pluginData: string, sessionId: string): BridgePaths 
     secret: dir + "/" + name + ".key",
     lock: dir + "/" + name + ".lock",
   };
+}
+
+/** What the server writes to the secret file: the full session id, then the secret. */
+export const secretFileText = (sessionId: string, secret: string): string => sessionId + "\n" + secret + "\n";
+
+/**
+ * The secret a mod may use, or undefined. Files are named by a prefix of the session id, so a
+ * file can belong to another session that shares the prefix; its secret is used only when the
+ * file names this session in full (proofs/bridge-binding.ts).
+ */
+export function boundSecret(text: string, sessionId: string): string | undefined {
+  const [owner = "", secret = ""] = text.split("\n").map((line) => line.trim());
+  return bridgeBindingVerdict(sessionId !== "" && owner === sessionId, secret !== "") ? secret : undefined;
 }
 
 /** Why these paths cannot be used, or undefined when they can. Both sides ask before using them. */

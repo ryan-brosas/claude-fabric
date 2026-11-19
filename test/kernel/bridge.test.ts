@@ -5,6 +5,8 @@ import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  boundSecret,
+  secretFileText,
   BRIDGE_HEADER,
   SOCKET_PATH_LIMIT,
   bridgePathProblem,
@@ -54,7 +56,7 @@ afterEach(async () => {
 });
 
 // A test's secret is the one the server wrote; the constant above only proves a wrong one is refused.
-const secretOf = async (paths: ReturnType<typeof bridgePaths>): Promise<string> => (await Bun.file(paths.secret).text()).trim();
+const secretOf = async (paths: ReturnType<typeof bridgePaths>): Promise<string> => (await Bun.file(paths.secret).text()).trim().split("\n").at(-1)!.trim();
 
 describe("the bridge's paths", () => {
   test("builds the socket and its secret under the plugin's data folder", () => {
@@ -79,6 +81,19 @@ describe("the bridge's paths", () => {
     const paths = bridgePaths(installed, "83cc3a05-e248-4b4d-8fac-a741e780889e");
     expect(paths.socket).toBe(installed + "/bridge/83cc3a05e2484b4d8fac.sock");
     expect(bridgePathProblem(paths)).toBeUndefined();
+  });
+
+  test("a secret file is used only by the session it names in full", () => {
+    // Two UUIDs that share their first 20 letters and digits share one set of bridge files.
+    const owner = "83cc3a05-e248-4b4d-8fac-a741e780889e";
+    const other = "83cc3a05-e248-4b4d-8fac-000000000000";
+    expect(bridgePaths("/data", owner)).toEqual(bridgePaths("/data", other));
+    const text = secretFileText(owner, "s3cret");
+    expect(boundSecret(text, owner)).toBe("s3cret");
+    expect(boundSecret(text, other)).toBeUndefined();
+    expect(boundSecret(secretFileText(owner, ""), owner)).toBeUndefined();
+    expect(boundSecret("s3cret\n", owner)).toBeUndefined();
+    expect(boundSecret(text, "")).toBeUndefined();
   });
 
   test("refuses a session id with nothing to name a file by", () => {
