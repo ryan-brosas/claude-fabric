@@ -1,22 +1,23 @@
-// The fabricOnly option hides the tools a program runs, and only when fabric_exec is there to take their place.
+// The fabricOnly option keeps the tools a program runs from the main conversation's model, only
+// when fabric_exec is there to take their place. Agents keep every tool.
 import { describe, expect, test } from "bun:test";
 import { FABRIC_EXEC_TOOL } from "../../src/guidance/guidance.ts";
-import { FABRIC_ONLY_OPTION, HIDDEN_TOOLS, fabricOnly, withoutProgramTools } from "../../src/mod/fabric-only.ts";
+import { FABRIC_ONLY_OPTION, HIDDEN_TOOLS, fabricOnly, offered } from "../../src/mod/fabric-only.ts";
 import { register } from "../../src/mod/index.ts";
 
-const named = (names: string[]) => names.map((name) => ({ name, description: "", mcp: false }));
 const pool = [FABRIC_EXEC_TOOL, "Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"];
+const shown = (facts: Parameters<typeof offered>[1]) => pool.filter((tool) => offered(tool, facts));
 
-describe("withoutProgramTools", () => {
-  test("hides the server-run program tools and keeps Read, WebSearch and every other tool", () => {
+describe("offered", () => {
+  test("the main conversation loses the server-run program tools and keeps Read, WebSearch and the rest", () => {
     expect([...HIDDEN_TOOLS].sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Write"]);
-    expect(withoutProgramTools(named(pool), true).map((tool) => tool.name)).toEqual([FABRIC_EXEC_TOOL, "Read", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"]);
+    expect(shown({ optionOn: true, fabricInPool: true })).toEqual([FABRIC_EXEC_TOOL, "Read", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"]);
   });
 
-  test("hides nothing when fabric_exec is not in the list, or with the option off", () => {
-    const plain = named(pool.slice(1));
-    expect(withoutProgramTools(plain, true)).toEqual(plain);
-    expect(withoutProgramTools(named(pool), false)).toEqual(named(pool));
+  test("an agent, a pool without fabric_exec, or the option off keeps every tool", () => {
+    expect(shown({ optionOn: true, fabricInPool: true, agentId: "a1" })).toEqual(pool);
+    expect(shown({ optionOn: true, fabricInPool: false })).toEqual(pool);
+    expect(shown({ optionOn: false, fabricInPool: true })).toEqual(pool);
   });
 
   test("the mode is on only for the boolean true", () => {
@@ -32,25 +33,36 @@ describe("withoutProgramTools", () => {
 });
 
 type Handler = (dollar: unknown, event: unknown, next: (event: unknown) => unknown) => unknown;
-const toolList = (options: Record<string, unknown>): Handler => {
+const hooks = (options: Record<string, unknown>) => {
   const handlers = new Map<string, Handler>();
   const on = (topic: string, ...rest: unknown[]) => {
     handlers.set(topic, rest.at(-1) as Handler);
     return { catch: () => undefined };
   };
   register(on as never, options as never);
-  return handlers.get("tool.list")!;
+  return handlers;
 };
+const listOf = (names: string[]) => ({ value: names.map((name) => ({ name, description: "", mcp: false })) });
+const offer = async (h: Map<string, Handler>, tool: string, agentId?: string, engine = true) =>
+  h.get("tool.offer")!({}, { tool, ...(agentId ? { agentId } : {}) }, () => ({ isOffered: engine }));
 
-describe("the tool.list hook", () => {
-  test("hides the program tools with fabricOnly on", async () => {
-    const result = await toolList({ [FABRIC_ONLY_OPTION]: true })({}, {}, () => ({ value: named(pool) })) as { value: { name: string }[] };
-    expect(result.value.map((tool) => tool.name)).toEqual([FABRIC_EXEC_TOOL, "Read", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"]);
+describe("the tool.offer hook", () => {
+  test("with the option on, hides Bash from the main conversation once fabric_exec is in the pool", async () => {
+    const h = hooks({ [FABRIC_ONLY_OPTION]: true });
+    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
+    const listed = listOf(pool);
+    expect(await h.get("tool.list")!({}, {}, () => listed)).toBe(listed);
+    expect(await offer(h, "Bash")).toEqual({ isOffered: false });
+    expect(await offer(h, "Read")).toEqual({ isOffered: true });
+    expect(await offer(h, "Bash", "agent-1")).toEqual({ isOffered: true });
   });
 
-  test("returns the list untouched with the option off or unset", async () => {
-    const listed = { value: named(pool) };
-    expect(await toolList({ [FABRIC_ONLY_OPTION]: false })({}, {}, () => listed)).toBe(listed);
-    expect(await toolList({})({}, {}, () => listed)).toBe(listed);
+  test("never offers a tool the engine or another hook withheld, and leaves everything alone with the option off", async () => {
+    const on = hooks({ [FABRIC_ONLY_OPTION]: true });
+    await on.get("tool.list")!({}, {}, () => listOf(pool));
+    expect(await offer(on, "Agent", undefined, false)).toEqual({ isOffered: false });
+    const off = hooks({});
+    await off.get("tool.list")!({}, {}, () => listOf(pool));
+    expect(await offer(off, "Bash")).toEqual({ isOffered: true });
   });
 });

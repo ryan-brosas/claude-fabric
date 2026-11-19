@@ -8,9 +8,9 @@ function init(params) {
   return {scalars: {"out.hidden": 0}, maps: {}};
 }
 function step(params, state, input) {
-  const env = {"optionOn": $n(input["optionOn"], "input optionOn"), "fabricInPool": $n(input["fabricInPool"], "input fabricInPool"), "programTool": $n(input["programTool"], "input programTool"), "kept": $n(input["kept"], "input kept")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
-  if (!((env["optionOn"] <= 1) && (env["fabricInPool"] <= 1) && (env["programTool"] <= 1) && (env["kept"] <= 1))) throw new RangeError("tool visibility: the request fails the rule's assumption, so no proof covers the step it would take");
-  const scalars = {...s, "out.hidden": (((((env["optionOn"] === 1) && (env["fabricInPool"] === 1)) && (env["programTool"] === 1)) && (!(env["kept"] === 1))) ? 1 : 0)};
+  const env = {"optionOn": $n(input["optionOn"], "input optionOn"), "mainLoop": $n(input["mainLoop"], "input mainLoop"), "fabricInPool": $n(input["fabricInPool"], "input fabricInPool"), "programTool": $n(input["programTool"], "input programTool"), "kept": $n(input["kept"], "input kept")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["optionOn"] <= 1) && (env["mainLoop"] <= 1) && (env["fabricInPool"] <= 1) && (env["programTool"] <= 1) && (env["kept"] <= 1))) throw new RangeError("tool visibility: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.hidden": ((((((env["optionOn"] === 1) && (env["mainLoop"] === 1)) && (env["fabricInPool"] === 1)) && (env["programTool"] === 1)) && (!(env["kept"] === 1))) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };

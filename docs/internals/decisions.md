@@ -139,17 +139,16 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool
   stays visible unless the person turns on `fabricOnly`.
 - **`fabricOnly`, off by default** (plugin.json `userConfig`, `src/mod/fabric-only.ts`). pi-fabric's
-  full code mode, cut down: with code mode off, the mod's `tool.list` hook drops Bash, Edit, Write,
-  Grep and Glob while `fabric_exec` is in the pool. Read stays for images and PDFs, and WebSearch
-  stays because a hidden tool is hidden from the mod's `$.tool.call` too. It is an option, not
-  the default, because it changes every session. Claude Code's removal is session-wide, with no
-  per-agent scope: a subagent whose `tools` names only Bash loses it with no `fabric_exec` in its
-  place, and Bash's background jobs go too (a program's Bash waits, within the 120 s deadline). The
-  option's description says both. The rule is a gdp-wired kernel, `proofs/tool-visibility.ts`
-  (4 laws, 5 broken variants refused), and the mod hides a tool only through its compiled verdict. An env var cannot carry it: `$.process.hookEnv`
-  returns only Claude Code's own variables. Live, `claude -p` with the option on listed no Bash,
-  Edit or Write, and its first request was 24,379 tokens against 26,358 with it off; the debug log
-  says "3 removed". Whether it lowers a task's total is not yet measured.
+  full code mode, cut down: with code mode off, the mod's `tool.offer` hook keeps Bash, Edit, Write,
+  Grep and Glob from the main conversation's model while `fabric_exec` is in the pool. Agents keep
+  every tool, and the pool is untouched, so `$.tool.call` still reaches them; `tool.list` was tried
+  first and removes a tool from the whole session, agents and the mod included. Read stays for images
+  and PDFs, and WebSearch because a program's WebSearch skips the person's permission prompts. The
+  main conversation also loses Bash's background jobs (a program's Bash waits, within the 120 s
+  deadline). It is an option, not the default, because it changes every session. An env var cannot
+  carry it: `$.process.hookEnv` returns only Claude Code's own variables. The rule is a gdp-wired
+  kernel, `proofs/tool-visibility.ts` (5 laws, 6 broken variants refused), and the hook hides a tool
+  only through its compiled verdict. Whether it lowers a task's total is not yet measured.
 
 ## Out of scope
 

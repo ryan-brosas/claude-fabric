@@ -16,7 +16,7 @@ import {
   retryDelay,
 } from "./bridge.ts";
 import { compactDeferred } from "./deferred.ts";
-import { fabricOnly, withoutProgramTools } from "./fabric-only.ts";
+import { fabricOnly, offered } from "./fabric-only.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -178,8 +178,14 @@ export const register: Register = (on, options) => {
         }
       }
     }
-    // With fabricOnly on, the tools a program runs leave the model's list (src/mod/fabric-only.ts).
-    if (!programsOnly) return listed;
-    return { ...listed, value: [...withoutProgramTools(listed.value, programsOnly)] };
+    return listed;
+  }).catch(($, e, next) => next(e));
+
+  // With fabricOnly on, the main conversation's model is not offered the tools a program runs
+  // (src/mod/fabric-only.ts). Agents keep them, and the pool is untouched, so $.tool.call too.
+  on("tool.offer", async ($, e, next) => {
+    const answer = await next(e);
+    if (!answer.isOffered || !programsOnly) return answer;
+    return { isOffered: offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool }) };
   }).catch(($, e, next) => next(e));
 };
