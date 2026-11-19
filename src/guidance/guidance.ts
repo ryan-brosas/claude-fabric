@@ -23,8 +23,8 @@ export const guidanceText = (names: readonly string[] = TOOL_NAMES): string =>
   [
     "Reach for `fabric_exec` first: reading, searching, editing and shell commands, even a lone command, go in one `fabric_exec` program, not in separate Read, Bash or Edit calls; call those directly only for what a program cannot do.",
     "The program is an async function body. Call " + list(names) + " inside it with Claude Code's field names, and put independent calls in one `Promise.all`.",
-    "In a large file, find lines with Grep, then Read just that range; Read a small file whole only when you need all of it. Don't `cat` files through Bash.",
-    "File contents and command output a program only passes through never enter your context, so return the few lines the next step needs, not raw output.",
+    "In a large file, Grep for the lines, then Read just that range; read small files whole. Don't `cat` files through Bash.",
+    "File contents and command output a program only passes through never enter your context, so return what the next step needs, not raw output.",
     "Every program is type-checked first; a type error comes back with line numbers and nothing runs.",
     "`store(key, value)` and `load(key)` keep values between calls; other MCP servers are `mcp.<server>.<tool>(args)`.",
   ].join(" ");

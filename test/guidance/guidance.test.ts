@@ -37,7 +37,7 @@ test("the section carries the substance a program needs", () => {
     "only passes through never enter your context",
     "type-checked first",
     "Read just that range",
-    "don't `cat` files through Bash",
+    "Don't `cat` files through Bash",
     "not raw output",
     "store(key, value)",
     "load(key)",
