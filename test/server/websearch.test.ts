@@ -56,14 +56,16 @@ const post = async (
   });
 };
 
-// The mod's side: a long poll cut short every 250 ms, so a test can stop it, and each job answered
-// with whatever the current handler says.
+// The mod's side, polling as the real mod does: each poll runs until the server's own limit, never
+// cut short by the client, since a poll cut short just as the server hands it a job loses that job.
+// Stopping aborts the one poll in flight. Each job is answered with whatever the current handler says.
 const startMod = (target = paths): (() => Promise<void>) => {
   let stop = false;
+  const stopped = new AbortController();
   const loop = (async () => {
     while (!stop) {
       try {
-        const response = await post("/next", {}, { target, signal: AbortSignal.timeout(250) });
+        const response = await post("/next", {}, { target, signal: stopped.signal });
         if (!response.ok) continue;
         const body = await response.json() as { job: BridgeJob | null };
         if (body.job !== null) {
@@ -71,12 +73,14 @@ const startMod = (target = paths): (() => Promise<void>) => {
           await post("/answer", answer(builtinJob(body.job)), { target });
         }
       } catch {
-        // The poll timed out, or the server is not listening yet.
+        // The test stopped the loop, or the server is not listening yet.
+        if (!stop) await Bun.sleep(10);
       }
     }
   })();
   return async () => {
     stop = true;
+    stopped.abort();
     await loop.catch(() => undefined);
   };
 };
