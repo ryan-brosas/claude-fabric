@@ -39,9 +39,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 - `store`/`load` to keep data between calls.
 - `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal.
-- `mcp.<server>.<tool>()` inside programs, through the official MCP SDK reading Claude's MCP
-  config. It covers stdio servers and HTTP servers with header keys. OAuth servers and claude.ai
-  connectors stay top-level.
+- `mcp.<server>.<tool>()` inside programs. First choice: route it through the mod's
+  `$.mcp.call`, which uses Claude Code's own connections and credentials, claude.ai connectors
+  included. Fallback if that bridge fails its probe: the official MCP SDK reading Claude's MCP
+  config, for stdio servers and HTTP servers with header keys only.
 - A benchmark of plain Claude, Claude with native code mode, and Claude with `fabric_exec`.
   Pass: it solves at least as many tasks as native code mode, with at most 10% more tokens.
 - After the benchmark, native code mode is turned off. Every other tool stays visible.

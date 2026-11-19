@@ -46,13 +46,14 @@ the docs. It is untested until a row says otherwise.
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
 | Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | documented; hiding built-ins unverified |
 | Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, bridged to the server | documented; needs a probe |
-| Input transforms (pasted images) | `input` | `prompt.submit` | documented |
+| Input transforms (pasted images) | `input` | `prompt.submit` can rewrite text; its attachment list is pinned, so adding image blocks is not covered | gap for images; text documented |
 | Agents and actors | Pi child processes | `$.agent.spawn/call/list`, `agent.spawn` hook | documented |
-| Mesh, sessions, decisions | own transport | `$.session.send`, `session.receive` | documented |
-| Thinking control | `thinking.*` | `turn.step` `effort` | documented |
+| Mesh (durable topics, compare-and-swap state), decisions (durable approvals), sessions (interactive processes) | own implementations | stay in the server; `$.session.send` and `session.receive` only deliver peer text | server-side; delivery documented |
+| Thinking control (`thinking.*`) | `getThinkingLevel`, `setThinkingLevel`, `appendEntry`, turn-scoped reversion | `turn.step` `effort`: one step per rewrite, no `off` or `minimal` level | partial: needs a scoped controller in the mod and a level mapping |
 | Commands (`/fabric`, settings) | `registerCommand` | `$.command.register`, `command.run` | documented |
 | UI (`src/ui`, 29k lines of Pi TUI) | Pi TUI | `ui.render`: panes, band, tool-call rows, spinner | rebuild, not port |
-| Memory, state, programs, schema, store | none (own storage) | server storage under `CLAUDE_PLUGIN_DATA` | no host dependency |
+| State, programs, schema, store | none (own storage) | server storage under `CLAUDE_PLUGIN_DATA` | no host dependency |
+| Memory (`src/memory`) | `sessionManager` session file, branch and leaf | index and storage in the server; history from a Claude transcript adapter (`transcript_path`, `$.session.messages()`) | needs the adapter |
 | QuickJS, Node-process, Python runtimes | none | server | no host dependency |
 | Per-request context projection (extractive history, prewalk continuation) | `context` | none: `turn.step` messages are pinned | gap; nearest is a compaction between turns |
 | Model providers, Jev auth, model pin guard | `registerProvider`, `before_provider_request` | `turn.step` and `agent.spawn` pick a model only | gap: no custom providers |
@@ -94,5 +95,8 @@ test/           mirrors src/
 - How the mod reaches the server privately: `$.mcp.call` on our own server, `$.process.run`, or
   a local socket. A server tool the mod calls must not show up as a tool the model can call.
 - Whether `$.tool.call` from the mod reaches built-in tools (WebSearch, Agent) for programs.
+- Whether `mcp.<server>.<tool>()` in programs can go through the mod's `$.mcp.call`, which uses
+  Claude Code's own connections and credentials, claude.ai connectors included. If it can, it
+  replaces a second MCP client and config reader in the server.
 - Whether a mod can take built-in tools off the model's list, which full code mode needs.
 - `session.append` door `compaction` did not fire for core's own compaction in the probe.
