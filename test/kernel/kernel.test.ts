@@ -1,12 +1,26 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { check } from "../../src/kernel/check.ts";
 import { run } from "../../src/kernel/host.ts";
 import { MAX_RESULT_CHARS, bound, format } from "../../src/kernel/result.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 import { guestTypes } from "../../src/registry/generate.ts";
+import { BLOCK, RepeatGuard } from "../../src/stages/repeat-guard.ts";
 
 // The declarations the checker serves come from the actions (test/registry/generate.test.ts).
 const declarations = guestTypes(TOOLS);
+
+// An oversized result is saved whole in a fresh private directory; a test that makes one removes it.
+const savedDirs = (...texts: string[]): string[] =>
+  texts.flatMap((text) => {
+    const saved = /saved to: (.+)]$/.exec(text);
+    return saved ? [dirname(String(saved[1]))] : [];
+  });
+const removeSaved = async (...texts: string[]): Promise<void> => {
+  await Promise.all(savedDirs(...texts).map((dir) => rm(dir, { recursive: true, force: true })));
+};
 
 test("format returns a string value as is", () => {
   expect(format({ kind: "done", value: "hi", logs: [] })).toBe("hi");
@@ -38,16 +52,79 @@ test("bound cuts one char over the cap and says so", () => {
   expect(bound(text, MAX_RESULT_CHARS)).toBe("x".repeat(MAX_RESULT_CHARS) + `\n[result cut at ${MAX_RESULT_CHARS} chars]`);
 });
 
-test("a worker crash outside the protocol reports the real error at once, bounded", async () => {
-  const crash = (message: string) => `return await new Promise<never>(() => { (globalThis as any).setTimeout(() => { throw new Error(${message}); }, 0); });`;
+test("a worker crash outside the protocol reports the real error at once", async () => {
+  const crash = (message: string) => `return await new Promise<never>(() => { (globalThis as any).setTimeout(() => { throw new Error(${message}); }, 0); }); `;
   const started = performance.now();
   const small = await run(crash('"boom outside"'), process.cwd(), { timeoutMs: 3_000 });
   expect(performance.now() - started).toBeLessThan(2_000);
   expect(small.ok).toBe(false);
   expect(small.text).toContain("boom outside");
-  const big = await run(crash('"x".repeat(100_000)'), process.cwd(), { timeoutMs: 3_000 });
-  expect(big.ok).toBe(false);
-  expect(big.text.endsWith(`[result cut at ${MAX_RESULT_CHARS} chars]`)).toBe(true);
+});
+
+// Behavior change in step 4: a result over the cap is kept whole in a private file and cut in the
+// middle, instead of being sliced at the cap. The cap itself does not move.
+test("a result over the cap ends with the file that holds all of it", async () => {
+  const crash = `return await new Promise<never>(() => { (globalThis as any).setTimeout(() => { throw new Error("x".repeat(100_000)); }, 0); }); `;
+  const big = await run(crash, process.cwd(), { timeoutMs: 3_000 });
+  try {
+    expect(big.ok).toBe(false);
+    expect(big.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+    expect(big.text).toContain("chars cut from the middle");
+    const saved = /\n\[Full result \((\d+) chars\) saved to: (.+)\]$/.exec(big.text);
+    expect(saved).not.toBeNull();
+    const chars = Number(saved?.[1]);
+    const file = String(saved?.[2]);
+    expect(chars).toBeGreaterThan(100_000);
+    expect((await Bun.file(file).text()).length).toBe(chars);
+  } finally {
+    await removeSaved(big.text);
+  }
+});
+
+test("an unquoted path is repaired before the check, and the program runs", async () => {
+  const read = await run("return (await Read(" + join(process.cwd(), "package.json") + ")).split('\\n')[0];", process.cwd());
+  expect(read.ok).toBe(true);
+  expect(read.text).toBe("     1\t{");
+  expect(read.calls).toBe(1);
+});
+
+// Finding from review: /a.txt/.source is a valid expression (the regex's source string), so
+// Read(/a.txt/.source) is a valid program. Repair must not rewrite a program the check accepts.
+test("a valid program that looks like an unquoted path is not repaired", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-repair-"));
+  await Bun.write(join(dir, "a.txt"), "alpha");
+  try {
+    const read = await run("return await Read(/a.txt/.source);", dir);
+    expect(read.ok).toBe(true);
+    expect(read.text).toBe("     1\talpha");
+    expect(read.calls).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a type error carries its hint under the check's own lines", async () => {
+  const failed = await run('return await Bash({ command: "ls", settle: true });', process.cwd());
+  expect(failed.ok).toBe(false);
+  expect(failed.calls).toBe(0);
+  expect(failed.text.startsWith("Type errors; code was not executed:\nline 1:")).toBe(true);
+  expect(failed.text).toContain("Recovery hint: `settle` is not a `Bash` field");
+});
+
+test("the session guard warns at three identical runs and blocks the sixth", async () => {
+  const guard = new RepeatGuard();
+  const first = await run("return 1;", process.cwd(), { guard });
+  expect(first).toMatchObject({ ok: true, text: "1", calls: 0 });
+  await run("return 1;", process.cwd(), { guard });
+  const warned = await run("return 1;", process.cwd(), { guard });
+  expect(warned.text.startsWith("1\n[circuit-breaker]")).toBe(true);
+  for (let i = 0; i < 2; i++) await run("return 1;", process.cwd(), { guard });
+  const blocked = await run("return 1;", process.cwd(), { guard });
+  expect(blocked.ok).toBe(false);
+  expect(blocked.text).toContain("has now executed 6 times in a row and was blocked");
+  expect(blocked.ms.run).toBe(0);
+  const other = await run("return 2;", process.cwd(), { guard });
+  expect(other.text).toBe("2");
 });
 
 test("a program may end without return, but every return is still checked", () => {
@@ -55,4 +132,49 @@ test("a program may end without return, but every return is still checked", () =
   const thenable = check('const fallback: unknown = 0; return π.mode === "bad" ? { then() {} } : fallback;', declarations);
   expect(thenable.ok).toBe(false);
   expect(thenable.errors[0]).toStartWith("line 1:");
+});
+
+test("a warned result over the cap stays within it and keeps the warning", async () => {
+  const guard = new RepeatGuard();
+  const code = 'return "x".repeat(100_000);';
+  const earlier = [await run(code, process.cwd(), { guard }), await run(code, process.cwd(), { guard })];
+  const third = await run(code, process.cwd(), { guard });
+  try {
+    expect(third.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+    expect(third.text).toContain("[circuit-breaker]");
+  } finally {
+    await removeSaved(...earlier.map((result) => result.text), third.text);
+  }
+});
+
+// The count and both verdicts are the compiled machine's (src/stages/verified/repeat-guard.ts); a
+// blocked call returns before a worker starts, so its side effect never happens.
+test("a blocked call runs nothing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-blocked-"));
+  try {
+    const guard = new RepeatGuard();
+    const code = 'await Bash({ command: "touch ran.txt" }); return "ran";';
+    for (let runCount = 0; runCount < BLOCK - 1; runCount++) {
+      expect((await run(code, dir, { guard })).calls).toBe(1);
+    }
+    await rm(join(dir, "ran.txt"), { force: true });
+    const blocked = await run(code, dir, { guard });
+    expect(blocked).toMatchObject({ ok: false, calls: 0, ms: { run: 0 } });
+    expect(blocked.text).toContain("was blocked");
+    expect(await Bun.file(join(dir, "ran.txt")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed check with many errors stays within the cap", async () => {
+  const code = Array.from({ length: 3000 }, (_, i) => `const v${i}: number = "s";`).join("\n");
+  const r = await run(code, process.cwd());
+  try {
+    expect(r.ok).toBe(false);
+    expect(r.text.startsWith("Type errors; code was not executed:")).toBe(true);
+    expect(r.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+  } finally {
+    await removeSaved(r.text);
+  }
 });

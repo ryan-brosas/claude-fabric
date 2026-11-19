@@ -31,9 +31,12 @@ Where it stands:
 3. **Done:** the deterministic compactor in `src/compaction/`, answering `session.compact` with
    pi-fabric's summary and no model call. Its cut and allocation rules are gdp-wired kernels in
    `proofs/`.
-4. **Next, the self-correcting stages** (argument repair, code repair, output budget, type-error
-   guidance, repeat guard), copied with MIT credit.
-5. **Then the rest of the map:** `store`/`load`, `__bun`, `mcp.<server>.<tool>()`, prompt
+4. **Done, the self-correcting stages** (argument repair, code repair, output budget, type-error
+   guidance, repeat guard), copied with MIT credit. The repeat guard's counting rule
+   (`proofs/repeat-guard.ts`) and the output budget's length arithmetic
+   (`proofs/output-budget.ts`) are gdp-wired kernels too, compiled into
+   `src/stages/verified/generated/`; those two stages decide through the compiled machines.
+5. **Next, the rest of the map:** `store`/`load`, `__bun`, `mcp.<server>.<tool>()`, prompt
    guidance, tool middleware, agents and mesh, in the order architecture.md's probes allow.
 6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
@@ -109,20 +112,33 @@ plugin. `claude --debug-file <f> -p --plugin-dir . ...` proves the load: the log
 
 ## How it works
 
-`src/server/index.ts` gets a call and hands it to `run()` in `src/kernel/host.ts`, which is a
-pipeline of separate stages:
+`src/server/index.ts` gets a call, repairs its arguments and hands it to `run()` in
+`src/kernel/host.ts`, a pipeline of separate stages. Each stage that corrects the model is a pure
+module in `src/stages/` with its own unit tests in `test/stages/`.
 
-1. **Check** (`src/kernel/check.ts`): wrap the code as an async function body and type-check it
+1. **Arguments** (`src/stages/args.ts`, in the server): a program sent as lines joins into one
+   string, payloads sent as JSON text (or under the old `strings` alias) become the record, display
+   is normalized, and keys this tool does not declare are dropped. The MCP input schema is loose
+   enough for those repairs to reach `prepareArguments`; the strict envelope judges the call after.
+2. **Code repair** (`src/stages/code-repair.ts`, only after a failed check): unquoted path and URL
+   arguments and Unicode quotes in path positions are quoted, and the repaired program runs only if
+   it passes the check. A program that already passes is never rewritten. Grep's pattern and Bash's
+   command are never touched.
+3. **Check** (`src/kernel/check.ts`): wrap the code as an async function body and type-check it
    against the declarations from `src/registry/generate.ts` with a warm TypeScript program.
-2. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
+4. **Type guidance** (`src/stages/type-guidance.ts`, after a failed check): a misplaced envelope
+   argument, an unknown field on a tool input (named with that tool's real fields), a `Promise.all`
+   arity mismatch and a Pi or Node global each get one short hint under the check's own lines.
+5. **Repeat guard** (`src/stages/repeat-guard.ts`, one per server process): identical programs with
+   identical payloads are counted; the third run warns inside the result, the sixth is blocked
+   before anything runs.
+6. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
    comes back to the host as a message; the host turns the raw arguments into that action's input
    and runs it. The Worker is terminated on a timeout or when the call ends. The messages are
    typed in `src/kernel/protocol.ts`.
-3. **Format and bound** (`src/kernel/result.ts`): print lines, then the returned value, cut at a
-   fixed size. These are pure functions with unit tests.
-
-pi-fabric's self-correcting modules (argument repair, code repair, type-error guidance, output
-budget) go in as new stages of this pipeline, each with its own unit tests.
+7. **Result** (`src/kernel/result.ts` with `src/stages/output-budget.ts`): print lines, then the
+   returned value. Over the cap, the middle is cut out and the whole text goes to a new private
+   file whose path ends the result; if that file cannot be written, the kernel's own cut applies.
 
 ## Docs and scratch
 

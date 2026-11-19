@@ -46,6 +46,11 @@ function typeText(schema: Schema): string {
 const fields = (schema: Schema): [string, Schema][] => Object.entries(schema.properties ?? {});
 const isRequired = (schema: Schema, name: string): boolean => (schema.required ?? []).includes(name);
 
+/** The field names of an action's input, in declaration order: what a program may pass. */
+export function inputFields(action: AnyAction): string[] {
+  return fields(schemaOf(action.input)).map(([name]) => name);
+}
+
 // An object output gets a name, so a program meets BashResult in its own errors, not a shape.
 function outputOf(name: string, schema: Schema, declarations: string[]): string {
   if (schema.properties) {

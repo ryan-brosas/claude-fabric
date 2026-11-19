@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { MAX_RESULT_CHARS } from "../../src/kernel/result.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
@@ -106,4 +107,66 @@ test("a program without return runs, and its print output comes back", async () 
   const r = await call({ code: 'print("ran");' });
   expect(r.isError).toBe(false);
   expect(r.text.startsWith("ran")).toBe(true);
+});
+
+// The repairs run before the strict check: a model that sends the program as lines, or the payload
+// map as JSON text, gets a result instead of a rejected call.
+test("payloads sent as a JSON string arrive as π", async () => {
+  expect(await call({ code: "return π.note.length;", payloads: JSON.stringify({ note: "a`b${c}" }) }))
+    .toEqual({ isError: false, text: "7" });
+});
+
+test("a program sent as an array of lines runs", async () => {
+  expect(await call({ code: ["const x = 1;", "return x + 1;"] })).toEqual({ isError: false, text: "2" });
+});
+
+test("a payload map that is still wrong is a clear error naming the field", async () => {
+  const r = await call({ code: "return 1;", payloads: '{"n":1}' });
+  expect(r.isError).toBe(true);
+  expect(r.text).toBe("fabric_exec: payloads must be an object of strings, like {\"name\": \"text\"}, or a JSON object string.");
+});
+
+test("an unquoted path is repaired before the check runs", async () => {
+  const r = await call({ code: "return await Read(" + join(work, "a.txt") + ");" });
+  expect(r.isError).toBe(false);
+  expect(r.text.startsWith("     1\talpha")).toBe(true);
+});
+
+test("a failed check keeps its own lines first and adds the hint under them", async () => {
+  const r = await call({ code: 'return await Bash({ command: "ls", settle: true });' });
+  expect(r.isError).toBe(true);
+  expect(r.text.startsWith("Type errors; code was not executed:\nline 1:")).toBe(true);
+  expect(r.text).toContain("Recovery hint: `settle` is not a `Bash` field");
+});
+
+// Findings from review: the advertised input schema rejected shapes the repairs handle (a bare
+// string display, null optional fields), so those repairs could never run over MCP.
+test("a display label sent as a bare string is accepted", async () => {
+  expect(await call({ code: "return 1 + 1;", display: "sum" })).toEqual({ isError: false, text: "2" });
+});
+
+test("null optional fields are absent, not invalid", async () => {
+  expect(await call({ code: "return 3;", payloads: null, display: null, strings: null })).toEqual({ isError: false, text: "3" });
+});
+
+// Finding from review: an envelope error must not be the way a huge argument reaches the model.
+test("an envelope error never echoes a user key and stays within the cap", async () => {
+  const huge = "x".repeat(30_000);
+  const r = await call({ code: "return 1;", strings: { [huge]: 1 } });
+  expect(r.isError).toBe(true);
+  expect(r.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+  expect(r.text).toBe('fabric_exec: payloads must be an object of strings, like {"name": "text"}, or a JSON object string.');
+});
+
+test("one guard per server process warns at three identical calls and blocks the sixth", async () => {
+  const code = 'return "repeat-guard";';
+  const seen: string[] = [];
+  for (let i = 0; i < 6; i++) seen.push((await call({ code })).text);
+  expect(seen.slice(0, 2)).toEqual(["repeat-guard", "repeat-guard"]);
+  for (const text of seen.slice(2, 5)) {
+    expect(text.startsWith("repeat-guard\n[circuit-breaker]")).toBe(true);
+    expect(text).toContain("at 6 identical runs will be blocked");
+  }
+  expect(seen[5]).toContain("has now executed 6 times in a row and was blocked");
+  expect(await call({ code: 'return "repeat-guard-end";' })).toEqual({ isError: false, text: "repeat-guard-end" });
 });
