@@ -28,6 +28,8 @@ test("the section stays under the cap that every turn pays", () => {
 test("the section carries the substance a program needs", () => {
   for (const phrase of [
     "one `fabric_exec` program",
+    "Reach for `fabric_exec` first",
+    "even a lone command",
     "async function body",
     "with Claude Code's field names",
     "Promise.all",
