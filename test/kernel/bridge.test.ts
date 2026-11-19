@@ -30,7 +30,7 @@ async function folder(): Promise<string> {
   return dir;
 }
 
-async function serve(options: { sessionId?: string; answerTimeoutMs?: number; pollMs?: number } = {}): Promise<{ bridge: Bridge; paths: ReturnType<typeof bridgePaths>; dir: string }> {
+async function serve(options: { sessionId?: string; answerTimeoutMs?: number; pollMs?: number; receiptTimeoutMs?: number } = {}): Promise<{ bridge: Bridge; paths: ReturnType<typeof bridgePaths>; dir: string }> {
   const dir = await folder();
   const { sessionId = "s1", ...rest } = options;
   const started: BridgeStart = await startBridge({ pluginData: dir, sessionId, ...rest });
@@ -48,7 +48,11 @@ const post = (socket: string, path: string, body: unknown, secret = SECRET, sign
     signal,
   });
 
-const answer = (socket: string, secret: string, body: unknown) => post(socket, "/answer", body, secret);
+/** The mod's way to answer: confirm the job first, then answer it, as src/mod/index.ts does. */
+const answer = async (socket: string, secret: string, body: { id?: number } & Record<string, unknown>): Promise<Response> => {
+  await post(socket, "/receipt", { id: body.id }, secret);
+  return post(socket, "/answer", body, secret);
+};
 
 afterEach(async () => {
   for (const bridge of bridges.splice(0)) bridge.close();
@@ -293,6 +297,55 @@ describe("the bridge over its socket", () => {
     await expect(bridge.call("context7", "write", { n: 1 })).rejects.toThrow("did not answer within 120ms");
     // The call was reported as failed; the job it queued must not run after that.
     expect(await (await post(paths.socket, "/next", {}, secret)).json()).toEqual({ job: null });
+  });
+
+  test("a job handed out and never confirmed fails at the receipt limit, never run, and a late receipt or answer is refused", async () => {
+    const { bridge, paths } = await serve({ pollMs: 200, receiptTimeoutMs: 100, answerTimeoutMs: 5000 });
+    const secret = await secretOf(paths);
+    await post(paths.socket, "/next", {}, secret); // the mod is here
+    const started = performance.now();
+    const pending = bridge.call("context7", "resolve-library-id", { libraryName: "react" });
+    const failed = pending.then(() => "answered", (error: Error) => error.message);
+    // The poll's response is lost on the way: the mod never sees the job, so it sends no receipt.
+    const reply = await (await post(paths.socket, "/next", {}, secret)).json() as { job: BridgeJob };
+    expect(reply.job.id).toBe(1);
+    expect(await failed).toBe("the Fabric mod never confirmed job 1 within 100ms, so it was not run");
+    // It failed at the receipt limit, not the answer limit.
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(await (await post(paths.socket, "/receipt", { id: 1 }, secret)).json()).toEqual({ ok: false });
+    expect(await (await post(paths.socket, "/answer", { id: 1, ok: true, result: {} }, secret)).json()).toEqual({ ok: false });
+  });
+
+  test("a job is confirmed once, and only a confirmed job's answer is taken", async () => {
+    const { bridge, paths } = await serve({ pollMs: 200 });
+    const secret = await secretOf(paths);
+    await post(paths.socket, "/next", {}, secret);
+    const pending = bridge.call("context7", "resolve-library-id", {});
+    void pending.catch(() => undefined);
+    await post(paths.socket, "/next", {}, secret);
+    const result = { content: [{ type: "text", text: "Found." }] };
+    // An answer before the receipt is not this job's.
+    expect(await (await post(paths.socket, "/answer", { id: 1, ok: true, result }, secret)).json()).toEqual({ ok: false });
+    expect(await (await post(paths.socket, "/receipt", { id: 1 }, secret)).json()).toEqual({ ok: true });
+    // A second receipt would run the job twice.
+    expect(await (await post(paths.socket, "/receipt", { id: 1 }, secret)).json()).toEqual({ ok: false });
+    expect(await (await post(paths.socket, "/answer", { id: 1, ok: true, result }, secret)).json()).toEqual({ ok: true });
+    expect(await pending).toEqual(result);
+    // A job that was never handed out cannot be confirmed.
+    expect(await (await post(paths.socket, "/receipt", { id: 99 }, secret)).json()).toEqual({ ok: false });
+  });
+
+  test("the receipt limit never fails a job the mod confirmed", async () => {
+    const { bridge, paths } = await serve({ pollMs: 200, receiptTimeoutMs: 50 });
+    const secret = await secretOf(paths);
+    await post(paths.socket, "/next", {}, secret);
+    const pending = bridge.call("context7", "resolve-library-id", {});
+    void pending.catch(() => undefined);
+    await post(paths.socket, "/next", {}, secret);
+    expect(await (await post(paths.socket, "/receipt", { id: 1 }, secret)).json()).toEqual({ ok: true });
+    await Bun.sleep(150); // well past the receipt limit: the mod is running it
+    expect(await (await post(paths.socket, "/answer", { id: 1, ok: true, result: { text: "late but run" } }, secret)).json()).toEqual({ ok: true });
+    expect(await pending).toEqual({ text: "late but run" });
   });
 
   test("a poll that disconnects takes no later job", async () => {

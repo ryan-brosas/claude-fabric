@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { BRIDGE_HEADER, bridgePaths } from "../../src/bridge/contract.ts";
 import {
   answerOf,
+  receiptAccepted,
   catalogOf,
   emptyState,
   failureOf,
@@ -37,6 +38,8 @@ interface Fake {
   waits: number[];
   deliver: (job: unknown) => void;
   refuse: (times: number) => void;
+  /** The server's answer to every receipt from now on. */
+  receipts: (accepted: boolean) => void;
 }
 
 function fake(pluginData = "/data/plugins"): Fake {
@@ -47,6 +50,7 @@ function fake(pluginData = "/data/plugins"): Fake {
   const jobs: unknown[] = [];
   const parked: ((job: unknown) => void)[] = [];
   let refusals = 0;
+  let receiptAccepted = true;
   const reply = (job: unknown | null) => ({ ok: true, status: 200, text: JSON.stringify({ job }) });
   const $ = {
     session: { id: async () => "session-1" },
@@ -85,6 +89,7 @@ function fake(pluginData = "/data/plugins"): Fake {
         }
         const path = new URL(url).pathname;
         requests.push({ path, body: JSON.parse(init.body), secret: init.headers[BRIDGE_HEADER], socketPath: init.socketPath });
+        if (path === "/receipt") return { ok: true, status: 200, text: JSON.stringify({ ok: receiptAccepted }) };
         if (path !== "/next") return { ok: true, status: 200, text: '{"ok":true}' };
         const job = jobs.shift();
         if (job !== undefined) return reply(job);
@@ -104,6 +109,7 @@ function fake(pluginData = "/data/plugins"): Fake {
       else jobs.push(job);
     },
     refuse: (times) => { refusals = times; },
+    receipts: (accepted) => { receiptAccepted = accepted; },
   };
 }
 
@@ -210,6 +216,8 @@ describe("the plain data the hook bodies hand around", () => {
 
   test("an answer is the call's result or its failure, and a wait grows to four seconds", () => {
     expect(answerOf(1, { content: [] })).toEqual({ id: 1, ok: true, result: { content: [] } });
+    expect([receiptAccepted('{"ok":true}'), receiptAccepted('{"ok":false}'), receiptAccepted('{"ok":"yes"}'), receiptAccepted("not json")])
+      .toEqual([true, false, false, false]);
     expect(failureOf(2, new Error("needs sign-in"))).toEqual({ id: 2, ok: false, error: "needs sign-in" });
     expect(failureOf(3, "not an error")).toEqual({ id: 3, ok: false, error: "not an error" });
     expect([0, 1, 2, 3, 4, 5, 9].map(retryDelay)).toEqual([250, 500, 1000, 2000, 4000, 4000, 4000]);
@@ -245,6 +253,33 @@ describe("the mod's socket loop", () => {
       ok: true,
       result: { content: [{ type: "text", text: "answered" }], isError: false },
     });
+  });
+
+  test("the mod confirms a job before it runs it", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    harness.deliver({ kind: "mcp", id: 7, server: "context7", tool: "resolve-library-id", args: {} });
+    await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
+    const paths = harness.requests.map((request) => request.path).filter((path) => path === "/receipt" || path === "/answer");
+    expect(paths).toEqual(["/receipt", "/answer"]);
+    expect(harness.requests.find((request) => request.path === "/receipt")?.body).toEqual({ id: 7 });
+  });
+
+  test("a job whose receipt the server refuses is never run or answered", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    harness.receipts(false);
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    harness.deliver({ kind: "mcp", id: 8, server: "context7", tool: "resolve-library-id", args: {} });
+    harness.deliver({ kind: "builtin", id: 9, tool: "WebSearch", input: { query: "pi" } });
+    await waitFor(() => harness.requests.filter((request) => request.path === "/receipt").length === 2);
+    await Bun.sleep(30);
+    expect(harness.asked).toEqual([]);
+    expect(harness.ran).toEqual([]);
+    expect(harness.requests.some((request) => request.path === "/answer")).toBe(false);
   });
 
   test("a failed MCP call is answered as the job's error", async () => {

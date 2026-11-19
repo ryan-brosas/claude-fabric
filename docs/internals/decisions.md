@@ -129,6 +129,12 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   before the repo goes fully public.
 - **No approval layer.** Programs run at the trust given to `fabric_exec`; the target is auto
   mode. Other permission modes come later.
+- **The mod confirms a job before it runs it.** A poll's response can be lost on the way, and the
+  server cannot tell. So the mod posts `/receipt` and runs the job only if the server accepts it; a
+  handed job with no receipt fails after 5 s ("never confirmed ... so it was not run") instead of at
+  the 60 s answer limit, and an answer for an unconfirmed job is refused. Nothing is ever resent, so
+  no MCP or WebSearch effect can run twice. The rule is a gdp-wired kernel
+  ([proofs/job-receipt.ts](../../proofs/job-receipt.ts)).
 - **No background shell tasks.** `Bash` waits. Long jobs use Claude's own Bash in the background.
 
 ## Planned, not built

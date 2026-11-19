@@ -79,7 +79,9 @@ const startMod = (target = paths): (() => Promise<void>) => {
         const body = await response.json() as { job: BridgeJob | null };
         if (body.job !== null) {
           received.push(body.job);
-          await post("/answer", answer(body.job), { target });
+          // Confirm first, as the real mod does, and answer only a job the server let it run.
+          const confirmed = await (await post("/receipt", { id: body.job.id }, { target })).json() as { ok: boolean };
+          if (confirmed.ok) await post("/answer", answer(body.job), { target });
         }
       } catch {
         // The test stopped the loop, or the server is not listening yet.
