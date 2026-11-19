@@ -242,3 +242,20 @@ test("a timer that keeps rescheduling itself ends at the call's time limit", asy
   )).rejects.toThrow("timed out after 500ms");
   expect(Date.now() - started).toBeLessThan(5_000);
 });
+
+// A program that timed out used to leave its Bash running until Bash's own timeout.
+test("a Bash still running when its program times out is stopped with it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-abort-"));
+  try {
+    const marker = join(dir, "still-ran.txt");
+    await expect(run(
+      "await Bash({ command: " + JSON.stringify("sleep 1 && touch " + marker) + " }); return 'done';",
+      dir,
+      { timeoutMs: 200 },
+    )).rejects.toThrow("timed out after 200ms");
+    await Bun.sleep(1_500);
+    expect(await Bun.file(marker).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

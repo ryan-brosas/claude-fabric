@@ -5,6 +5,7 @@
 // `<out>/<module>.js`.
 import { BRIDGE_BINDING_BUGS, bridgeBindingKernels } from "./bridge-binding.ts";
 import { BUILTIN_ACCESS_BUGS, builtinAccessKernels } from "./builtin-access.ts";
+import { CALL_TIMEOUT_BUGS, callTimeoutKernels } from "./call-timeout.ts";
 import { contextKernels, CONTEXT_BUGS } from "./context.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
@@ -46,6 +47,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
   { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
+  { stem: "call-timeout", source: "proofs/call-timeout.ts", out: kernel, kernels: callTimeoutKernels as any, bugs: CALL_TIMEOUT_BUGS },
   { stem: "mcp-access", source: "proofs/mcp-access.ts", out: kernel, kernels: mcpAccessKernels as any, bugs: MCP_ACCESS_BUGS },
   { stem: "builtin-access", source: "proofs/builtin-access.ts", out: kernel, kernels: builtinAccessKernels as any, bugs: BUILTIN_ACCESS_BUGS },
   { stem: "job-receipt", source: "proofs/job-receipt.ts", out: kernel, kernels: jobReceiptKernels as any, bugs: JOB_RECEIPT_BUGS },

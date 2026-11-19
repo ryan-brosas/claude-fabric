@@ -15,9 +15,9 @@ export const Bash = defineAction({
   }),
   output: z.object({ output: z.string(), exitCode: z.number() }),
   positional: ["command"],
-  run: async (i, { cwd }) => {
+  run: async (i, { cwd, signal }) => {
     const timeout = Math.min(Number(i.timeout ?? DEFAULT_MS), MAX_MS);
-    const p = Bun.spawn(["bash", "-c", i.command], { cwd, stdout: "pipe", stderr: "pipe", timeout, killSignal: "SIGKILL" });
+    const p = Bun.spawn(["bash", "-c", i.command], { cwd, stdout: "pipe", stderr: "pipe", timeout, killSignal: "SIGKILL", ...(signal ? { signal } : {}) });
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
     const exitCode = await p.exited;
     const output = out + err;

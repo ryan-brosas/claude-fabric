@@ -10,6 +10,8 @@ export interface ActionContext {
   cwd: string;
   /** Claude Code's built-in tools, gated by the host's allowlist. Absent when the run has no bridge. */
   builtin?: BuiltinToolLink;
+  /** Aborted when the run ends, by its done, an error or its time limit: a process a call started stops with it. */
+  signal?: AbortSignal;
 }
 
 // One program tool, defined once. Guest types, the model-facing description and the runtime
