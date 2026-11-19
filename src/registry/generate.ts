@@ -71,12 +71,16 @@ const PRINT = [
   "declare function print(...values: unknown[]): void;",
   "/** String payloads passed in the same call's `payloads` argument. */",
   "declare const π: Readonly<Record<string, string>>;",
-  // The two timer lines are copied from pi-fabric (MIT, Tom X Nguyen) src/runtime/guest-types.ts
-  // at d331f629. The Worker has the timers; only the check lacked them, so a program that waited
-  // between calls failed before it ran. A pending timer dies with the Worker at the call's end.
+  // The timers follow pi-fabric (MIT, Tom X Nguyen) src/runtime/guest-types.ts at d331f629, made
+  // stricter: the handler is passed nothing (Node's `(_: void) => void`, so `resolve` fits),
+  // and the handle is opaque because Bun's is an object.
+  // The Worker has the timers; only the check lacked them, so a program that waited between calls
+  // failed before it ran. A pending timer dies with the Worker at the call's end.
+  "/** A pending timer, only for clearTimeout. */",
+  "interface TimerHandle { readonly __timer: never }",
   "/** Runs handler after timeout ms, within this call's time limit. */",
-  "declare function setTimeout(handler: (...args: any[]) => void, timeout?: number): number;",
-  "declare function clearTimeout(handle: number): void;",
+  "declare function setTimeout(handler: (_: void) => void, timeout?: number): TimerHandle;",
+  "declare function clearTimeout(handle: TimerHandle): void;",
 ].join("\n");
 
 const HEADER = "// Globals a fabric_exec program sees. Names and fields follow Claude Code's own tools.";

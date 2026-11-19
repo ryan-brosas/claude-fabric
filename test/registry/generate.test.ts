@@ -83,9 +83,11 @@ test("guestTypes prints the whole surface of a fixture", () => {
     "declare function print(...values: unknown[]): void;",
     "/** String payloads passed in the same call's `payloads` argument. */",
     "declare const π: Readonly<Record<string, string>>;",
+    "/** A pending timer, only for clearTimeout. */",
+    "interface TimerHandle { readonly __timer: never }",
     "/** Runs handler after timeout ms, within this call's time limit. */",
-    "declare function setTimeout(handler: (...args: any[]) => void, timeout?: number): number;",
-    "declare function clearTimeout(handle: number): void;",
+    "declare function setTimeout(handler: (_: void) => void, timeout?: number): TimerHandle;",
+    "declare function clearTimeout(handle: TimerHandle): void;",
   ];
   expect(guestTypes([Fixture, Pair])).toBe(expected.join("\n") + "\n");
 });
