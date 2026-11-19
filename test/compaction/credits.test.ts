@@ -11,6 +11,7 @@ const COPIED = [
   "src/compaction/verified/context.ts",
   "src/compaction/verified/nat.ts",
   "src/compaction/verified/policy.ts",
+  "src/guidance/guidance.ts",
   "proofs/context.ts",
   "proofs/index.ts",
   "proofs/kernel.ts",
