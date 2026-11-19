@@ -50,10 +50,13 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **A program reaches the session's other MCP servers through the mod, not an MCP client of its
   own.** `mcp.<server>.<tool>(args)` is one job to the mod over a Unix socket, and the mod runs
   it with `$.mcp.call` on Claude Code's own connection and credentials, claude.ai connectors
-  included. The socket lives at `<CLAUDE_PLUGIN_DATA>/bridge/<session id>.sock`, its folder is
-  0700, and a per-session secret written 0600 beside it is required on every request, so another
-  local process that finds the socket cannot drain or answer jobs. One process serves a session:
-  a start takes `<session id>.lock` with an exclusive create, refuses while that lock's pid is
+  included. The socket lives at `<CLAUDE_PLUGIN_DATA>/bridge/<name>.sock`, where the name is the
+  session id's first 20 letters and digits: a full UUID put an installed plugin's socket over the
+  Unix limit. Its folder is 0700, and a per-session secret written 0600 beside it is required on
+  every request, so another local process that finds the socket cannot drain or answer jobs. The
+  secret file names the full session id above the secret, and a mod uses it only when that id is
+  its own (`proofs/bridge-binding.ts`), so a session that shares the name never runs another
+  session's jobs. One process serves a name: a start takes `<name>.lock` with an exclusive create, refuses while that lock's pid is
   alive, refuses a lock it cannot read or that holds no pid, and clears a dead pid's lock and
   tries once more. The pid is linked into place, so a lock is never seen half-written. Only the
   holder unlinks a stale socket, writes the secret and binds; close runs once and removes the

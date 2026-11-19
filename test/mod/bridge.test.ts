@@ -54,7 +54,7 @@ function fake(pluginData = "/data/plugins"): Fake {
     fs: {
       read: async (path: string) => {
         if (!path.endsWith(".key")) throw new Error("ENOENT");
-        return "the-secret\n";
+        return "session-1\nthe-secret\n";
       },
     },
     clock: {
@@ -320,6 +320,16 @@ describe("the mod's socket loop", () => {
     expect(harness.requests.find((request) => request.path === "/catalog")?.body).toEqual(catalogOf(tools));
   });
 
+  test("never polls a bridge whose secret file names another session", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    harness.$.fs = { read: async () => "session-2\nthe-secret\n" };
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await hook(handlers, "tool.list")(harness.$, { tool: "tool.list" }, () => ({ value: tools }));
+    await waitFor(() => harness.waits.length >= 3);
+    expect(harness.requests).toEqual([]);
+  });
+
   test("reposts the catalog when the server comes back with a new secret", async () => {
     const handlers = hooks();
     const harness = fake();
@@ -328,7 +338,7 @@ describe("the mod's socket loop", () => {
     await waitFor(() => harness.requests.some((request) => request.path === "/catalog"));
     await Bun.sleep(50); // let the loop and the hook settle their one publish
     const before = harness.requests.filter((request) => request.path === "/catalog").length;
-    harness.$.fs = { read: async () => "a-new-secret\n" };
+    harness.$.fs = { read: async () => "session-1\na-new-secret\n" };
     harness.deliver({ kind: "mcp", id: 3, server: "context7", tool: "resolve-library-id", args: {} });
     await waitFor(() => harness.requests.filter((request) => request.path === "/catalog").length > before);
     const last = harness.requests.filter((request) => request.path === "/catalog").at(-1);

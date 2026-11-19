@@ -5,6 +5,7 @@ import {
   JOB_WAIT_MS,
   bridgePathProblem,
   bridgePaths,
+  secretFileText,
   isBridgeCatalog,
   type BridgeCatalog,
   type BridgeJob,
@@ -146,7 +147,7 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
     // No stale socket, or one already gone.
   }
   const secret = randomBytes(32).toString("hex");
-  writeFileSync(paths.secret, secret, { mode: 0o600 });
+  writeFileSync(paths.secret, secretFileText(options.sessionId, secret), { mode: 0o600 });
 
   let catalog: BridgeCatalog = emptyCatalog;
   const jobs: BridgeJob[] = [];

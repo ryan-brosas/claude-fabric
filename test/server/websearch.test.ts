@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { BRIDGE_HEADER, bridgePaths, type BridgeAnswer, type BridgeJob, type BuiltinJob } from "../../src/bridge/contract.ts";
+import { BRIDGE_HEADER, boundSecret, bridgePaths, type BridgeAnswer, type BridgeJob, type BuiltinJob } from "../../src/bridge/contract.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
 const SESSION = "fabric-websearch-test";
@@ -46,7 +46,7 @@ const post = async (
   options: { target?: ReturnType<typeof bridgePaths>; secret?: string; signal?: AbortSignal } = {},
 ): Promise<Response> => {
   const target = options.target ?? paths;
-  const secret = options.secret ?? (await Bun.file(target.secret).text()).trim();
+  const secret = options.secret ?? boundSecret(await Bun.file(target.secret).text(), SESSION) ?? "";
   return fetch("http://bridge" + path, {
     method: "POST",
     headers: { [BRIDGE_HEADER]: secret, "content-type": "application/json" },

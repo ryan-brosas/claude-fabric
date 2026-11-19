@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { BRIDGE_HEADER, bridgePaths, type BridgeAnswer, type BridgeCatalog, type BridgeJob, type McpJob } from "../../src/bridge/contract.ts";
+import { BRIDGE_HEADER, boundSecret, bridgePaths, type BridgeAnswer, type BridgeCatalog, type BridgeJob, type McpJob } from "../../src/bridge/contract.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
 const SESSION = "fabric-mcp-test";
@@ -48,7 +48,7 @@ const call = async (code: string, target: Client = client) => {
   return { isError: Boolean(r.isError), text: (r.content as { text: string }[])[0].text };
 };
 
-const secret = async (target = paths): Promise<string> => (await Bun.file(target.secret).text()).trim();
+const secret = async (target = paths): Promise<string> => boundSecret(await Bun.file(target.secret).text(), SESSION) ?? "";
 
 const post = async (
   path: string,
