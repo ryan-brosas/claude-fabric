@@ -17,7 +17,7 @@ import {
   retryDelay,
 } from "./bridge.ts";
 import { compactDeferred } from "./deferred.ts";
-import { fabricOnly, offered } from "./fabric-only.ts";
+import { deferredByOption, fabricOnly, offered } from "./fabric-only.ts";
 import { OfferMemo } from "./verified/offer-memo.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
@@ -157,10 +157,12 @@ export const register: Register = (on, options) => {
 
   // An MCP server's tools sit behind ToolSearch by default, so the model never sees fabric_exec
   // until it searches, and the guidance names a tool it cannot call. Pin it into the prompt's list.
+  // With fabricOnly on, the other built-ins go the other way: behind ToolSearch (fabric-only.ts).
   on("tool.describe", async ($, e, next) => {
     const described = await next(e);
-    if (e.tool !== FABRIC_EXEC_TOOL) return described;
-    return { ...described, isDeferred: false };
+    if (e.tool === FABRIC_EXEC_TOOL) return { ...described, isDeferred: false };
+    if (programsOnly && deferredByOption(e.tool, e.provider)) return { ...described, isDeferred: true };
+    return described;
   }).catch(($, e, next) => next(e));
 
   // With code mode off, Claude Code lists every deferred tool by name on each request. A session

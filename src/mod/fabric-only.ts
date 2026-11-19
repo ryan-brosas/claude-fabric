@@ -21,6 +21,22 @@ const kept = (name: string): boolean => name === "Read" || isBuiltinTool(name);
 /** The tools the option keeps from the main conversation when fabric_exec is in the pool. */
 export const HIDDEN_TOOLS: readonly string[] = TOOL_NAMES.filter((name) => toolHidden(true, true, true, true, kept(name)));
 
+/**
+ * Built-ins kept in the prompt's tool list with the option on. Read reads images and PDFs, which a
+ * program cannot; Skill runs the skills the prompt lists; ToolSearch loads every deferred one.
+ */
+export const FOREGROUND_TOOLS: readonly string[] = ["Read", "Skill", "ToolSearch"];
+
+/**
+ * Whether the option moves a tool behind ToolSearch. pi-fabric's full code mode declares only
+ * fabric_exec and a foreground list; here every other engine built-in waits behind ToolSearch, still
+ * one search away, instead of sending its schema on every request (22k tokens of an interactive
+ * session's 30k with code mode off). A hidden tool is left where it is: the main conversation is
+ * not offered it at all (HIDDEN_TOOLS), and an agent needs it loaded.
+ */
+export const deferredByOption = (tool: string, provider: { plugin: string }): boolean =>
+  provider.plugin === "engine" && !HIDDEN_TOOLS.includes(tool) && !FOREGROUND_TOOLS.includes(tool);
+
 export const fabricOnly = (options: Readonly<Record<string, unknown>> | undefined): boolean => options?.[FABRIC_ONLY_OPTION] === true;
 
 /** Whether a loop's model is offered a tool (proofs/tool-visibility.ts decides). */

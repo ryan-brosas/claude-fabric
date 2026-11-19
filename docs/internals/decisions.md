@@ -176,6 +176,14 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   only through its compiled verdict. Its answer per loop and tool is fixed at the first ask
   (`proofs/offer-memo.ts`) and dropped at `session.end`: a first ask before `fabric_exec` joined
   had left Bash in the model's list while its calls were refused, which failed 4 of 15 Haiku runs.
+- **`fabricOnly` also moves the other built-ins behind ToolSearch** (`deferredByOption`, through the
+  `tool.describe` hook). Interactive Claude Code with code mode off sends 22k tokens of built-in
+  schemas on every request; native code mode sends 4.5k. Read, Skill and ToolSearch stay in the
+  list, the hidden tools stay loaded for agents, and every other built-in is one ToolSearch away.
+  The first request fell from 33.5k tokens to 11.9k. Haiku 5.5, 15 tasks x 3, 2026-11-19, against
+  native code mode with the user's settings kept out (`--setting-sources project,local`): 42 of 45
+  solved in both arms, mean 186k against 202k, median 149k against 212k (before: mean 317k). `/context`
+  still counts the deferred schemas; the request's own usage is the measure.
 - **Measured on Haiku 5.5** (2026-11-19, fabric arm, tasks 02, 04, 08, 12 and 14, 3 runs each, raw rows
   in `notes/bench/results-haiku-*.jsonl`): the old guidance passed 15/15 at 363k mean tokens; the
   program guidance (#21) 15/15 at 325k; that guidance with `fabricOnly` 15/15 at 277k, with 6.67
