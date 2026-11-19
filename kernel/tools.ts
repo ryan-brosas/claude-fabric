@@ -1,5 +1,6 @@
 import { resolve, relative } from "node:path";
 import { stat } from "node:fs/promises";
+import type { ToolName } from "./protocol.ts";
 
 // Tools available inside a program. Names and fields follow Claude Code's built-in tools.
 const MAX_LINES = 2000;
@@ -24,7 +25,7 @@ const required = (i: Input, field: string): string => {
   return v;
 };
 
-export const tools = (cwd: string): Record<string, (args: Args) => Promise<unknown>> => {
+export const tools = (cwd: string): Record<ToolName, (args: Args) => Promise<unknown>> => {
   const abs = (p: string) => resolve(cwd, p);
   return {
     async Read(args) {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { TOOL_NAMES } from "../kernel/protocol.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 let client: Client;
@@ -33,7 +34,7 @@ test("lists exactly one tool, fabric_exec, documented with Claude tool names", a
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name)).toEqual(["fabric_exec"]);
   expect(tools[0].inputSchema.required).toEqual(["code"]);
-  for (const name of ["Read(", "Write(", "Edit(", "Grep(", "Glob(", "Bash("]) expect(tools[0].description).toContain(name);
+  for (const name of TOOL_NAMES) expect(tools[0].description).toContain(name + "(");
   expect(tools[0].description).not.toContain("pi.");
 });
 

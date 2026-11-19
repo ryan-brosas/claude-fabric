@@ -18,6 +18,13 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 ## Trust
 
+- **The worker is not a security sandbox.** Programs run in an ordinary Bun Worker. The type
+  checker hides Bun's globals, but `globalThis as any` still reaches `Bun`, `fetch` and
+  `process`, so a program isn't limited to the program tools. So they run only at the
+  trust given to `fabric_exec`. pi-fabric's default is different: a QuickJS sandbox with no
+  filesystem, network or process, where every effect goes through the host. pi-fabric itself
+  calls its Node-process mode "not a security boundary". Open: whether to move to a sandbox
+  before the repo goes fully public.
 - **No approval layer.** Programs run at the trust given to `fabric_exec`; the target is auto
   mode. Other permission modes come later.
 - **No background shell tasks.** `Bash` waits. Long jobs use Claude's own Bash in the background.
