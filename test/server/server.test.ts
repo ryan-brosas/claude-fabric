@@ -22,7 +22,8 @@ beforeAll(async () => {
   await client.connect(new StdioClientTransport({
     command: "bun",
     args: [root + "src/server/index.ts"],
-    env: { ...process.env, CLAUDE_PROJECT_DIR: work } as Record<string, string>,
+    // No bridge: these tests never touch the plugin's real data folder or a real session.
+    env: { ...process.env, CLAUDE_PROJECT_DIR: work, CLAUDE_PLUGIN_DATA: "", CLAUDE_CODE_SESSION_ID: "" } as Record<string, string>,
   }));
 });
 afterAll(async () => { await client.close(); await rm(work, { recursive: true, force: true }); });
@@ -38,6 +39,10 @@ test("lists exactly one tool, fabric_exec, documented with Claude tool names", a
   expect(tools[0].inputSchema.required).toEqual(["code"]);
   for (const name of TOOL_NAMES) expect(tools[0].description).toContain(name + "(");
   expect(tools[0].description).not.toContain("pi.");
+  // The mcp surface is one line about the shape, never the session's tool list.
+  const description = String(tools[0]?.description ?? "");
+  expect(description).toContain("mcp.<server>.<tool>(args)");
+  expect(description.split("\n").filter((line) => line.startsWith("- mcp."))).toHaveLength(1);
 });
 
 test("Read numbers lines like cat -n and honors offset and limit", async () => {

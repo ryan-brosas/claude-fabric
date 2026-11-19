@@ -31,6 +31,39 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **A fresh Bun Worker per call.** It costs about 1.3 ms, against 14 ms for `Bun.spawn`. Node's
   `vm` is faster but gives no thread to terminate. `terminate()` handles timeouts.
 - **A warm type checker in the server, run before every call.**
+- **A program reaches the session's other MCP servers through the mod, not an MCP client of its
+  own.** `mcp.<server>.<tool>(args)` is one job to the mod over a Unix socket, and the mod runs
+  it with `$.mcp.call` on Claude Code's own connection and credentials, claude.ai connectors
+  included. The socket lives at `<CLAUDE_PLUGIN_DATA>/bridge/<session id>.sock`, its folder is
+  0700, and a per-session secret written 0600 beside it is required on every request, so another
+  local process that finds the socket cannot drain or answer jobs. One process serves a session:
+  a start takes `<session id>.lock` with an exclusive create, refuses while that lock's pid is
+  alive, refuses a lock it cannot read or that holds no pid, and clears a dead pid's lock and
+  tries once more. The pid is linked into place, so a lock is never seen half-written. Only the
+  holder unlinks a stale socket, writes the secret and binds; close runs once and removes the
+  secret then the lock last. Not closed: two starts that judge the same stale lock dead can both
+  take it in turn. Claude Code starts one server per session, so we leave it. The server fails a call at once when no mod is polling, and after
+  60 s without an answer. The declarations name the session's servers and tools, from the
+  catalog the mod's `tool.list` hook sends each time the engine raises it. The mod API exposes
+  no input schemas for a session's MCP tools, so a call's arguments are one loose object in the
+  check and the server checks them; a tool the catalog did not hold still compiles and is
+  refused at dispatch. A result comes back as its text blocks joined plus its
+  `structuredContent`; an `isError` result rejects, so a program can catch it. Programs may call
+  only a pair the catalog holds, never this plugin's own server: the access rule is a gdp-wired
+  kernel ([proofs/mcp-access.ts](../../proofs/mcp-access.ts)), and the host sends a job only
+  through its verdict. The tool-name spelling takes the server at the first `__` after `mcp__`
+  and refuses a name with a second, overlapping or later `__`, so a server or tool whose own
+  name holds `__` is left out of the catalog instead of being split at a guessed boundary. A
+  name a program writes resolves its exact raw server or tool first, then a sanitized alias, so
+  `mcp["a_b"]` reaches the server really named `a_b` even when `a-b` is also connected, and the
+  lookup's answer is a tag, so a server or tool really named `none` is still callable.
+- **The mod spells every `$` call inside a hook body.** The hooks compiler refuses a `$` bound,
+  passed, spread, returned or read, so a `$` cannot be handed to a helper or another module: the
+  loop and every `$.http.fetch`, `$.mcp.call`, `$.process.hookEnv`, `$.fs.read` and `$.session.id` sit
+  inside a hook body in `src/mod/index.ts`, and `src/mod/bridge.ts` builds the request, parses the
+  job, shapes the answer and backs off on plain data alone. One check came out of this that no
+  type-check sees: `test/mod/imports.test.ts` reads `src/mod/` with the TypeScript parser and fails
+  on a `$` used as a value, in the compiler's own words.
 - **`store`/`load` live in the server's memory, and a run's writes commit only on success.** The
   worker gets a snapshot with its run message and stages `store()` calls; the host commits them
   after the program succeeds, so a program that fails, times out or crashes changes nothing. One
@@ -54,10 +87,6 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 ## Planned, not built
 
 - `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal.
-- `mcp.<server>.<tool>()` inside programs. First choice: route it through the mod's
-  `$.mcp.call`, which uses Claude Code's own connections and credentials, claude.ai connectors
-  included. Fallback if that bridge fails its probe: the official MCP SDK reading Claude's MCP
-  config, for stdio servers and HTTP servers with header keys only.
 - A benchmark of plain Claude, Claude with native code mode, and Claude with `fabric_exec`.
   Pass: it solves at least as many tasks as native code mode, with at most 10% more tokens.
 - After the benchmark, native code mode is turned off. Every other tool stays visible.

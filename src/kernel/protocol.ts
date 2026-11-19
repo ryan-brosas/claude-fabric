@@ -29,6 +29,13 @@ export type HostToWorker = (RunMessage & { token: string }) | ReplyMessage;
 
 export interface CallMessage { kind: "call"; id: number; ref: string; args: unknown[] }
 
+/**
+ * The ref a program's mcp.<server>.<tool>(args) call carries. Its args are the two keys the
+ * program wrote, then the tool's arguments object; the host resolves them against the session's
+ * catalog.
+ */
+export const MCP_REF = "mcp";
+
 export interface DoneMessage {
   kind: "done";
   /** An explicit discriminator: a thrown empty message is still a failure. */

@@ -46,10 +46,25 @@ Probed 2026-11-18 on Claude Code 2.1.327 with a throwaway mod loaded through `--
     A server tool waited 15 ms for a built-in Read this way. The loop runs outside the 10 s hook
     budget. Before the server listens and after it exits, the fetch is ECONNREFUSED, so the
     loop retries.
+  - Built on those probes: the bridge is the plugin's own. The server listens on
+    `<CLAUDE_PLUGIN_DATA>/bridge/<session id>.sock`, writes a per-session secret beside it (0600)
+    that every request must carry, and fails an mcp call at once when no mod is polling. The mod's
+    loop reads the secret with `$.fs`, long-polls `/next`, runs the job with `$.mcp.call` and
+    posts `/answer`. The catalog of connected MCP servers rides the same socket, sent by the
+    mod's `tool.list` hook, which the engine raises again when the tool pool changes.
 
 The rest of the table below comes from the generated mod types
 (`.claude-plugin/types/claude-code/index.d.ts`, written by Claude Code for its own version) and
 the docs. It is untested until a row says otherwise.
+
+## How an mcp call travels
+
+A program's `mcp.<server>.<tool>(args)` crosses the worker bridge like any program tool, carrying
+the two keys the program wrote. The host resolves them against the session's catalog
+(`src/registry/mcp.ts`) and asks the access machine (`proofs/mcp-access.ts`): only a pair the
+catalog holds, and never this plugin's own server, sends a job. The job goes over the socket; the
+mod runs it with `$.mcp.call` on Claude Code's own connection and posts the raw result back; the
+host turns it into the call's value. The server starts no MCP client of its own.
 
 ## pi-fabric part by part
 
@@ -62,6 +77,7 @@ the docs. It is untested until a row says otherwise.
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
 | Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | hiding built-ins proven (`tool.list`); the hidden tool is gone for the mod too |
 | Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, over the socket bridge | bridge and `$.tool.call` (Read) proven; WebSearch and Agent untried |
+| `mcp.<server>.<tool>()` (the MCP provider) | provider descriptors, the guest `mcp` proxy | `$.mcp.call` from the mod, over the bridge; the catalog from the `tool.list` hook | built |
 | Input transforms (pasted images) | `input` | `prompt.submit` can rewrite text; its attachment list is pinned, so adding image blocks is not covered | gap for images; text documented |
 | Agents and actors | Pi child processes | `$.agent.spawn/call/list`, `agent.spawn` hook | documented |
 | Mesh (durable topics, compare-and-swap state), decisions (durable approvals), sessions (interactive processes) | own implementations | stay in the server; `$.session.send` and `session.receive` only deliver peer text | server-side; delivery documented |
@@ -82,14 +98,20 @@ the docs. It is untested until a row says otherwise.
 .claude-plugin/plugin.json   manifest: the MCP server, userConfig
 hooks/hooks.json             modules: the mod entry in src/mod/
 src/
-  mod/          binding 1, in-process: compaction, prompt sections, tool middleware, commands, UI
+  mod/          binding 1, in-process: compaction, the mcp catalog and socket loop, prompt
+                sections, tool middleware, commands, UI; index.ts holds every $ call and the
+                socket loop, bridge.ts the pure helpers the hook bodies call
   server/       binding 2, MCP: fabric_exec and the mod's heavy calls
-  kernel/       check -> stages -> execute -> bound; bridge; executors/
+  kernel/       check -> stages -> execute -> bound; mcp.ts dispatches a program's mcp call;
+                bridge/ is the server's half of the socket; executors/
+  bridge/       the socket contract both halves read: paths, the secret header, catalog, job,
+                answer, and the mcp tool-name spelling
   registry/     defineAction({ name, doc, input, output, positional, run }), and defineBuiltin
                 for a guest global that is not a tool; generates guest types, the DESCRIPTION lines
-                and the argument check
+                and the argument check. mcp.ts prints the mcp surface from the session's catalog
+                and resolves a call against it
   providers/    one folder per namespace: tools/ (Read..Bash), store (the store/load globals),
-                then mcp, agents, ...
+                then agents, ...
   stages/       pure stages: args, code repair, type guidance, repeat guard, budget, the store's
                 limits and commit
   compaction/   the deterministic compactor, pure
@@ -104,14 +126,19 @@ test/           mirrors src/
    the guest types the checker serves, the lines of `DESCRIPTION` and the runtime argument check
    from them, so a changed field changes one provider file.
 2. **Imports point one way:** `server -> kernel -> registry <- providers`, and
-   `mod -> compaction, stages`. Only `server/` knows MCP; only `mod/` knows the mods API.
+   `mod -> compaction, stages`. Both halves of the socket also read `bridge/`, which imports
+   nothing. Only `server/` knows MCP; only `mod/` knows the mods API.
 3. **What the mod imports is pure.** No bare imports and no `node:` modules, because the hooks
    worker refuses them. A test reads the import graph from `src/mod/` and fails on any.
-4. **The mod never blocks on heavy work.** Anything slow goes to the server, so a hook stays
+4. **A `$` call sits in its hook body.** The hooks compiler refuses a `$` bound, passed, spread,
+   returned or read: it is only ever spelled `$.noun.method(...)` at the call site. So `src/mod/index.ts`
+   holds every `$` call, the loop included, and `src/mod/bridge.ts` takes and returns plain data. The
+   same test walks `src/mod/` and fails on a `$` used as a value, naming the rule and the fix.
+5. **The mod never blocks on heavy work.** Anything slow goes to the server, so a hook stays
    under its 10 s budget and a fault there can't crash the hooks worker.
-5. **Every effect crosses one bridge.** A program's tool calls cross `kernel/bridge` as
+6. **Every effect crosses one bridge.** A program's tool calls cross `kernel/bridge` as
    `{ ref, args }`, so a sandbox executor can replace the Worker without touching providers.
-6. **Copied pi-fabric code keeps its MIT credit** in a header line.
+7. **Copied pi-fabric code keeps its MIT credit** in a header line.
 
 ## Open probes
 

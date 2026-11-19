@@ -19,6 +19,6 @@
   ],
   "exclude": [
     "src/mod",
-    "test/mod/compact-hook.test.ts"
+    "test/mod"
   ]
 }
