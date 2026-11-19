@@ -107,6 +107,13 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   and one `mcp__<server>__* (N tools)` line per server (`src/mod/deferred.ts`). ToolSearch still
   finds every tool. Other sections, and any text a section holds that is not a tool name, pass
   through unchanged. The person approved this on 2026-11-19.
+- **The step 6 benchmark ran on Sonnet 5.5.** The person asked for Sonnet to save usage; every arm
+  used the same model. 15 tasks (bug fixes, features, refactors, investigations), each with a hidden
+  check, 5 runs per arm, each run an interactive session in tmux, since code mode runs only there.
+  Tokens are a run's input, cache and output tokens summed over its API calls. Result: `fabric_exec`
+  70/75, native code mode 70/75, plain 68/74 (one run hit the turn limit), `fabric_exec` at 1.052
+  times native's tokens. Task 06 failed every run of every arm, and nothing else failed: its prompt leaves the output
+  calls and the `slowest` format open, and its check expects one form of each.
 
 ## Trust
 
@@ -124,9 +131,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 ## Planned, not built
 
 - `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal.
-- A benchmark of plain Claude, Claude with native code mode, and Claude with `fabric_exec`.
-  Pass: it solves at least as many tasks as native code mode, with at most 10% more tokens.
-- After the benchmark, native code mode is turned off. Every other tool stays visible.
+- After the benchmark, native code mode is turned off with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`,
+  not by a mod: hiding `REPL` from the tool list with code mode on put every MCP tool's schema in
+  the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool
+  stays visible.
 
 ## Out of scope
 
