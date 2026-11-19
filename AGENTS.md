@@ -28,9 +28,10 @@ Where it stands:
    plugin, and Claude Code tool names inside programs.
 2. **Done:** the `src/` layout in architecture.md, the action registry that generates guest
    types, tool lines and argument checks, and an empty mod that loads.
-3. **Next, compaction:** port the deterministic compactor into `src/compaction/` and answer
-   `session.compact` with it.
-4. **Then** the self-correcting stages (argument repair, code repair, output budget, type-error
+3. **Done:** the deterministic compactor in `src/compaction/`, answering `session.compact` with
+   pi-fabric's summary and no model call. Its cut and allocation rules are gdp-wired kernels in
+   `proofs/`.
+4. **Next, the self-correcting stages** (argument repair, code repair, output budget, type-error
    guidance, repeat guard), copied with MIT credit.
 5. **Then the rest of the map:** `store`/`load`, `__bun`, `mcp.<server>.<tool>()`, prompt
    guidance, tool middleware, agents and mesh, in the order architecture.md's probes allow.
@@ -88,10 +89,12 @@ the real MCP server with a bad argument, so a field the model must fill fails th
 ## Check
 
 ```sh
-bun run typecheck && bun run spike && bun run test
+bun run typecheck && bun run spike && bun run test && bun run proof:check
 ```
 
-CI runs the same three on Bun 1.4.0 with ripgrep. `spike` runs sample programs against this
+CI runs the same four on Bun 1.4.0 with ripgrep. `proof:check` proves every law in `proofs/`,
+refuses every broken variant, and compares the compiled machines with the committed generated
+files; `proof:write` regenerates them. `spike` runs sample programs against this
 repo and prints timings. `test` starts the real MCP server over stdio and calls `fabric_exec`.
 Green doesn't prove the plugin loads in Claude Code. For that, run
 `claude --plugin-dir .` and call the tool, which shows up as

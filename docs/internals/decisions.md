@@ -12,7 +12,17 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   sections, tool middleware, commands and UI. The MCP server serves `fabric_exec` and does the
   heavy work. The mod stays thin because of its 10 s hook budget and import limits.
 - **Fabric's compactor replaces Claude Code's.** A `session.compact` hook that returns
-  `{ messages }` answers in core's place, with no model call (proven 2026-11-18).
+  `{ messages }` answers in core's place, with no model call (proven 2026-11-18). `precompute`
+  answers `{ skip }`: the summary is deterministic, so there is nothing to compute ahead of time.
+- **A summary names itself, and a later compaction carries it.** The rendered summary opens
+  with `[Fabric summary]`, so the next compaction recognizes its own earlier summary by that
+  header instead of reading it as a user prompt. Pi re-derives a second summary from the raw
+  branch, which a Claude transcript no longer holds; here the earlier summary is kept as the
+  `[Earlier summary]` block, because a 2,048-byte prose excerpt would lose its sections. It is
+  allocated inside the same 32 KiB as every other block (proved `summaryCarry`): the newest
+  directions, the compaction request and the footer keep their bytes, the room left is split
+  evenly between the carry and the operational history, and a carry that does not fit keeps its
+  newest bytes with the loss stated on its first line.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
 - **`fabric_exec` stays an MCP tool.** Claude passes `CLAUDE_PROJECT_DIR` and

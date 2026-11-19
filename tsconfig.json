@@ -13,9 +13,12 @@
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "proofs/**/*.ts",
+    "scripts/**/*.ts"
   ],
   "exclude": [
-    "src/mod"
+    "src/mod",
+    "test/mod/compact-hook.test.ts"
   ]
 }

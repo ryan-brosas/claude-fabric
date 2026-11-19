@@ -32,6 +32,7 @@ bun install
 bun run spike      # runs sample programs against this repo and prints timings
 bun run typecheck
 bun run test       # starts the MCP server over stdio and calls fabric_exec
+bun run proof:check # proves the compaction laws and matches the generated machines
 ```
 
 Needs Bun 1.4+ and ripgrep.
@@ -45,7 +46,9 @@ Needs Bun 1.4+ and ripgrep.
 - `src/providers/tools/`: one file per program tool: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`.
 - `src/server/index.ts`: MCP server with the one `fabric_exec` tool.
 - `src/server/start.sh`: plugin entry; installs dependencies on first start.
-- `src/mod/index.ts`: the in-process half of the plugin, empty until compaction lands.
+- `src/compaction/`: the deterministic compactor: Claude Code's transcript in, Fabric's summary out.
+- `src/mod/index.ts`: the in-process half of the plugin: answers `session.compact`.
+- `proofs/`: the gdp-wired kernels behind the summary and the cut, with their laws; `bun run proof:check`.
 - `hooks/hooks.json`: points Claude Code at the mod.
 
 ## Credit

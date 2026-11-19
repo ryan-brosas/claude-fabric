@@ -40,7 +40,7 @@ the docs. It is untested until a row says otherwise.
 | pi-fabric part | Pi surface it uses | Claude Code surface | Status |
 | --- | --- | --- | --- |
 | `fabric_exec` | `registerTool` | MCP server tool | built |
-| Compaction (`src/compaction`) | `session_before_compact` | `session.compact` returns `{ messages }` | proven |
+| Compaction (`src/compaction`) | `session_before_compact` | `session.compact` returns `{ messages }` | built |
 | Compaction thresholds, headroom, `compact.request` | `agent_settled`, `ctx.compact()` | `session.measure`, `$.session.usage()`, `$.session.compact()` between turns, `precompute` trigger | documented |
 | Prompt guidance (`core/prompt-guidance`, `core-override-guidance`) | `before_agent_start` | `prompt.section`, `prompt.compose` | fires (proven); rewrite documented |
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
