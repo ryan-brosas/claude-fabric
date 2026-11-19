@@ -61,6 +61,19 @@ describe("the mod's session.compact hook", () => {
     expect(calls).toEqual([]);
   });
 
+  test("one long turn over the budget goes to core instead of being vetoed", () => {
+    const { run, calls } = harness();
+    const event: Event = {
+      trigger: "auto",
+      messages: [
+        { role: "user", text: "One long task.", toolUses: [] },
+        { role: "assistant", text: "x".repeat(200_000), toolUses: [] },
+      ],
+    };
+    expect(run(event)).toEqual({ messages: [{ role: "user", text: "core summary", toolUses: [] }] });
+    expect(calls).toEqual([event]);
+  });
+
   test("a compactor that throws falls back to core", () => {
     const { run, calls } = harness();
     const event: Event = { trigger: "manual", messages: undefined };

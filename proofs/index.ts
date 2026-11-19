@@ -11,6 +11,7 @@ import { GATE_BUGS, gateKernels } from "./gate.ts";
 import { JOB_RECEIPT_BUGS, jobReceiptKernels } from "./job-receipt.ts";
 import type { Kernel } from "./kernel.ts";
 import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
+import { NO_CUT_BUGS, noCutKernels } from "./no-cut.ts";
 import { OFFER_MEMO_BUGS, offerMemoKernels } from "./offer-memo.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
@@ -40,6 +41,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "policy", source: "proofs/policy.ts", out: compaction, kernels: policyKernels as any, bugs: POLICY_BUGS },
   { stem: "context", source: "proofs/context.ts", out: compaction, kernels: contextKernels as any, bugs: CONTEXT_BUGS },
   { stem: "cut", source: "proofs/cut.ts", out: compaction, kernels: cutKernels as any, bugs: CUT_BUGS },
+  { stem: "no-cut", source: "proofs/no-cut.ts", out: compaction, kernels: noCutKernels as any, bugs: NO_CUT_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
