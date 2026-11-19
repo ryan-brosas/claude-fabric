@@ -148,7 +148,15 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   deadline). It is an option, not the default, because it changes every session. An env var cannot
   carry it: `$.process.hookEnv` returns only Claude Code's own variables. The rule is a gdp-wired
   kernel, `proofs/tool-visibility.ts` (5 laws, 6 broken variants refused), and the hook hides a tool
-  only through its compiled verdict. Whether it lowers a task's total is not yet measured.
+  only through its compiled verdict. Its answer per loop and tool is fixed at the first ask
+  (`proofs/offer-memo.ts`) and dropped at `session.end`: a first ask before `fabric_exec` joined
+  had left Bash in the model's list while its calls were refused, which failed 4 of 15 Haiku runs.
+- **Measured on Haiku 5.5** (2026-11-19, fabric arm, tasks 02, 04, 08, 12 and 14, 3 runs each, raw rows
+  in `notes/bench/results-haiku-*.jsonl`): the old guidance passed 15/15 at 363k mean tokens; the
+  program guidance (#21) 15/15 at 325k; that guidance with `fabricOnly` 15/15 at 277k, with 6.67
+  requests against 8.07 and 50 s against 65 s. The guidance alone moved work from programs to direct
+  Bash (38 programs and 56 Bash calls, against 77 and 19), so its saving is real but not where it was
+  aimed; `fabricOnly` makes programs the path. No native arm ran, so this is not a step 6 result.
 
 ## Out of scope
 
