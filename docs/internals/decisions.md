@@ -133,7 +133,19 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 ## Planned, not built
 
-- `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal.
+- `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal. Upstream it
+  is `declare const __bun: any`, the raw Bun module. That breaks architecture rule 6 (every effect
+  crosses one bridge) and ties the runtime to the unsandboxed Worker, so it waits on the sandbox
+  question under Trust.
+- **Tool middleware: nothing to port alone** (checked 2026-11-19). pi-fabric's `tool_call` and
+  `tool_result` hooks fix Pi's ignored `isError` (Claude Code honours it), expand Pi's skill-folder
+  markers in `read` results, merge approval usage (there is no approval layer here), and hand a
+  result to a child or guard a child's writes (`agents/write-guard.ts`). The last two are part of
+  agents.
+- Agents and mesh: these need a program to start an agent, and `Agent` stays top-level only.
+  The mechanism exists (architecture.md, Answered probes: `$.agent.spawn`, the answer at
+  `turn.complete`); a spawned agent then runs with no permission prompt from the person, so
+  opening it to programs is the person's decision, not a port step.
 - After the benchmark, native code mode is turned off with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`,
   not by a mod: hiding `REPL` from the tool list with code mode on put every MCP tool's schema in
   the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool

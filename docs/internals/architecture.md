@@ -173,9 +173,18 @@ test/           mirrors src/
    `{ ref, args }`, so a sandbox executor can replace the Worker without touching providers.
 7. **Copied pi-fabric code keeps its MIT credit** in a header line.
 
-## Open probes
+## Answered probes
 
-- Whether `$.tool.call` runs Agent for a program (Read and WebSearch do).
-- Whether `session.append` door `compaction` fires for core's own compaction (it did not in the
-  first probe).
+- **A mod and Agent** (2026-11-19, Claude Code 2.1.328, a throwaway probe plugin): `$.tool.call`
+  refuses Agent ("runs the Agent tool: that is $.agent.spawn"). `$.agent.spawn({ prompt,
+  description, subagentType, model })` starts a background agent and resolves `{ model, agentId }`;
+  `$.agent.list()` shows its status and usage but not its answer; the `turn.complete` hook whose
+  `agentId` matches carries the answer (`PROBE-OK` from Haiku in 2.6 s). So a program could reach
+  agents as a job the mod spawns and answers at `turn.complete`.
+
+- **`session.append` door `compaction`** (2026-11-19, Claude Code 2.1.328): it does not fire for
+  core's own compaction. A probe plugin logged every `session.append` row; a manual `/compact` with
+  the fabric plugin disabled compacted, and the last rows were the `/compact` note and the
+  `session.compact` hook, with no `compaction` row after. This matches the first probe. So
+  `session.compact` stays the one place to see a compaction.
 
