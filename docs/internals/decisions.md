@@ -142,7 +142,11 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   full code mode, cut down: with code mode off, the mod's `tool.list` hook drops Bash, Edit, Write,
   Grep and Glob while `fabric_exec` is in the pool. Read stays for images and PDFs, and WebSearch
   stays because a hidden tool is hidden from the mod's `$.tool.call` too. It is an option, not
-  the default, because it changes every session. An env var cannot carry it: `$.process.hookEnv`
+  the default, because it changes every session. Claude Code's removal is session-wide, with no
+  per-agent scope: a subagent whose `tools` names only Bash loses it with no `fabric_exec` in its
+  place, and Bash's background jobs go too (a program's Bash waits, within the 120 s deadline). The
+  option's description says both. The rule is a gdp-wired kernel, `proofs/tool-visibility.ts`
+  (4 laws, 5 broken variants refused), and the mod hides a tool only through its compiled verdict. An env var cannot carry it: `$.process.hookEnv`
   returns only Claude Code's own variables. Live, `claude -p` with the option on listed no Bash,
   Edit or Write, and its first request was 24,379 tokens against 26,358 with it off; the debug log
   says "3 removed". Whether it lowers a task's total is not yet measured.

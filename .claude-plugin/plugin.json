@@ -25,7 +25,7 @@
     "fabricOnly": {
       "type": "boolean",
       "title": "fabric_exec only",
-      "description": "Hide Bash, Edit, Write, Grep and Glob from the model, so file and shell work goes through fabric_exec programs. Read and WebSearch stay.",
+      "description": "Hide Bash, Edit, Write, Grep and Glob, so file and shell work goes through fabric_exec programs. Read and WebSearch stay. Applies to the whole session: subagents lose these tools too, and so do background Bash jobs.",
       "default": false
     }
   }

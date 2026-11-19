@@ -180,6 +180,6 @@ export const register: Register = (on, options) => {
     }
     // With fabricOnly on, the tools a program runs leave the model's list (src/mod/fabric-only.ts).
     if (!programsOnly) return listed;
-    return { ...listed, value: [...withoutProgramTools(listed.value)] };
+    return { ...listed, value: [...withoutProgramTools(listed.value, programsOnly)] };
   }).catch(($, e, next) => next(e));
 };

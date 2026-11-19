@@ -5,19 +5,27 @@
 import { isBuiltinTool } from "../bridge/contract.ts";
 import { FABRIC_EXEC_TOOL } from "../guidance/guidance.ts";
 import { TOOL_NAMES } from "../providers/tools/names.ts";
+import { toolHidden } from "./verified/tool-visibility.ts";
 
 /** The plugin.json userConfig field that turns the mode on; off unless set to true. */
 export const FABRIC_ONLY_OPTION = "fabricOnly";
 
+const programTool = (name: string): boolean => (TOOL_NAMES as readonly string[]).includes(name);
+
 /**
- * The tools that leave the list. Read stays, because a program's Read returns text and the direct
- * tool also reads images and PDFs. WebSearch stays, because a program reaches it through the mod's
- * `$.tool.call`, and a tool hidden from the list is hidden from the mod too.
+ * Kept even with the option on: Read, because a program's Read returns text and the direct tool
+ * also reads images and PDFs; and a built-in the bridge reaches through `$.tool.call`, because a
+ * tool removed from the list is removed for the mod too.
  */
-export const HIDDEN_TOOLS: readonly string[] = TOOL_NAMES.filter((name) => name !== "Read" && !isBuiltinTool(name));
+const kept = (name: string): boolean => name === "Read" || isBuiltinTool(name);
+
+/** The tools the option takes out when fabric_exec is in the pool. */
+export const HIDDEN_TOOLS: readonly string[] = TOOL_NAMES.filter((name) => toolHidden(true, true, true, kept(name)));
 
 export const fabricOnly = (options: Readonly<Record<string, unknown>> | undefined): boolean => options?.[FABRIC_ONLY_OPTION] === true;
 
-/** The list without the hidden tools, but only when fabric_exec is in it to take their place. */
-export const withoutProgramTools = <T extends { readonly name: string }>(tools: readonly T[]): readonly T[] =>
-  tools.some((tool) => tool.name === FABRIC_EXEC_TOOL) ? tools.filter((tool) => !HIDDEN_TOOLS.includes(tool.name)) : tools;
+/** The list with every tool the rule hides taken out (proofs/tool-visibility.ts decides). */
+export const withoutProgramTools = <T extends { readonly name: string }>(tools: readonly T[], optionOn: boolean): readonly T[] => {
+  const inPool = tools.some((tool) => tool.name === FABRIC_EXEC_TOOL);
+  return tools.filter((tool) => !toolHidden(optionOn, inPool, programTool(tool.name), kept(tool.name)));
+};

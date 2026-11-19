@@ -10,12 +10,13 @@ const pool = [FABRIC_EXEC_TOOL, "Read", "Write", "Edit", "Grep", "Glob", "Bash",
 describe("withoutProgramTools", () => {
   test("hides the server-run program tools and keeps Read, WebSearch and every other tool", () => {
     expect([...HIDDEN_TOOLS].sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Write"]);
-    expect(withoutProgramTools(named(pool)).map((tool) => tool.name)).toEqual([FABRIC_EXEC_TOOL, "Read", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"]);
+    expect(withoutProgramTools(named(pool), true).map((tool) => tool.name)).toEqual([FABRIC_EXEC_TOOL, "Read", "WebSearch", "Agent", "WebFetch", "mcp__docs__guide"]);
   });
 
-  test("hides nothing when fabric_exec is not in the list", () => {
+  test("hides nothing when fabric_exec is not in the list, or with the option off", () => {
     const plain = named(pool.slice(1));
-    expect(withoutProgramTools(plain)).toEqual(plain);
+    expect(withoutProgramTools(plain, true)).toEqual(plain);
+    expect(withoutProgramTools(named(pool), false)).toEqual(named(pool));
   });
 
   test("the mode is on only for the boolean true", () => {
