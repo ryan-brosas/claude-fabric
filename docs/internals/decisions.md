@@ -100,6 +100,13 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   store per server process, which is one session. The limits and the commit rule are a gdp-wired
   kernel ([proofs/store-limits.ts](../../proofs/store-limits.ts)). Not on disk in this slice: the
   store dies with the session, and `CLAUDE_PLUGIN_DATA` is for what has to outlive it.
+- **A fabric session's deferred tool list names servers, not tools.** With code mode off, Claude
+  Code lists every deferred tool by name on each request; the benchmark pilot measured that list
+  at about 28k characters, while native code mode sends a short server list. While `fabric_exec`
+  is in the pool, the mod's `prompt.attachment` hook rewrites that one section to built-ins by name
+  and one `mcp__<server>__* (N tools)` line per server (`src/mod/deferred.ts`). ToolSearch still
+  finds every tool. Other sections, and any text a section holds that is not a tool name, pass
+  through unchanged. The person approved this on 2026-11-19.
 
 ## Trust
 

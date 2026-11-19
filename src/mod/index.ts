@@ -15,6 +15,7 @@ import {
   requestOf,
   retryDelay,
 } from "./bridge.ts";
+import { compactDeferred } from "./deferred.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -28,6 +29,8 @@ export const register: Register = (on) => {
   // Between hook bodies: the catalog to publish, and this session's socket once it is known.
   let state = emptyState();
   let socket: BridgePaths | undefined;
+  // Whether the last tool list held fabric_exec: only then is the deferred list shortened.
+  let fabricInPool = false;
 
   // Compaction is Fabric's deterministic summary: no model call, so there is nothing to
   // precompute, and a compactor that throws falls back to core's own.
@@ -139,11 +142,21 @@ export const register: Register = (on) => {
     return { ...described, isDeferred: false };
   }).catch(($, e, next) => next(e));
 
+  // With code mode off, Claude Code lists every deferred tool by name on each request. A session
+  // that offers fabric_exec gets the list by server instead (src/mod/deferred.ts); the engine's
+  // own prose is the only text rewritten, and only while fabric_exec is in the pool.
+  on("prompt.attachment", { type: "deferred_tools_delta" }, async ($, e, next) => {
+    const attached = await next(e);
+    if (!fabricInPool || e.origin.kind !== "engine" || attached.text === null) return attached;
+    return { text: compactDeferred(attached.text) };
+  }).catch(($, e, next) => next(e));
+
   // The session's tool pool is the catalog a program's mcp calls are checked against, and the
   // engine raises this event again when that pool changes. The answer goes back untouched.
   on("tool.list", async ($, e, next) => {
     const listed = await next(e);
     if (listed.value === undefined) return listed;
+    fabricInPool = listed.value.some((tool) => tool.name === FABRIC_EXEC_TOOL);
     state = notedTools(state, listed.value);
     // Published here as well as by the loop: the loop may be parked in its long poll, and a program
     // that runs meanwhile would otherwise find no catalog.
