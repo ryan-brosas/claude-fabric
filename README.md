@@ -8,8 +8,9 @@ the program returns, so the steps in between never fill the context. Inside the 
 keep Claude Code's names and fields (`Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`). It is
 meant to replace Claude Code's native code mode.
 
-Status: phase 1. The plugin exposes `fabric_exec` to Claude Code. Fabric's self-correcting
-modules (argument repair, code repair, output budget, type-error guidance) come next.
+Status: the plugin exposes `fabric_exec` to Claude Code, with Fabric's self-correcting stages
+(argument repair, code repair, output budget, type-error guidance, repeat guard), and its mod
+answers `/compact` with Fabric's deterministic summary.
 
 ## Install
 

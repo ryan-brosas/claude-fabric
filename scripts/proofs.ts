@@ -1,22 +1,17 @@
 #!/usr/bin/env bun
 // Trimmed from pi-fabric (MIT, Tom X Nguyen) scripts/verified-kernels.ts at d331f629; only the
 // artifacts this repo ships, no --artifact mode, and a byte comparison instead of a receipt.
-// Proves the registered gdp-wired kernels and compiles them to the modules
-// src/compaction/verified executes. --check also compares every artifact with the
-// committed file, so a proved rule and the code that runs it cannot drift apart.
-import { readFileSync, writeFileSync } from "node:fs";
+// Proves the registered gdp-wired kernels and compiles them to the modules their stage or
+// compactor executes. --check also compares every artifact with the committed file, so a proved
+// rule and the code that runs it cannot drift apart.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProofTask, ProofResult } from "./proof-worker.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (path: string): string => readFileSync(resolve(root, path), "utf8");
-const stems = ["policy", "context", "cut"];
-const artifacts = stems.flatMap((stem) => [
-  `src/compaction/verified/generated/${stem}.js`,
-  `src/compaction/verified/generated/${stem}.d.ts`,
-]);
 const pinned = (): string => {
   const version = (JSON.parse(read("package.json")) as { devDependencies?: Record<string, string> }).devDependencies?.["gdp-wired"];
   if (!version || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error("gdp-wired must be pinned to an exact devDependency version");
@@ -37,15 +32,19 @@ const { modules } = await import("../proofs/index.ts");
 const { runWorkerTasks } = await import("./proof-pool.ts");
 const started = performance.now();
 const plans = modules.map((module) => ({ module, kernels: module.kernels() }));
-if (new Set(modules.map((module) => module.stem)).size !== stems.length || modules.length !== stems.length) {
-  throw new Error("Kernel module registry differs from the artifact inventory");
+if (new Set(modules.map((module) => module.stem)).size !== modules.length) {
+  throw new Error("Kernel module registry has a duplicate stem");
 }
 for (const { module, kernels } of plans) {
-  if (`proofs/${module.stem}.ts` !== module.source || !stems.includes(module.stem) ||
+  if (`proofs/${module.stem}.ts` !== module.source || !/^src\/[a-z-]+\/verified\/generated$/.test(module.out) ||
       new Set(kernels.map((kernel) => kernel.id)).size !== kernels.length) {
     throw new Error(`Invalid kernel module ${module.stem}`);
   }
 }
+const artifacts = modules.flatMap((module) => [
+  `${module.out}/${module.stem}.js`,
+  `${module.out}/${module.stem}.d.ts`,
+]);
 const tasks: ProofTask[] = plans.flatMap(({ module, kernels }) => [
   ...kernels.map((kernel) => ({ kind: "kernel" as const, stem: module.stem, id: kernel.id })),
   { kind: "mutations" as const, stem: module.stem },
@@ -103,13 +102,16 @@ for (const { module, kernels } of plans) {
     "export interface Machine { init(params: object): MachineState; step(params: object, state: MachineState, input: object): MachineState }",
     ...kernels.map((kernel) => `export declare const ${kernel.id}: Machine;`),
   ].join("\n");
-  files.set(`src/compaction/verified/generated/${module.stem}.js`, `${header}${[...helpers.values()].join("\n")}\n\n${js}`);
-  files.set(`src/compaction/verified/generated/${module.stem}.d.ts`, `${header}${dts}\n`);
+  files.set(`${module.out}/${module.stem}.js`, `${header}${[...helpers.values()].join("\n")}\n\n${js}`);
+  files.set(`${module.out}/${module.stem}.d.ts`, `${header}${dts}\n`);
 }
 if (failures.length) throw new Error(`Verified kernels failed:\n${failures.join("\n")}`);
 
 if (mode === "--write") {
-  for (const [path, text] of files) writeFileSync(resolve(root, path), text);
+  for (const [path, text] of files) {
+    mkdirSync(dirname(resolve(root, path)), { recursive: true });
+    writeFileSync(resolve(root, path), text);
+  }
   console.log(`Wrote ${files.size} verified kernel artifacts.`);
 } else {
   const drift = [...files].filter(([path, text]) => { try { return read(path) !== text; } catch { return true; } }).map(([path]) => path);
