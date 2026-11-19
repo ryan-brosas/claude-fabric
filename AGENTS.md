@@ -53,7 +53,11 @@ Where it stands:
    with code mode on loads every MCP tool's schema (103k tokens on the first call, against 26k).
    So the switch is `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`, which is what the benchmark's
    `fabric_exec` arm ran with. What is left is dogfooding: daily sessions with the plugin and
-   code mode off.
+   code mode off. Two tuning steps came out of the benchmark: guidance on how to write a program
+   (#21), and the `fabricOnly` option (#22, #23), which keeps Bash, Edit, Write, Grep and Glob from
+   the main conversation so its work goes through programs. On Haiku the two together cut mean
+   tokens from 363k to 277k, all 15 runs passing; the option is off by default and on in the
+   dogfood setup.
 
 Each step's details and the things we chose not to build are in
 [docs/internals/decisions.md](docs/internals/decisions.md).
