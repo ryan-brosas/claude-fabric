@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { check } from "../../src/kernel/check.ts";
 import { run } from "../../src/kernel/host.ts";
+import type { Done } from "../../src/kernel/protocol.ts";
 import { MAX_RESULT_CHARS, bound, format } from "../../src/kernel/result.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 import { guestTypes } from "../../src/registry/generate.ts";
@@ -22,24 +23,33 @@ const removeSaved = async (...texts: string[]): Promise<void> => {
   await Promise.all(savedDirs(...texts).map((dir) => rm(dir, { recursive: true, force: true })));
 };
 
+// A done message as a worker sends it, for the formatter's own tests.
+const done = (parts: Partial<Done> = {}): Done => ({
+  kind: "done", token: "test", ok: true, logs: [], writes: { set: {}, remove: [] }, ...parts,
+});
+
 test("format returns a string value as is", () => {
-  expect(format({ kind: "done", value: "hi", logs: [] })).toBe("hi");
+  expect(format(done({ value: "hi" }))).toBe("hi");
 });
 
 test("format pretty-prints an object value", () => {
-  expect(format({ kind: "done", value: { a: 1 }, logs: [] })).toBe('{\n  "a": 1\n}');
+  expect(format(done({ value: { a: 1 } }))).toBe('{\n  "a": 1\n}');
 });
 
 test("format names a missing value", () => {
-  expect(format({ kind: "done", value: undefined, logs: [] })).toBe("undefined");
+  expect(format(done({ value: undefined }))).toBe("undefined");
 });
 
 test("format reports an error and ignores a value beside it", () => {
-  expect(format({ kind: "done", error: "boom", value: "ignored", logs: [] })).toBe("Error: boom");
+  expect(format(done({ ok: false, error: "boom", value: "ignored" }))).toBe("Error: boom");
+});
+
+test("format keeps an empty error a failure", () => {
+  expect(format(done({ ok: false, error: "" }))).toBe("Error: ");
 });
 
 test("format puts logs before the body, in call order", () => {
-  expect(format({ kind: "done", value: 2, logs: ["first", "second"] })).toBe("first\nsecond\n2");
+  expect(format(done({ value: 2, logs: ["first", "second"] }))).toBe("first\nsecond\n2");
 });
 
 test("bound leaves text at the cap alone", () => {

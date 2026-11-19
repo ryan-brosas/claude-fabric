@@ -31,6 +31,12 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **A fresh Bun Worker per call.** It costs about 1.3 ms, against 14 ms for `Bun.spawn`. Node's
   `vm` is faster but gives no thread to terminate. `terminate()` handles timeouts.
 - **A warm type checker in the server, run before every call.**
+- **`store`/`load` live in the server's memory, and a run's writes commit only on success.** The
+  worker gets a snapshot with its run message and stages `store()` calls; the host commits them
+  after the program succeeds, so a program that fails, times out or crashes changes nothing. One
+  store per server process, which is one session. The limits and the commit rule are a gdp-wired
+  kernel ([proofs/store-limits.ts](../../proofs/store-limits.ts)). Not on disk in this slice: the
+  store dies with the session, and `CLAUDE_PLUGIN_DATA` is for what has to outlive it.
 
 ## Trust
 
@@ -47,7 +53,6 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 ## Planned, not built
 
-- `store`/`load` to keep data between calls.
 - `__bun`: Bun inside programs, with writes, spawns and deletes logged to a journal.
 - `mcp.<server>.<tool>()` inside programs. First choice: route it through the mod's
   `$.mcp.call`, which uses Claude Code's own connections and credentials, claude.ai connectors

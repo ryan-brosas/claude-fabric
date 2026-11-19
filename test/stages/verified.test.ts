@@ -6,6 +6,8 @@ import { outputBudget, savedLine } from "../../src/stages/output-budget.ts";
 import { BLOCK, INITIAL_STATE, WARN, fingerprint, next } from "../../src/stages/repeat-guard.ts";
 import { acceptBudget, budgetLengths } from "../../src/stages/verified/output-budget.ts";
 import { countRepeat } from "../../src/stages/verified/repeat-guard.ts";
+import { acceptCommit, writeVerdict } from "../../src/stages/verified/store-limits.ts";
+import { TOTAL_LIMIT, VALUE_LIMIT } from "../../src/stages/store.ts";
 
 const fallback = (text: string, max: number): string => text.slice(0, max) + "\n[result cut at " + max + " chars]";
 
@@ -45,6 +47,36 @@ describe("the verified repeat count", () => {
     expect(() => next({ fingerprint: "f", count: -1 }, "f")).toThrow(RangeError);
     expect(() => next(INITIAL_STATE, "f", 2.5)).toThrow(RangeError);
     expect(() => countRepeat(0, true, 3, Number.MAX_SAFE_INTEGER + 2)).toThrow(RangeError);
+  });
+});
+
+describe("the verified store limits", () => {
+  test("takes a write within both limits and gives the store's new length", () => {
+    expect(writeVerdict({ value: 10, total: 20, valueLimit: VALUE_LIMIT, totalLimit: TOTAL_LIMIT }))
+      .toEqual({ accept: true, next: 30, store: 30 });
+  });
+
+  test("refuses a value over its own limit and leaves the store's length as it was", () => {
+    expect(writeVerdict({ value: VALUE_LIMIT + 1, total: 0, valueLimit: VALUE_LIMIT, totalLimit: TOTAL_LIMIT }))
+      .toEqual({ accept: false, next: VALUE_LIMIT + 1, store: 0 });
+  });
+
+  test("refuses a write that would pass the total limit", () => {
+    const total = TOTAL_LIMIT - 5;
+    expect(writeVerdict({ value: 10, total, valueLimit: VALUE_LIMIT, totalLimit: TOTAL_LIMIT }))
+      .toEqual({ accept: false, next: TOTAL_LIMIT + 5, store: total });
+  });
+
+  test("commits only a successful run that staged writes", () => {
+    expect(acceptCommit(true, true)).toBe(true);
+    for (const [success, written] of [[false, true], [true, false], [false, false]] as const) {
+      expect({ success, written, committed: acceptCommit(success, written) }).toEqual({ success, written, committed: false });
+    }
+  });
+
+  test("refuses a length the machine cannot represent", () => {
+    expect(() => writeVerdict({ value: -1, total: 0, valueLimit: VALUE_LIMIT, totalLimit: TOTAL_LIMIT })).toThrow(RangeError);
+    expect(() => writeVerdict({ value: 1.5, total: 0, valueLimit: VALUE_LIMIT, totalLimit: TOTAL_LIMIT })).toThrow(RangeError);
   });
 });
 

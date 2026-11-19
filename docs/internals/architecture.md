@@ -29,7 +29,23 @@ Probed 2026-11-18 on Claude Code 2.1.327 with a throwaway mod loaded through `--
   Enterprise `/login` sessions and on machines with managed settings.)
 - `session.compact` fires on `/compact` with `{ trigger, messages }`. A hook that returns
   `{ messages: [summary, ...tail] }` replaces Claude Code's compactor: compaction ran with no model
-  call, and the model then answered from a fact that only our summary held.
+  call, and the model then answered from a fact that only our summary held. Since step 3 the
+  plugin's own mod does this: three `/compact`s in an interactive session logged "core never ran",
+  and the model recalled facts planted before both cuts.
+- Probed 2026-11-19 with a scratch plugin (an MCP server and a mod) under `claude -p --plugin-dir`:
+  - A `tool.list` hook takes tools off the model's list, built-ins (WebFetch, Write) and MCP
+    tools alike. A tool taken off that list is gone for the mod too: `$.mcp.call` answers "no
+    connected MCP tool" and `$.tool.call` "no tool named ...". So a private server tool cannot
+    hide that way, and programs keep their own server-side providers for tools the model loses.
+  - `$.tool.call({ tool: "Read", ... })` from the mod runs the built-in and returns its record.
+  - `$.mcp.call("context7", "resolve-library-id", ...)` reaches another connected server through
+    Claude Code's own connection.
+  - The mod reaches the server over a Unix socket: the server listens with
+    `Bun.serve({ unix })`, and a loop the mod starts at `session.start` long-polls it with
+    `$.http.fetch(url, { socketPath })`, runs the job (`$.tool.call` here) and posts the answer.
+    A server tool waited 15 ms for a built-in Read this way. The loop runs outside the 10 s hook
+    budget. Before the server listens and after it exits, the fetch is ECONNREFUSED, so the
+    loop retries.
 
 The rest of the table below comes from the generated mod types
 (`.claude-plugin/types/claude-code/index.d.ts`, written by Claude Code for its own version) and
@@ -44,15 +60,15 @@ the docs. It is untested until a row says otherwise.
 | Compaction thresholds, headroom, `compact.request` | `agent_settled`, `ctx.compact()` | `session.measure`, `$.session.usage()`, `$.session.compact()` between turns, `precompute` trigger | documented |
 | Prompt guidance (`core/prompt-guidance`, `core-override-guidance`) | `before_agent_start` | `prompt.section`, `prompt.compose` | fires (proven); rewrite documented |
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
-| Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | documented; hiding built-ins unverified |
-| Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, bridged to the server | documented; needs a probe |
+| Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | hiding built-ins proven (`tool.list`); the hidden tool is gone for the mod too |
+| Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, over the socket bridge | bridge and `$.tool.call` (Read) proven; WebSearch and Agent untried |
 | Input transforms (pasted images) | `input` | `prompt.submit` can rewrite text; its attachment list is pinned, so adding image blocks is not covered | gap for images; text documented |
 | Agents and actors | Pi child processes | `$.agent.spawn/call/list`, `agent.spawn` hook | documented |
 | Mesh (durable topics, compare-and-swap state), decisions (durable approvals), sessions (interactive processes) | own implementations | stay in the server; `$.session.send` and `session.receive` only deliver peer text | server-side; delivery documented |
 | Thinking control (`thinking.*`) | `getThinkingLevel`, `setThinkingLevel`, `appendEntry`, turn-scoped reversion | `turn.step` `effort`: one step per rewrite, no `off` or `minimal` level | partial: needs a scoped controller in the mod and a level mapping |
 | Commands (`/fabric`, settings) | `registerCommand` | `$.command.register`, `command.run` | documented |
 | UI (`src/ui`, 29k lines of Pi TUI) | Pi TUI | `ui.render`: panes, band, tool-call rows, spinner | rebuild, not port |
-| State, programs, schema, store | none (own storage) | server storage under `CLAUDE_PLUGIN_DATA` | no host dependency |
+| State, programs, schema, store | none (own storage) | the store lives in the server's memory; the rest is server storage under `CLAUDE_PLUGIN_DATA` | `store`/`load` built, as worker globals committed only on success; state, programs and schema not started |
 | Memory (`src/memory`) | `sessionManager` session file, branch and leaf | index and storage in the server; history from a Claude transcript adapter (`transcript_path`, `$.session.messages()`) | needs the adapter |
 | QuickJS, Node-process, Python runtimes | none | server | no host dependency |
 | Per-request context projection (extractive history, prewalk continuation) | `context` | none: `turn.step` messages are pinned | gap; nearest is a compaction between turns |
@@ -69,10 +85,13 @@ src/
   mod/          binding 1, in-process: compaction, prompt sections, tool middleware, commands, UI
   server/       binding 2, MCP: fabric_exec and the mod's heavy calls
   kernel/       check -> stages -> execute -> bound; bridge; executors/
-  registry/     defineAction({ name, doc, input, output, positional, run }); generates guest types,
-                the tool lines of DESCRIPTION and the argument check
-  providers/    one folder per namespace: tools/ (Read..Bash), then store, mcp, agents, ...
-  stages/       pure self-correcting stages: args, code repair, type guidance, repeat guard, budget
+  registry/     defineAction({ name, doc, input, output, positional, run }), and defineBuiltin
+                for a guest global that is not a tool; generates guest types, the DESCRIPTION lines
+                and the argument check
+  providers/    one folder per namespace: tools/ (Read..Bash), store (the store/load globals),
+                then mcp, agents, ...
+  stages/       pure stages: args, code repair, type guidance, repeat guard, budget, the store's
+                limits and commit
   compaction/   the deterministic compactor, pure
 test/           mirrors src/
 ```
@@ -80,9 +99,10 @@ test/           mirrors src/
 ## Rules
 
 1. **One definition per action.** An action is defined once in `providers/`, and `TOOLS` in
-   `providers/tools/index.ts` is the one list. `registry/generate.ts` prints the guest types the
-   checker serves, the tool lines of `DESCRIPTION` and the runtime argument check from it, so a
-   changed field changes one provider file.
+   `providers/tools/index.ts` is the one list. A guest global that is not a tool (`store`, `load`)
+   is a `defineBuiltin` in `providers/store/`, listed in its `STORE`. `registry/generate.ts` prints
+   the guest types the checker serves, the lines of `DESCRIPTION` and the runtime argument check
+   from them, so a changed field changes one provider file.
 2. **Imports point one way:** `server -> kernel -> registry <- providers`, and
    `mod -> compaction, stages`. Only `server/` knows MCP; only `mod/` knows the mods API.
 3. **What the mod imports is pure.** No bare imports and no `node:` modules, because the hooks
@@ -95,11 +115,7 @@ test/           mirrors src/
 
 ## Open probes
 
-- How the mod reaches the server privately: `$.mcp.call` on our own server, `$.process.run`, or
-  a local socket. A server tool the mod calls must not show up as a tool the model can call.
-- Whether `$.tool.call` from the mod reaches built-in tools (WebSearch, Agent) for programs.
-- Whether `mcp.<server>.<tool>()` in programs can go through the mod's `$.mcp.call`, which uses
-  Claude Code's own connections and credentials, claude.ai connectors included. If it can, it
-  replaces a second MCP client and config reader in the server.
-- Whether a mod can take built-in tools off the model's list, which full code mode needs.
-- `session.append` door `compaction` did not fire for core's own compaction in the probe.
+- Whether `$.tool.call` runs WebSearch and Agent for a program (Read works).
+- Whether `session.append` door `compaction` fires for core's own compaction (it did not in the
+  first probe).
+

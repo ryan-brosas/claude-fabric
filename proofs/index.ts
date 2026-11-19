@@ -5,10 +5,12 @@
 // `<out>/<module>.js`.
 import { contextKernels, CONTEXT_BUGS } from "./context.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
+import { GATE_BUGS, gateKernels } from "./gate.ts";
 import type { Kernel } from "./kernel.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
+import { STORE_BUGS, storeLimitKernels } from "./store-limits.ts";
 
 export interface KernelModule {
   /** Generated module stem: `<out>/<stem>.js`. */
@@ -24,6 +26,7 @@ export interface KernelModule {
 
 const compaction = "src/compaction/verified/generated";
 const stages = "src/stages/verified/generated";
+const kernel = "src/kernel/verified/generated";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const modules: readonly KernelModule[] = [
@@ -32,4 +35,6 @@ export const modules: readonly KernelModule[] = [
   { stem: "cut", source: "proofs/cut.ts", out: compaction, kernels: cutKernels as any, bugs: CUT_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
+  { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
+  { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
 ];

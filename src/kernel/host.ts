@@ -1,6 +1,9 @@
 import { check } from "./check.ts";
 import { execute } from "./execute.ts";
 import { MAX_RESULT_CHARS, bound, format } from "./result.ts";
+import type { Done } from "./protocol.ts";
+import { commitPlan, type Store } from "./store.ts";
+import { STORE } from "../providers/store/index.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { guestTypes, inputFields } from "../registry/generate.ts";
 import { repairCode } from "../stages/code-repair.ts";
@@ -9,7 +12,7 @@ import { BLOCK, type RepeatGuard, blockText, warnText } from "../stages/repeat-g
 import { typeErrorGuidance, type GuidanceTool } from "../stages/type-guidance.ts";
 
 // The declarations are constant, so they are printed once and reused by every check.
-const DECLARATIONS = guestTypes(TOOLS);
+const DECLARATIONS = guestTypes(TOOLS, STORE);
 // What a failed check's hints may name: the one tool list, with each tool's real fields.
 const GUIDANCE_TOOLS: GuidanceTool[] = TOOLS.map((action) => ({ name: action.name, fields: inputFields(action) }));
 
@@ -20,6 +23,8 @@ export interface RunOptions {
   timeoutMs?: number;
   /** The session's guard: one per server process. Without it, repeats are not counted. */
   guard?: RepeatGuard;
+  /** The session's store: one per server process. Without it, a run's writes are dropped. */
+  store?: Store;
 }
 
 export interface RunResult { ok: boolean; text: string; ms: { check: number; run: number }; calls: number }
@@ -56,10 +61,31 @@ export async function run(code: string, cwd: string, options: RunOptions = {}): 
     return { ok: false, text: blockText(repeat.state.count), ms: { check: checkMs, run: 0 }, calls: 0 };
   }
   const t1 = performance.now();
-  const { done, calls } = await execute(program, cwd, options);
+  const { done: ran, calls } = await execute(program, cwd, options);
   // The warning goes last, before the cap: the middle cut keeps the tail, so it survives,
   // and every result stays within MAX_RESULT_CHARS.
-  const formatted = format(done);
-  const text = await budget(repeat?.warn ? formatted + "\n" + warnText(repeat.state.count, BLOCK) : formatted);
-  return { ok: !done.error, text, ms: { check: checkMs, run: performance.now() - t1 }, calls };
+  const warning = repeat?.warn ? "\n" + warnText(repeat.state.count, BLOCK) : "";
+  const render = (done: Done): Promise<string> => budget(format(done) + warning);
+  const ms = { check: checkMs, run: performance.now() - t1 };
+  // Format first: a result the formatter cannot render (a BigInt, say) must commit nothing.
+  let text: string;
+  try {
+    text = await render(ran);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, text: await budget("Error: the result could not be formatted: " + message), ms, calls };
+  }
+  // Commit last, and only the keys this run wrote, re-checked against the store as it is now: a
+  // commit the current store refuses fails this call and writes nothing.
+  const delta = commitPlan(ran, options.store);
+  if (delta !== undefined) {
+    try {
+      options.store!.commit(delta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed: Done = { ...ran, ok: false, value: undefined, error: message, writes: { set: {}, remove: [] } };
+      return { ok: false, text: await render(failed), ms, calls };
+    }
+  }
+  return { ok: ran.ok, text, ms, calls };
 }

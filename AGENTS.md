@@ -36,8 +36,9 @@ Where it stands:
    (`proofs/repeat-guard.ts`) and the output budget's length arithmetic
    (`proofs/output-budget.ts`) are gdp-wired kernels too, compiled into
    `src/stages/verified/generated/`; those two stages decide through the compiled machines.
-5. **Next, the rest of the map:** `store`/`load`, `__bun`, `mcp.<server>.<tool>()`, prompt
-   guidance, tool middleware, agents and mesh, in the order architecture.md's probes allow.
+5. **Done:** `store`/`load`, the session store a program keeps between calls. **Next, the rest
+   of the map:** `__bun`, `mcp.<server>.<tool>()`, prompt guidance, tool middleware, agents and
+   mesh, in the order architecture.md's probes allow.
 6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
    with at most 10% more tokens.
@@ -134,9 +135,17 @@ module in `src/stages/` with its own unit tests in `test/stages/`.
    before anything runs.
 6. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
    comes back to the host as a message; the host turns the raw arguments into that action's input
-   and runs it. The Worker is terminated on a timeout or when the call ends. The messages are
-   typed in `src/kernel/protocol.ts`.
-7. **Result** (`src/kernel/result.ts` with `src/stages/output-budget.ts`): print lines, then the
+   and runs it. Every message passes the run's gate first (`src/kernel/verified/gate.ts`, rule and
+   laws in `proofs/gate.ts`): it must carry the run's token, no tool call is acted on after the
+   done, and at most one done is admitted. The Worker is terminated on a timeout or when the call
+   ends. The messages are typed in `src/kernel/protocol.ts`.
+7. **Store** (`src/kernel/store.ts` with `src/stages/store.ts`): one store per server process, in
+   memory. A run gets a JSON snapshot with its run message; `store()` stages a write and `load()`
+   returns a copy, with no tool call crossing the bridge. The host commits the staged writes only
+   when the program succeeded, and a value over 262144 JSON chars or a store over 1048576 fails
+   the program naming the key and the limit. Both rules are the compiled machine in
+   `src/stages/verified/` (`proofs/store-limits.ts`).
+8. **Result** (`src/kernel/result.ts` with `src/stages/output-budget.ts`): print lines, then the
    returned value. Over the cap, the middle is cut out and the whole text goes to a new private
    file whose path ends the result; if that file cannot be written, the kernel's own cut applies.
 
