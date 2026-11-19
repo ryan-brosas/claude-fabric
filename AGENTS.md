@@ -41,8 +41,9 @@ Where it stands:
    `$.mcp.call`, over a Unix socket bridge, and the server keeps no MCP client; and `WebSearch`,
    the one built-in a program may call through the mod's `$.tool.call`, over the same job queue,
    because that call skips the person's permission prompts and deny rules. `Agent` and every
-   other built-in stay top-level only. **Next, the rest of the map:** `__bun`, prompt guidance,
-   tool middleware, agents and mesh, in the order architecture.md's probes allow.
+   other built-in stay top-level only. Prompt guidance is done too: one `fabric:guidance`
+   system prompt section appended by `prompt.compose` when the pool holds `fabric_exec`. **Next:**
+   `__bun`, tool middleware, agents and mesh, in the order architecture.md's probes allow.
 6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
    with at most 10% more tokens.

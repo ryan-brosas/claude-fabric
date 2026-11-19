@@ -92,7 +92,7 @@ list is the user's decision ([decisions.md](decisions.md)).
 | `fabric_exec` | `registerTool` | MCP server tool | built |
 | Compaction (`src/compaction`) | `session_before_compact` | `session.compact` returns `{ messages }` | built |
 | Compaction thresholds, headroom, `compact.request` | `agent_settled`, `ctx.compact()` | `session.measure`, `$.session.usage()`, `$.session.compact()` between turns, `precompute` trigger | documented |
-| Prompt guidance (`core/prompt-guidance`, `core-override-guidance`) | `before_agent_start` | `prompt.section`, `prompt.compose` | fires (proven); rewrite documented |
+| Prompt guidance (`core/prompt-guidance`, `core-override-guidance`) | `before_agent_start` | `prompt.compose`: one `fabric:guidance` section appended last, only when the pool holds `fabric_exec` | hook built and fake-event tested; live proof pending |
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
 | Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | hiding built-ins proven (`tool.list`); the hidden tool is gone for the mod too |
 | Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, over the socket bridge | WebSearch built behind the allowlist, over the jobs an mcp call uses; Read and WebSearch proven; Agent stays out |
@@ -111,6 +111,13 @@ list is the user's decision ([decisions.md](decisions.md)).
 | Cache warming leases | `cache_warming_decision` | none | gap |
 | Session tree, fork, switch | `session_tree` and others | `session.end` reasons only | gap; mostly Pi-specific |
 
+Prompt guidance rides `prompt.compose`, not `prompt.section`: compose carries the
+session's tool pool (`e.tools`), so the section is added only when the pool holds
+`mcp__plugin_fabric_fabric__fabric_exec`, and its result is the whole ordered list, so a
+recompose is deduped by section id. `prompt.section` rewrites one named section and carries no
+pool. Upstream's second guidance module, `core-override-guidance`, needs captured core overrides,
+which Claude Code has no surface for.
+
 ## Layout
 
 ```text
@@ -120,6 +127,8 @@ src/
   mod/          binding 1, in-process: compaction, the mcp catalog and socket loop, prompt
                 sections, tool middleware, commands, UI; index.ts holds every $ call and the
                 socket loop, bridge.ts the pure helpers the hook bodies call
+  guidance/     the one system prompt section's text, pure: tool names from
+                providers/tools/names.ts, appended by the mod at prompt.compose
   server/       binding 2, MCP: fabric_exec and the mod's heavy calls
   kernel/       check -> stages -> execute -> bound; mcp.ts dispatches a program's mcp call,
                 builtin.ts a program's built-in tool call; bridge/ is the server's half of the
@@ -146,8 +155,11 @@ test/           mirrors src/
    the guest types the checker serves, the lines of `DESCRIPTION` and the runtime argument check
    from them, so a changed field changes one provider file.
 2. **Imports point one way:** `server -> kernel -> registry <- providers`, and
-   `mod -> compaction, stages`. Both halves of the socket also read `bridge/`, which imports
-   nothing. Only `server/` knows MCP; only `mod/` knows the mods API.
+   `mod -> compaction, stages, guidance`. Both halves of the socket also read `bridge/`, which
+   imports nothing. Only `server/` knows MCP; only `mod/` knows the mods API.
+   `providers/tools/names.ts` holds the program tools' names alone: `TOOLS` and every provider
+   import zod, which the hooks worker refuses, so guidance reaches the names without it, and
+   `test/guidance/guidance.test.ts` fails if the two lists drift.
 3. **What the mod imports is pure.** No bare imports and no `node:` modules, because the hooks
    worker refuses them. A test reads the import graph from `src/mod/` and fails on any.
 4. **A `$` call sits in its hook body.** The hooks compiler refuses a `$` bound, passed, spread,

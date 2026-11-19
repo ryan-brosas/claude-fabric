@@ -20,6 +20,7 @@
   },
   "include": [
     "src/mod/**/*.ts",
-    "src/compaction/**/*.ts"
+    "src/compaction/**/*.ts",
+    "src/guidance/**/*.ts"
   ]
 }

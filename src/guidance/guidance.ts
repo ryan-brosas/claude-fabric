@@ -1,0 +1,34 @@
+// Adapted from pi-fabric (MIT, Tom X Nguyen) src/core/execution-guidelines.ts and
+// src/core/system-guidance.ts at d331f629; the rules kept here are the ones Claude Code has a
+// surface for, in Claude Code's own tool names, and the tool names come from this plugin's list.
+import { TOOL_NAMES } from "../providers/tools/names.ts";
+
+/** The wire name the model's pool uses for this plugin's tool. */
+export const FABRIC_EXEC_TOOL = "mcp__plugin_fabric_fabric__fabric_exec";
+
+/** The section's stable id: a plugin's own sections are "<plugin>:<name>". */
+export const GUIDANCE_SECTION = "fabric:guidance";
+
+/** What the section costs on every turn; a test refuses text past it. */
+export const GUIDANCE_MAX_CHARS = 900;
+
+const list = (names: readonly string[]): string =>
+  names.length <= 1 ? names.join("") : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+
+/**
+ * The one system prompt section this plugin adds: when to reach for fabric_exec, and the rules a
+ * program keeps. It names only what a program may call, and only in Claude Code's vocabulary.
+ */
+export const guidanceText = (names: readonly string[] = TOOL_NAMES): string =>
+  [
+    "For file work, searches, shell commands and any multi-step task, send one `fabric_exec` program instead of many separate tool calls.",
+    "The program is an async function body: top-level `await` and `return` work.",
+    "Call " + list(names) + " inside it with Claude Code's field names, and run independent calls together with `Promise.all`.",
+    "Only the returned value and `print()` lines reach you: file contents and command output a program only passes through never enter your context, so return just what you need.",
+    "Every program is type-checked first; a type error comes back with line numbers and nothing runs.",
+    "`store(key, value)` and `load(key)` keep values between calls.",
+    "Other MCP servers are `mcp.<server>.<tool>(args)`.",
+  ].join(" ");
+
+/** The section's text, built from the tool names the checker and the description already use. */
+export const GUIDANCE_TEXT = guidanceText();

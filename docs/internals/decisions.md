@@ -25,6 +25,22 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   newest bytes with the loss stated on its first line.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
+- **One system prompt section, added by `prompt.compose`.** It teaches when to reach for
+  `fabric_exec` and what a program keeps: one program instead of many tool calls, the program tools
+  by their Claude Code names, `Promise.all` for independent calls, and only the result or
+  `print()` lines entering context. `prompt.compose` is the hook because its event carries the
+  session's tool pool and its result is the whole ordered list: the section is added last as
+  `session` only when the pool holds `mcp__plugin_fabric_fabric__fabric_exec`, and a recompose
+  that already holds the id is left alone. `prompt.section` rewrites one named section and carries
+  no pool, so it cannot gate on the tool. The text is capped at 900 chars (745 now) because every
+  turn pays for it and step 6 allows at most 10% more tokens than native code mode. Its tool names
+  are generated from `providers/tools/names.ts`, a names-only list beside `TOOLS`: the hooks
+  worker refuses the zod import every provider pulls in, so the mod cannot read `TOOLS` itself, and
+  a test fails if the two lists drift. Dropped from upstream, because Claude Code has no surface for
+  them or they do not earn their tokens: payloads and display guidance, tool discovery, the
+  extension roster, schema modes, background tasks, Python, model guidance, and the generic working
+  discipline (hypothesis, persistence). `core-override-guidance` is absent entirely: it needs
+  captured core overrides.
 - **`fabric_exec` stays an MCP tool.** Claude passes `CLAUDE_PROJECT_DIR` and
   `CLAUDE_CODE_SESSION_ID` to the server. A mod can also register tools, but the type checker and
   Worker can't run inside the hooks worker.

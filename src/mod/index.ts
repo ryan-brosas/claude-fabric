@@ -1,6 +1,7 @@
 import type { Register } from "claude-code";
 import { compact } from "../compaction/compact.ts";
 import { bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
+import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
 import {
   answerOf,
   emptyState,
@@ -116,6 +117,18 @@ export const register: Register = (on) => {
       }
     })();
     return next(e);
+  }).catch(($, e, next) => next(e));
+
+  // One system prompt section, added last: when to reach for fabric_exec and what a program
+  // keeps. Only a session whose pool offers the tool gets it, and a recompose that already holds
+  // the section is left alone, so the text never lands twice.
+  on("prompt.compose", async ($, e, next) => {
+    const composed = await next(e);
+    if (!e.tools.includes(FABRIC_EXEC_TOOL)) return composed;
+    if (composed.sections.some((section) => section.id === GUIDANCE_SECTION)) return composed;
+    return {
+      sections: [...composed.sections, { id: GUIDANCE_SECTION, text: GUIDANCE_TEXT, scope: "session" as const }],
+    };
   }).catch(($, e, next) => next(e));
 
   // The session's tool pool is the catalog a program's mcp calls are checked against, and the
