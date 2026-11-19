@@ -25,7 +25,7 @@
     "fabricOnly": {
       "type": "boolean",
       "title": "fabric_exec only",
-      "description": "Keep Bash, Edit, Write, Grep and Glob from the main conversation, so its file and shell work goes through fabric_exec programs. Read and WebSearch stay, and subagents keep every tool.",
+      "description": "Keep Bash, Edit, Write, Grep and Glob from the main conversation, so its file and shell work goes through fabric_exec programs, and put the other built-ins behind ToolSearch. Read and Skill stay listed, and subagents keep every tool.",
       "default": false
     }
   }
