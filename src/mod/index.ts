@@ -17,6 +17,7 @@ import {
 } from "./bridge.ts";
 import { compactDeferred } from "./deferred.ts";
 import { fabricOnly, offered } from "./fabric-only.ts";
+import { OfferMemo } from "./verified/offer-memo.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -36,6 +37,10 @@ export const register: Register = (on, options) => {
   let ownSession = "";
   // Whether the last tool list held fabric_exec: only then is the deferred list shortened.
   let fabricInPool = false;
+  // fabricOnly's answer per loop and tool, fixed at the first ask (the one before the loop's first
+  // request): a later ask is the model calling the tool, and it gets the answer the list showed.
+  // proofs/offer-memo.ts holds the rule; a session's end drops every answer.
+  const offers = new OfferMemo();
 
   // Compaction is Fabric's deterministic summary: no model call, so there is nothing to
   // precompute, and a compactor that throws falls back to core's own.
@@ -183,9 +188,19 @@ export const register: Register = (on, options) => {
 
   // With fabricOnly on, the main conversation's model is not offered the tools a program runs
   // (src/mod/fabric-only.ts). Agents keep them, and the pool is untouched, so $.tool.call too.
+  // A loop whose first ask came before fabric_exec joined keeps its tools for its life: hiding
+  // them later would refuse calls to a tool the model's list still shows.
   on("tool.offer", async ($, e, next) => {
     const answer = await next(e);
     if (!answer.isOffered || !programsOnly) return answer;
-    return { isOffered: offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool }) };
+    const key = (e.agentId ?? "") + "\n" + e.tool;
+    return { isOffered: offers.ask(key, () => offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool })) };
+  }).catch(($, e, next) => next(e));
+
+  // /clear and a resume end a session and go on in the same process under a new id: the next
+  // conversation's loops are asked afresh.
+  on("session.end", ($, e, next) => {
+    offers.clear();
+    return next(e);
   }).catch(($, e, next) => next(e));
 };

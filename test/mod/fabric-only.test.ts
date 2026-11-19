@@ -49,12 +49,38 @@ const offer = async (h: Map<string, Handler>, tool: string, agentId?: string, en
 describe("the tool.offer hook", () => {
   test("with the option on, hides Bash from the main conversation once fabric_exec is in the pool", async () => {
     const h = hooks({ [FABRIC_ONLY_OPTION]: true });
-    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
     const listed = listOf(pool);
     expect(await h.get("tool.list")!({}, {}, () => listed)).toBe(listed);
     expect(await offer(h, "Bash")).toEqual({ isOffered: false });
     expect(await offer(h, "Read")).toEqual({ isOffered: true });
     expect(await offer(h, "Bash", "agent-1")).toEqual({ isOffered: true });
+  });
+
+  test("a call gets the answer the list showed, even after fabric_exec joins or leaves", async () => {
+    const early = hooks({ [FABRIC_ONLY_OPTION]: true });
+    // Asked before any tool list: fabric_exec has not joined, so Bash is offered for the loop's life.
+    expect(await offer(early, "Bash")).toEqual({ isOffered: true });
+    await early.get("tool.list")!({}, {}, () => listOf(pool));
+    // The model calls Bash later: the call runs, as its list showed.
+    expect(await offer(early, "Bash")).toEqual({ isOffered: true });
+    // An agent's loop keeps Bash whenever it first asks.
+    expect(await offer(early, "Bash", "agent-1")).toEqual({ isOffered: true });
+    // A main loop that first asks with fabric_exec in the pool is not offered Edit, and its calls stay
+    // refused even if fabric_exec leaves.
+    const late = hooks({ [FABRIC_ONLY_OPTION]: true });
+    await late.get("tool.list")!({}, {}, () => listOf(pool));
+    expect(await offer(late, "Edit")).toEqual({ isOffered: false });
+    await late.get("tool.list")!({}, {}, () => listOf(pool.slice(1)));
+    expect(await offer(late, "Edit")).toEqual({ isOffered: false });
+  });
+
+  test("a session's end drops every answer, so the next conversation is asked afresh", async () => {
+    const h = hooks({ [FABRIC_ONLY_OPTION]: true });
+    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
+    await h.get("tool.list")!({}, {}, () => listOf(pool));
+    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
+    await h.get("session.end")!({}, { reason: "clear" }, () => undefined);
+    expect(await offer(h, "Bash")).toEqual({ isOffered: false });
   });
 
   test("never offers a tool the engine or another hook withheld, and leaves everything alone with the option off", async () => {

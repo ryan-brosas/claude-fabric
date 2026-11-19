@@ -10,6 +10,7 @@ import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
 import type { Kernel } from "./kernel.ts";
 import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
+import { OFFER_MEMO_BUGS, offerMemoKernels } from "./offer-memo.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
@@ -46,4 +47,5 @@ export const modules: readonly KernelModule[] = [
   { stem: "builtin-access", source: "proofs/builtin-access.ts", out: kernel, kernels: builtinAccessKernels as any, bugs: BUILTIN_ACCESS_BUGS },
   { stem: "bridge-binding", source: "proofs/bridge-binding.ts", out: kernel, kernels: bridgeBindingKernels as any, bugs: BRIDGE_BINDING_BUGS },
   { stem: "tool-visibility", source: "proofs/tool-visibility.ts", out: mod, kernels: toolVisibilityKernels as any, bugs: TOOL_VISIBILITY_BUGS },
+  { stem: "offer-memo", source: "proofs/offer-memo.ts", out: mod, kernels: offerMemoKernels as any, bugs: OFFER_MEMO_BUGS },
 ];
