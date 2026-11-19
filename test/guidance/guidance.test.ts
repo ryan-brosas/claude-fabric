@@ -30,6 +30,7 @@ test("the section carries the substance a program needs", () => {
     "one `fabric_exec` program",
     "Reach for `fabric_exec` first",
     "even a lone command",
+    "only for what a program cannot do",
     "async function body",
     "with Claude Code's field names",
     "Promise.all",
