@@ -26,9 +26,9 @@ Where it stands:
 
 1. **Done:** the kernel (check, fresh Bun Worker per call, bounded result), the MCP server and
    plugin, and Claude Code tool names inside programs.
-2. **Next:** move to the `src/` layout in architecture.md, with the action registry and an
-   empty mod that loads.
-3. **Then compaction:** port the deterministic compactor into `src/compaction/` and answer
+2. **Done:** the `src/` layout in architecture.md, the action registry that generates guest
+   types, tool lines and argument checks, and an empty mod that loads.
+3. **Next, compaction:** port the deterministic compactor into `src/compaction/` and answer
    `session.compact` with it.
 4. **Then** the self-correcting stages (argument repair, code repair, output budget, type-error
    guidance, repeat guard), copied with MIT credit.
@@ -52,16 +52,16 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
 
 1. **Claude Code's vocabulary, not Pi's.** Program tools are `Read`, `Write`, `Edit`, `Grep`,
    `Glob` and `Bash`, with Claude Code's field names. Model-facing text never says `pi.`.
-   Enforced by `test/server.test.ts` ("lists exactly one tool").
+   Enforced by `test/server/server.test.ts` ("lists exactly one tool").
 2. **Nothing runs until it type-checks.** A type error returns line numbers, and no tool call
    happens. Enforced by the "type error is reported and nothing runs" test and the spike.
 3. **One bounded result.** Only the return value and `print()` lines reach the model, and
-   they are cut at a fixed size (`kernel/result.ts`).
+   they are cut at a fixed size (`src/kernel/result.ts`).
 
 ## The ways to hurt yourself
 
 1. **Writing to the MCP server's stdout.** stdout is the MCP stream. A `console.log` in the
-   server, or install output, corrupts it. `server/start.sh` sends `bun install` to stderr for
+   server, or install output, corrupts it. `src/server/start.sh` sends `bun install` to stderr for
    this reason.
 2. **Running programs against this repo in tests.** Programs run in `CLAUDE_PROJECT_DIR`. The
    tests point that at a temporary dir. Keep it that way, so write tests never touch the checkout.
@@ -75,15 +75,15 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
 
 ## Hit every surface
 
-`kernel/protocol.ts` holds the one list of program tools, `TOOL_NAMES`. The worker reads it,
-and `kernel/tools.ts` must implement every name or the typecheck fails. Two places are still
-written by hand, and a test fails if they drift from that list:
+Each program tool is defined once, in `src/providers/tools/`. `src/providers/tools/index.ts`
+holds the one list, `TOOLS`. Everything else is printed from that list by
+`src/registry/generate.ts`: the types the checker gives programs (`guestTypes`), the tool lines
+of the model-facing `DESCRIPTION` (`toolLines`), and the runtime argument check (`parseArgs`).
+The host sends the tool names to the Worker, so the Worker imports no providers.
 
-- **`kernel/guest.d.ts`**: the types the checker gives programs (`test/kernel.test.ts`).
-- **`server/index.ts`**: `DESCRIPTION`, which is what the model reads (`test/server.test.ts`).
-
-A changed field is not caught by any check: change it in `kernel/tools.ts`, `guest.d.ts` and
-`DESCRIPTION` by hand, and add one test through the real MCP server.
+A changed field changes one provider file. `test/registry/generate.test.ts` prints the types
+and fails if they drift from `TOOLS`, and `test/server/server.test.ts` calls the tool through
+the real MCP server with a bad argument, so a field the model must fill fails there too.
 
 ## Check
 
@@ -97,18 +97,25 @@ Green doesn't prove the plugin loads in Claude Code. For that, run
 `claude --plugin-dir .` and call the tool, which shows up as
 `mcp__plugin_fabric_fabric__fabric_exec`.
 
+The mod needs Claude Code for its checks, so CI does not run them. `claude plugin validate .`
+reads the manifest and the mod as Claude Code will. `bun run typecheck:mod` types `src/mod/`
+against `.claude-plugin/types/`, which Claude Code writes when an interactive session loads the
+plugin. `claude --debug-file <f> -p --plugin-dir . ...` proves the load: the log says
+`hooks module fabric@inline loaded`. Don't run `claude plugin test .` here: it loads every
+`*.test.ts` in the folder as a mod test, upstream's and the Bun tests included.
+
 ## How it works
 
-`server/index.ts` gets a call and hands it to `run()` in `kernel/host.ts`, which is a pipeline
-of separate stages:
+`src/server/index.ts` gets a call and hands it to `run()` in `src/kernel/host.ts`, which is a
+pipeline of separate stages:
 
-1. **Check** (`kernel/check.ts`): wrap the code as an async function body and type-check it
-   against `guest.d.ts` with a warm TypeScript program.
-2. **Execute** (`kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
-   comes back to the host as a message and runs from `kernel/tools.ts`. The Worker is
-   terminated on a timeout or when the call ends. The messages are typed in
-   `kernel/protocol.ts`.
-3. **Format and bound** (`kernel/result.ts`): print lines, then the returned value, cut at a
+1. **Check** (`src/kernel/check.ts`): wrap the code as an async function body and type-check it
+   against the declarations from `src/registry/generate.ts` with a warm TypeScript program.
+2. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
+   comes back to the host as a message; the host turns the raw arguments into that action's input
+   and runs it. The Worker is terminated on a timeout or when the call ends. The messages are
+   typed in `src/kernel/protocol.ts`.
+3. **Format and bound** (`src/kernel/result.ts`): print lines, then the returned value, cut at a
    fixed size. These are pure functions with unit tests.
 
 pi-fabric's self-correcting modules (argument repair, code repair, type-error guidance, output

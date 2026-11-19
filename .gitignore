@@ -1,3 +1,4 @@
 upstream/
 notes/
 node_modules/
+.claude-plugin/types/

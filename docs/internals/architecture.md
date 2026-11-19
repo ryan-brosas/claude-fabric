@@ -69,7 +69,8 @@ src/
   mod/          binding 1, in-process: compaction, prompt sections, tool middleware, commands, UI
   server/       binding 2, MCP: fabric_exec and the mod's heavy calls
   kernel/       check -> stages -> execute -> bound; bridge; executors/
-  registry/     defineAction({ ns, name, input, doc, run }); generates guest types and DESCRIPTION
+  registry/     defineAction({ name, doc, input, output, positional, run }); generates guest types,
+                the tool lines of DESCRIPTION and the argument check
   providers/    one folder per namespace: tools/ (Read..Bash), then store, mcp, agents, ...
   stages/       pure self-correcting stages: args, code repair, type guidance, repeat guard, budget
   compaction/   the deterministic compactor, pure
@@ -78,8 +79,10 @@ test/           mirrors src/
 
 ## Rules
 
-1. **One definition per action.** An action is defined once in `providers/`. Guest types, the
-   model-facing description and runtime argument checks are generated from it.
+1. **One definition per action.** An action is defined once in `providers/`, and `TOOLS` in
+   `providers/tools/index.ts` is the one list. `registry/generate.ts` prints the guest types the
+   checker serves, the tool lines of `DESCRIPTION` and the runtime argument check from it, so a
+   changed field changes one provider file.
 2. **Imports point one way:** `server -> kernel -> registry <- providers`, and
    `mod -> compaction, stages`. Only `server/` knows MCP; only `mod/` knows the mods API.
 3. **What the mod imports is pure.** No bare imports and no `node:` modules, because the hooks

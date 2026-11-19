@@ -4,9 +4,9 @@ const cwd = process.argv[2] ?? process.cwd();
 const programs: Record<string, string> = {
   read: `const head = await Read({ file_path: "package.json", limit: 3 }); return head;`,
   parallel: `const [files, status, kernel] = await Promise.all([
-  Grep({ pattern: "export function", path: "kernel" }),
+  Grep({ pattern: "export function", path: "src/kernel" }),
   Bash("git status --short"),
-  Glob("kernel/*.ts"),
+  Glob("src/kernel/*.ts"),
 ]);
 print("grep files:", files.split("\\n").filter(Boolean).length);
 return { status: status.output.trim(), kernelFiles: kernel.length };`,

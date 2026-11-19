@@ -17,7 +17,7 @@
     "fabric": {
       "command": "bash",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/server/start.sh"
+        "${CLAUDE_PLUGIN_ROOT}/src/server/start.sh"
       ]
     }
   }
