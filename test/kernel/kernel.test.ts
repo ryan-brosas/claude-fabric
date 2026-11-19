@@ -28,6 +28,14 @@ const done = (parts: Partial<Done> = {}): Done => ({
   kind: "done", token: "test", ok: true, logs: [], writes: { set: {}, remove: [] }, ...parts,
 });
 
+test("format ends at the last print() line when the program returned nothing", () => {
+  expect(format(done({ logs: ["one", "two"] }))).toBe("one\ntwo");
+  // With no lines either, the result still says nothing came back.
+  expect(format(done())).toBe("undefined");
+  // A value the program did return is kept, even a null.
+  expect(format(done({ logs: ["one"], value: null }))).toBe("one\nnull");
+});
+
 test("format returns a string value as is", () => {
   expect(format(done({ value: "hi" }))).toBe("hi");
 });
