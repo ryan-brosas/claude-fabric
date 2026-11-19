@@ -5,8 +5,9 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "spike": "bun kernel/spike.ts",
+    "spike": "bun src/kernel/spike.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:mod": "tsc -p tsconfig.mod.json",
     "test": "bun test ./test"
   },
   "dependencies": {

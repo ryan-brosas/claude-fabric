@@ -38,12 +38,15 @@ Needs Bun 1.4+ and ripgrep.
 
 ## Layout
 
-- `kernel/check.ts`: wraps a program and type-checks it with a warm TypeScript program.
-- `kernel/worker.ts`: one fresh Bun Worker per call; tool calls cross to the host.
-- `kernel/host.ts`: check, run, time out, bound the result.
-- `kernel/tools.ts`: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash` inside programs.
-- `server/index.ts`: MCP server with the one `fabric_exec` tool.
-- `server/start.sh`: plugin entry; installs dependencies on first start.
+- `src/kernel/check.ts`: wraps a program and type-checks it with a warm TypeScript program.
+- `src/kernel/worker.ts`: one fresh Bun Worker per call; tool calls cross to the host.
+- `src/kernel/host.ts`: check, run, time out, bound the result.
+- `src/registry/`: `defineAction`, and the types, tool lines and argument check generated from it.
+- `src/providers/tools/`: one file per program tool: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`.
+- `src/server/index.ts`: MCP server with the one `fabric_exec` tool.
+- `src/server/start.sh`: plugin entry; installs dependencies on first start.
+- `src/mod/index.ts`: the in-process half of the plugin, empty until compaction lands.
+- `hooks/hooks.json`: points Claude Code at the mod.
 
 ## Credit
 

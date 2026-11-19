@@ -27,12 +27,12 @@ Claude Code's own code-execution tool (the REPL), switched by
 _Avoid_: REPL mode, code mode (alone)
 
 **Kernel**:
-`kernel/`: check, run and bound a program. It has no MCP code.
+`src/kernel/`: check, run and bound a program. It has no MCP code.
 _Avoid_: runtime, engine
 
 **Check**:
-The type-check of a program against `guest.d.ts`, run before every call with a warm
-TypeScript program. A failed check means nothing ran.
+The type-check of a program against the declarations the program tools generate, run before
+every call with a warm TypeScript program. A failed check means nothing ran.
 _Avoid_: validate, lint
 
 **Host**:

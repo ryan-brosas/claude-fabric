@@ -1,16 +1,12 @@
 import { expect, test } from "bun:test";
-import { TOOL_NAMES } from "../kernel/protocol.ts";
-import { check } from "../kernel/check.ts";
-import { run } from "../kernel/host.ts";
-import { MAX_RESULT_CHARS, bound, format } from "../kernel/result.ts";
+import { check } from "../../src/kernel/check.ts";
+import { run } from "../../src/kernel/host.ts";
+import { MAX_RESULT_CHARS, bound, format } from "../../src/kernel/result.ts";
+import { TOOLS } from "../../src/providers/tools/index.ts";
+import { guestTypes } from "../../src/registry/generate.ts";
 
-const guest = new URL("../kernel/guest.d.ts", import.meta.url).pathname;
-
-test("guest.d.ts declares exactly the program tools, and print", async () => {
-  const text = await Bun.file(guest).text();
-  const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]));
-  expect([...declared].sort()).toEqual([...TOOL_NAMES, "print"].sort());
-});
+// The declarations the checker serves come from the actions (test/registry/generate.test.ts).
+const declarations = guestTypes(TOOLS);
 
 test("format returns a string value as is", () => {
   expect(format({ kind: "done", value: "hi", logs: [] })).toBe("hi");
@@ -55,8 +51,8 @@ test("a worker crash outside the protocol reports the real error at once, bounde
 });
 
 test("a program may end without return, but every return is still checked", () => {
-  expect(check('print("x");')).toEqual({ ok: true, errors: [] });
-  const thenable = check('const fallback: unknown = 0; return π.mode === "bad" ? { then() {} } : fallback;');
+  expect(check('print("x");', declarations)).toEqual({ ok: true, errors: [] });
+  const thenable = check('const fallback: unknown = 0; return π.mode === "bad" ? { then() {} } : fallback;', declarations);
   expect(thenable.ok).toBe(false);
   expect(thenable.errors[0]).toStartWith("line 1:");
 });

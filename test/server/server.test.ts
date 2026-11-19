@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { TOOL_NAMES } from "../kernel/protocol.ts";
+import { TOOLS } from "../../src/providers/tools/index.ts";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = new URL("../..", import.meta.url).pathname;
+const TOOL_NAMES = TOOLS.map((action) => action.name);
 let client: Client;
 let work: string;
 
@@ -19,7 +20,7 @@ beforeAll(async () => {
   client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(new StdioClientTransport({
     command: "bun",
-    args: [root + "server/index.ts"],
+    args: [root + "src/server/index.ts"],
     env: { ...process.env, CLAUDE_PROJECT_DIR: work } as Record<string, string>,
   }));
 });
@@ -86,6 +87,15 @@ test("payloads arrive as π and a missing key names the provided keys", async ()
   const missing = await call({ code: "return π.other;", payloads: { note: "x" } });
   expect(missing.isError).toBe(true);
   expect(missing.text).toContain("Provided keys: note");
+});
+
+test("a bad argument is a catchable error naming the tool and the field", async () => {
+  const bad = await call({ code: "return await Read({ file_path: 3 as any });" });
+  expect(bad.isError).toBe(true);
+  expect(bad.text).toContain("Read");
+  expect(bad.text).toContain("file_path");
+  const caught = await call({ code: "return await Read({} as any).catch((e: Error) => e.message);" });
+  expect(caught).toEqual({ isError: false, text: "Read: file_path is required (string)" });
 });
 
 test("unknown display keys are accepted", async () => {
