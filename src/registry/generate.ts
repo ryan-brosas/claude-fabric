@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { AnyAction } from "./action.ts";
+import type { Builtin } from "./builtin.ts";
 
-// Everything a program tool needs beyond its own definition, printed from that definition:
-// the types the checker gives a program, the tool lines of the model-facing description, and
-// the runtime argument check.
+// Everything a program tool (or a guest global that is not a tool) needs beyond its own
+// definition, printed from that definition: the types the checker gives a program, the lines of the
+// model-facing description, and the runtime argument check.
 
 // The slices of JSON Schema this repo's schemas can produce.
 interface Schema {
@@ -74,7 +75,7 @@ const PRINT = [
 
 const HEADER = "// Globals a fabric_exec program sees. Names and fields follow Claude Code's own tools.";
 
-export function guestTypes(actions: readonly AnyAction[]): string {
+export function guestTypes(actions: readonly AnyAction[], globals: readonly Builtin[] = []): string {
   const blocks: string[] = [];
   for (const action of actions) {
     const input = schemaOf(action.input);
@@ -100,6 +101,7 @@ export function guestTypes(actions: readonly AnyAction[]): string {
     }
     blocks.push(declarations.join("\n"));
   }
+  if (globals.length) blocks.push(globals.map((builtin) => "/** " + builtin.doc + " */\ndeclare " + builtin.signature + ";").join("\n"));
   blocks.push(PRINT);
   return HEADER + "\n\n" + blocks.join("\n\n") + "\n";
 }
@@ -114,6 +116,11 @@ export function toolLines(actions: readonly AnyAction[]): string[] {
     const out = output.properties ? "{" + Object.keys(output.properties).join(", ") + "}" : typeText(output);
     return "- " + action.name + "({" + shown + "}) -> " + out + ". " + action.doc;
   });
+}
+
+/** The model-facing lines for the guest globals that are not tools: one line each, then its doc. */
+export function globalLines(globals: readonly Builtin[]): string[] {
+  return globals.map((builtin) => "- " + builtin.call + ". " + builtin.doc);
 }
 
 // A missing or empty value reads like the message this repo gave before the schema did the check.

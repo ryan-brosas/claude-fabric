@@ -5,27 +5,35 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { run } from "../kernel/host.ts";
 import { MAX_RESULT_CHARS } from "../kernel/result.ts";
+import { Store } from "../kernel/store.ts";
+import { STORE } from "../providers/store/index.ts";
 import { TOOLS } from "../providers/tools/index.ts";
-import { toolLines } from "../registry/generate.ts";
+import { globalLines, toolLines } from "../registry/generate.ts";
 import { prepareArguments } from "../stages/args.ts";
 import { RepeatGuard } from "../stages/repeat-guard.ts";
 
 const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-// One guard per server process, and a server process is one session.
+// One guard and one store per server process, and a server process is one session.
 const guard = new RepeatGuard();
+const store = new Store();
 
-const INTRO = "Run one type-checked TypeScript program that calls tools and returns one result. Use it for file reads, searches, shell commands, and any multi-step or parallel work, instead of many separate tool calls.\n\nThe program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call starts fresh.\n\nTools inside the program (same names and fields as Claude Code's tools; a single string means the main field):";
+const INTRO = "Run one type-checked TypeScript program that calls tools and returns one result. Use it for file reads, searches, shell commands, and any multi-step or parallel work, instead of many separate tool calls.\n\nThe program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call runs in a fresh worker, and the store below is the only state that carries to the next one.\n\nTools inside the program (same names and fields as Claude Code's tools; a single string means the main field):";
+
+// The store globals are not tools: nothing crosses the bridge for them.
+const STORE_INTRO = "\nThe session's store, shared by every fabric_exec call in this session (globals, not tools):";
 
 // The tool lines come from the actions themselves; this prose is about the program as a whole.
 const OUTRO = [
+  "",
   "- print(...values) adds a line to the output.",
   "- π.<key> reads a string from this call's payloads argument. Put long or syntax-heavy text there instead of in code.",
+  "- A program that fails, times out or crashes commits no store() writes.",
   "",
   "Run independent calls together with Promise.all. Search before reading, then read only the range you need. A type error stops the program before it runs and lists line numbers; fix it and call again.",
 ];
 
-export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), ...OUTRO].join("\n");
+export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), STORE_INTRO, ...globalLines(STORE), ...OUTRO].join("\n");
 
 // The shape the model may send. Deliberately loose: a program as an array of lines, payloads as
 // JSON text, a display label as a bare string and null optional fields are all repaired by
@@ -72,7 +80,7 @@ export function createServer(): McpServer {
     async (raw) => {
       const parsed = ENVELOPE.safeParse(prepareArguments(raw));
       if (!parsed.success) return { content: [{ type: "text", text: bounded(envelopeError(parsed.error)) }], isError: true };
-      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard });
+      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store });
       return { content: [{ type: "text", text: bounded(result.text) }], isError: !result.ok };
     },
   );

@@ -158,6 +158,19 @@ test("an envelope error never echoes a user key and stays within the cap", async
   expect(r.text).toBe('fabric_exec: payloads must be an object of strings, like {"name": "text"}, or a JSON object string.');
 });
 
+// The store is the session's, so two calls share it. Nothing crosses the bridge for store or load.
+test("two fabric_exec calls share the session's store", async () => {
+  expect(await call({ code: 'store("kept", { n: 1 }); return "saved";' })).toEqual({ isError: false, text: "saved" });
+  expect(await call({ code: 'return load<{ n: number }>("kept");' })).toEqual({ isError: false, text: '{\n  "n": 1\n}' });
+});
+
+test("a failed program leaves the session's store as it was", async () => {
+  await call({ code: 'store("stable", 1); return "saved";' });
+  const failed = await call({ code: 'store("stable", 2); throw new Error("boom");' });
+  expect(failed.isError).toBe(true);
+  expect(await call({ code: 'return load("stable");' })).toEqual({ isError: false, text: "1" });
+});
+
 test("one guard per server process warns at three identical calls and blocks the sixth", async () => {
   const code = 'return "repeat-guard";';
   const seen: string[] = [];

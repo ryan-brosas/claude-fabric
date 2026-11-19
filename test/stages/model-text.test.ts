@@ -36,7 +36,7 @@ test("no stage tells the model a Pi name", async () => {
     for (const string of strings) if (string.value.includes("pi.")) offenders.push(string);
   }
   // Guard the scan itself: the stages hold plenty of text, so an empty result means nothing.
-  expect(files.length).toBe(5);
+  expect(files.length).toBe(6);
   expect(seen).toBeGreaterThan(60);
   expect(offenders).toEqual([]);
 });

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
+import { STORE } from "../../src/providers/store/index.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 import { defineAction } from "../../src/registry/action.ts";
-import { guestTypes, parseArgs, toolLines } from "../../src/registry/generate.ts";
+import { defineBuiltin } from "../../src/registry/builtin.ts";
+import { globalLines, guestTypes, parseArgs, toolLines } from "../../src/registry/generate.ts";
 
 const Fixture = defineAction({
   name: "Fixture",
@@ -26,10 +28,28 @@ const Pair = defineAction({
   run: async (i) => ({ output: i.content, exitCode: 0 }),
 });
 
-test("guestTypes declares exactly the program tools, and print", () => {
-  const text = guestTypes(TOOLS);
+const Flag = defineBuiltin({
+  name: "flag",
+  signature: "function flag<T = unknown>(key: string): T | undefined",
+  call: "flag(key) -> value | undefined",
+  doc: "Reads one flag.",
+});
+
+test("guestTypes declares exactly the program tools, the store globals, and print", () => {
+  const text = guestTypes(TOOLS, STORE);
   const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]));
-  expect([...declared].sort()).toEqual([...TOOLS.map((action) => action.name), "print"].sort());
+  expect([...declared].sort()).toEqual([...TOOLS.map((action) => action.name), ...STORE.map((builtin) => builtin.name), "print"].sort());
+});
+
+test("guestTypes prints a builtin from its one definition, and nothing without it", () => {
+  expect(guestTypes([Fixture], [Flag])).toContain("/** Reads one flag. */\ndeclare function flag<T = unknown>(key: string): T | undefined;");
+  expect(guestTypes([Fixture])).not.toContain("declare function flag");
+  expect(guestTypes(TOOLS, STORE)).toContain("/** " + STORE[0].doc + " */\ndeclare " + STORE[0].signature + ";");
+});
+
+test("globalLines gives the model one line per builtin", () => {
+  expect(globalLines([Flag])).toEqual(["- flag(key) -> value | undefined. Reads one flag."]);
+  expect(globalLines([])).toEqual([]);
 });
 
 test("guestTypes prints the whole surface of a fixture", () => {

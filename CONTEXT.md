@@ -50,6 +50,12 @@ Named strings sent beside `code`, which a program reads as `π.<key>`. They carr
 syntax-heavy text so it isn't escaped into code.
 _Avoid_: args, inputs
 
+**Store**:
+The JSON values a program keeps between `fabric_exec` calls in one session, read with `load(key)`
+and written with `store(key, value)`. It lives in the server process's memory, and a program's
+writes are staged and committed only when it succeeds.
+_Avoid_: state, cache
+
 **Result**:
 What reaches the model: `print()` lines, then the returned value, cut at a fixed size.
 _Avoid_: output (for Bash, `output` is the command's text)
