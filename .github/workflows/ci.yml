@@ -18,3 +18,4 @@ jobs:
       - run: bun run typecheck
       - run: bun run spike
       - run: bun run test
+      - run: bun run proof:check
