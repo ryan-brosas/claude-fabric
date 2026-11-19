@@ -57,7 +57,7 @@ const OUTRO = [
   "- π.<key> reads a string from this call's payloads argument. Put long or syntax-heavy text there instead of in code.",
   "- A program that fails, times out or crashes commits no store() writes.",
   "",
-  "Run independent calls together with Promise.all. Search before reading, then read only the range you need. A type error stops the program before it runs and lists line numbers; fix it and call again.",
+  "Run independent calls together in one Promise.all. In a large file, find lines with Grep, then Read only that range; don't cat files through Bash. Return only what the next step needs, not raw output. A type error stops the program before it runs and lists line numbers; fix it and call again.",
 ];
 
 export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), MCP_INTRO_LINE, MCP_LINE, STORE_INTRO, ...globalLines(STORE), ...OUTRO].join("\n");
