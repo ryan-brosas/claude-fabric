@@ -44,6 +44,11 @@ describe("compact: the cut", () => {
     expect(compact(messages, { keepRecentTokens: budget })).toEqual({
       core: "fabric: no prompt starts a tail within the budget, so core compacts this conversation",
     });
+    // After an earlier Fabric summary, one long turn is the same case: only the summary is older.
+    const afterSummary = [prompt("[Fabric summary]\nEarlier work."), ...messages];
+    expect(compact(afterSummary, { keepRecentTokens: budget })).toEqual({
+      core: "fabric: no prompt starts a tail within the budget, so core compacts this conversation",
+    });
     // With no prompt at all, the same holds.
     expect(compact(messages.slice(1), { keepRecentTokens: budget })).toEqual({
       core: "fabric: no prompt starts a tail within the budget, so core compacts this conversation",

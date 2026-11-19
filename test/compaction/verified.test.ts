@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { allocateSummaryCarry, foldFailureLedger } from "../../src/compaction/verified/context.ts";
 import { acceptSampleAccounting } from "../../src/compaction/verified/policy.ts";
+import { noCutVerdict } from "../../src/compaction/verified/no-cut.ts";
 
 describe("summary carry allocation", () => {
   test("reserves the framing, then the newest blocks, then the carry, then history", () => {
@@ -71,5 +72,14 @@ describe("sample accounting", () => {
     expect(acceptSampleAccounting(10, 8, 1, 8)).toBe(false);
     expect(acceptSampleAccounting(10, 9, 1, 8)).toBe(false);
     expect(acceptSampleAccounting(-1, 0, 0, 0)).toBe(false);
+  });
+});
+
+describe("the verified no-cut verdict", () => {
+  test("skips a transcript within the budget and sends one over it to core", () => {
+    expect(noCutVerdict(0, 20_000)).toBe("skip");
+    expect(noCutVerdict(20_000, 20_000)).toBe("skip");
+    expect(noCutVerdict(20_001, 20_000)).toBe("core");
+    expect(noCutVerdict(250_000, 20_000)).toBe("core");
   });
 });
