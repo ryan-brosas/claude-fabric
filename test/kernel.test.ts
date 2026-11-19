@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { TOOL_NAMES } from "../kernel/protocol.ts";
+import { execute } from "../kernel/execute.ts";
 import { MAX_RESULT_CHARS, bound, format } from "../kernel/result.ts";
 
 const guest = new URL("../kernel/guest.d.ts", import.meta.url).pathname;
@@ -38,4 +39,11 @@ test("bound leaves text at the cap alone", () => {
 test("bound cuts one char over the cap and says so", () => {
   const text = "x".repeat(MAX_RESULT_CHARS + 1);
   expect(bound(text, MAX_RESULT_CHARS)).toBe("x".repeat(MAX_RESULT_CHARS) + `\n[result cut at ${MAX_RESULT_CHARS} chars]`);
+});
+
+test("a worker crash outside the protocol reports the real error, not a timeout", async () => {
+  const code = 'await new Promise(() => { (globalThis as any).setTimeout(() => { throw new Error("boom outside"); }, 0); });';
+  const started = performance.now();
+  await expect(execute(code, process.cwd(), { timeoutMs: 3_000 })).rejects.toThrow("boom outside");
+  expect(performance.now() - started).toBeLessThan(2_000);
 });
