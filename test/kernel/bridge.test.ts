@@ -72,6 +72,18 @@ describe("the bridge's paths", () => {
     expect(long.socket.length).toBeGreaterThan(SOCKET_PATH_LIMIT);
     expect(bridgePathProblem(long)).toContain("over the Unix socket limit");
   });
+
+  test("fits an installed plugin's data folder with a real session id", () => {
+    // The folder Claude Code gives the plugin when it is installed from the fabric-exec marketplace.
+    const installed = "/home/someone/.claude/plugins/data/fabric-fabric-exec";
+    const paths = bridgePaths(installed, "83cc3a05-e248-4b4d-8fac-a741e780889e");
+    expect(paths.socket).toBe(installed + "/bridge/83cc3a05e2484b4d8fac.sock");
+    expect(bridgePathProblem(paths)).toBeUndefined();
+  });
+
+  test("refuses a session id with nothing to name a file by", () => {
+    expect(bridgePathProblem(bridgePaths("/data", "---"))).toContain("session id");
+  });
 });
 
 describe("the tool-name spelling", () => {

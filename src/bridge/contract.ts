@@ -29,19 +29,29 @@ export interface BridgePaths {
   lock: string;
 }
 
-/** Where one session's socket, secret and lock live under the plugin's data directory. */
+/** How many characters of the session id name its files: 80 bits of a UUID, short enough for the socket limit. */
+const SESSION_NAME_CHARS = 20;
+
+/**
+ * Where one session's socket, secret and lock live under the plugin's data directory. The files
+ * are named by the session id's first letters and digits, not the whole id: an installed plugin's
+ * data folder is long enough that a full UUID puts the socket over the Unix limit. Two live
+ * sessions that share a name cannot both own it; the lock refuses the second.
+ */
 export function bridgePaths(pluginData: string, sessionId: string): BridgePaths {
   const dir = pluginData.replace(/\/+$/, "") + "/bridge";
+  const name = sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, SESSION_NAME_CHARS);
   return {
     dir,
-    socket: dir + "/" + sessionId + ".sock",
-    secret: dir + "/" + sessionId + ".key",
-    lock: dir + "/" + sessionId + ".lock",
+    socket: dir + "/" + name + ".sock",
+    secret: dir + "/" + name + ".key",
+    lock: dir + "/" + name + ".lock",
   };
 }
 
 /** Why these paths cannot be used, or undefined when they can. Both sides ask before using them. */
 export function bridgePathProblem(paths: BridgePaths): string | undefined {
+  if (paths.socket.endsWith("/.sock")) return "the session id has no letters or digits to name the bridge's files by";
   if (paths.socket.length > SOCKET_PATH_LIMIT) {
     return "the bridge socket path is " + paths.socket.length + " chars, over the Unix socket limit of " +
       SOCKET_PATH_LIMIT + " (" + paths.socket + "); point CLAUDE_PLUGIN_DATA at a shorter path";
