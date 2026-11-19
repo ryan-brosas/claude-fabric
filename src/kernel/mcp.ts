@@ -59,7 +59,10 @@ function refusal(link: McpLink, serverKey: string, toolKey: string): string {
       if (servers.length === 0) {
         return name + ": no MCP server is connected in this session, and the Fabric mod has sent no catalog; nothing can be called";
       }
-      return name + ": no MCP server named " + JSON.stringify(serverKey) + " is connected in this session. Connected: " + servers.join(", ") + ".";
+      // A server still starting is missing from the catalog until it connects, so the same call can
+      // work a moment later: say so, or the model gives up on a server that is only slow to start.
+      return name + ": no MCP server named " + JSON.stringify(serverKey) + " is connected in this session. Connected: " + servers.join(", ") +
+        ". A server still starting is listed once it connects, so try again shortly if you expected it.";
     }
     case "ambiguous-tool":
       return name + ": more than one tool of " + JSON.stringify(resolution.server) + " spells " + JSON.stringify(toolKey) + " in code; call one by its exact name in brackets";

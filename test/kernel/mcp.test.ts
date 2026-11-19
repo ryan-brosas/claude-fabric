@@ -87,7 +87,8 @@ describe("one program's mcp call", () => {
     await expect(callMcp(fake.value, ["context7", "nope"]))
       .rejects.toThrow('mcp.context7.nope: MCP server "context7" has no tool named "nope". Tools: resolve-library-id.');
     await expect(callMcp(fake.value, ["nowhere", "x"]))
-      .rejects.toThrow('mcp.nowhere.x: no MCP server named "nowhere" is connected in this session. Connected: context7, claude.ai Gmail.');
+      .rejects.toThrow('mcp.nowhere.x: no MCP server named "nowhere" is connected in this session. Connected: context7, claude.ai Gmail. ' +
+        "A server still starting is listed once it connects, so try again shortly if you expected it.");
     const empty = link({ servers: [] });
     await expect(callMcp(empty.value, ["nowhere", "x"])).rejects.toThrow("no MCP server is connected in this session, and the Fabric mod has sent no catalog");
     expect(fake.sent).toEqual([]);
