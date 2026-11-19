@@ -35,10 +35,10 @@ const Flag = defineBuiltin({
   doc: "Reads one flag.",
 });
 
-test("guestTypes declares exactly the program tools, the store globals, and print", () => {
+test("guestTypes declares exactly the program tools, the store globals, print and the timers", () => {
   const text = guestTypes(TOOLS, STORE);
   const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]));
-  expect([...declared].sort()).toEqual([...TOOLS.map((action) => action.name), ...STORE.map((builtin) => builtin.name), "print"].sort());
+  expect([...declared].sort()).toEqual([...TOOLS.map((action) => action.name), ...STORE.map((builtin) => builtin.name), "print", "setTimeout", "clearTimeout"].sort());
 });
 
 test("guestTypes prints a builtin from its one definition, and nothing without it", () => {
@@ -83,6 +83,11 @@ test("guestTypes prints the whole surface of a fixture", () => {
     "declare function print(...values: unknown[]): void;",
     "/** String payloads passed in the same call's `payloads` argument. */",
     "declare const π: Readonly<Record<string, string>>;",
+    "/** A pending timer, only for clearTimeout. */",
+    "interface TimerHandle { readonly __timer: never }",
+    "/** Runs handler after timeout ms, within this call's time limit. */",
+    "declare function setTimeout(handler: (_: void) => void, timeout?: number): TimerHandle;",
+    "declare function clearTimeout(handle: TimerHandle): void;",
   ];
   expect(guestTypes([Fixture, Pair])).toBe(expected.join("\n") + "\n");
 });

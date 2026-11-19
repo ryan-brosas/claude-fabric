@@ -196,3 +196,49 @@ test("a failed check with many errors stays within the cap", async () => {
     await removeSaved(r.text);
   }
 });
+
+// Dogfooding: programs that waited between calls failed the check, since lib.es2023 has no timers.
+test("a program may wait with setTimeout and cancel with clearTimeout", async () => {
+  const waited = await run(
+    "const cancelled = setTimeout(() => print('never'), 5); clearTimeout(cancelled);\n" +
+    "await new Promise((resolve) => setTimeout(resolve, 20));\n" +
+    "return 'waited';",
+    process.cwd(),
+  );
+  expect(waited.ok).toBe(true);
+  expect(waited.text).toBe("waited");
+});
+
+test("the timer types stay strict: no handler arguments, and an opaque handle", () => {
+  expect(check("setTimeout((value) => value.missing(), 0);", declarations).ok).toBe(false);
+  expect(check("const handle = setTimeout(() => {}, 0); return handle + 1;", declarations).ok).toBe(false);
+});
+
+test("a timer pending when the program returns never changes the result or makes a tool call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-timer-"));
+  try {
+    const late = join(dir, "late.txt");
+    const result = await run(
+      "setTimeout(() => print('late'), 30);\n" +
+      "setTimeout(() => { void Write({ file_path: " + JSON.stringify(late) + ", content: 'x' }); }, 30);\n" +
+      "return 'early';",
+      dir,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe("early");
+    await Bun.sleep(200);
+    expect(await Bun.file(late).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a timer that keeps rescheduling itself ends at the call's time limit", async () => {
+  const started = Date.now();
+  await expect(run(
+    "const tick = (): void => { setTimeout(tick, 1); };\ntick();\nawait new Promise<void>(() => {});",
+    process.cwd(),
+    { timeoutMs: 500 },
+  )).rejects.toThrow("timed out after 500ms");
+  expect(Date.now() - started).toBeLessThan(5_000);
+});
