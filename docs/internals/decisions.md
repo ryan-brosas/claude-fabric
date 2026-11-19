@@ -12,7 +12,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   sections, tool middleware, commands and UI. The MCP server serves `fabric_exec` and does the
   heavy work. The mod stays thin because of its 10 s hook budget and import limits.
 - **Fabric's compactor replaces Claude Code's.** A `session.compact` hook that returns
-  `{ messages }` answers in core's place, with no model call (proven 2026-11-18). `precompute`
+  `{ messages }` answers in core's place, with no model call (proven 2026-11-18). When a transcript
+  over the budget has no older history to summarize (one long turn, or one long turn after a
+  summary), the hook hands the event back to core with `next(e)` instead of vetoing it, so auto
+  compaction still runs (`proofs/no-cut.ts` decides core or skip on that path). `precompute`
   answers `{ skip }`: the summary is deterministic, so there is nothing to compute ahead of time.
 - **A summary names itself, and a later compaction carries it.** The rendered summary opens
   with `[Fabric summary]`, so the next compaction recognizes its own earlier summary by that
