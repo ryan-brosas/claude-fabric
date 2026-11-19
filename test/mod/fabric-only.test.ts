@@ -74,6 +74,15 @@ describe("the tool.offer hook", () => {
     expect(await offer(late, "Edit")).toEqual({ isOffered: false });
   });
 
+  test("a session's end drops every answer, so the next conversation is asked afresh", async () => {
+    const h = hooks({ [FABRIC_ONLY_OPTION]: true });
+    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
+    await h.get("tool.list")!({}, {}, () => listOf(pool));
+    expect(await offer(h, "Bash")).toEqual({ isOffered: true });
+    await h.get("session.end")!({}, { reason: "clear" }, () => undefined);
+    expect(await offer(h, "Bash")).toEqual({ isOffered: false });
+  });
+
   test("never offers a tool the engine or another hook withheld, and leaves everything alone with the option off", async () => {
     const on = hooks({ [FABRIC_ONLY_OPTION]: true });
     await on.get("tool.list")!({}, {}, () => listOf(pool));
