@@ -182,8 +182,9 @@ test/           mirrors src/
   `agentId` matches carries the answer (`PROBE-OK` from Haiku in 2.6 s). So a program could reach
   agents as a job the mod spawns and answers at `turn.complete`.
 
-## Open probes
-
-- Whether `session.append` door `compaction` fires for core's own compaction (it did not in the
-  first probe).
+- **`session.append` door `compaction`** (2026-11-19, Claude Code 2.1.328): it does not fire for
+  core's own compaction. A probe plugin logged every `session.append` row; a manual `/compact` with
+  the fabric plugin disabled compacted, and the last rows were the `/compact` note and the
+  `session.compact` hook, with no `compaction` row after. This matches the first probe. So
+  `session.compact` stays the one place to see a compaction.
 
