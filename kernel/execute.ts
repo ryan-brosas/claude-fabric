@@ -34,8 +34,13 @@ export async function execute(
         worker.postMessage(reply);
       };
       // An error that escapes the program (a throw in a timer callback, a worker that fails to load)
-      // sends no "done" message; report it now instead of waiting for the timeout.
-      worker.onerror = (event) => { clearTimeout(timer); reject(new Error(event.message)); };
+      // sends no "done" message. Treat it as the program's error now, so it is formatted and
+      // bounded like any other, instead of waiting for the timeout.
+      worker.onerror = (event) => {
+        clearTimeout(timer);
+        const error = event.error instanceof Error ? event.error.message : event.message || "worker failed with no message";
+        resolve({ kind: "done", error, logs: [] });
+      };
       const start: HostToWorker = { kind: "run", js, payloads: options.payloads ?? {} };
       worker.postMessage(start);
     });
