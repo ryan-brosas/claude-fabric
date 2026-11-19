@@ -21,7 +21,7 @@ const list = (names: readonly string[]): string =>
  */
 export const guidanceText = (names: readonly string[] = TOOL_NAMES): string =>
   [
-    "For file work, searches, shell commands and any multi-step task, send one `fabric_exec` program instead of many separate tool calls.",
+    "Reach for `fabric_exec` first: reading, searching, editing and shell commands, even a lone command, go in one `fabric_exec` program, not in separate Read, Bash or Edit calls; call those directly only for what a program cannot do.",
     "The program is an async function body: top-level `await` and `return` work.",
     "Call " + list(names) + " inside it with Claude Code's field names, and run independent calls together with `Promise.all`.",
     "Only the returned value and `print()` lines reach you: file contents and command output a program only passes through never enter your context, so return just what you need.",
