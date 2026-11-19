@@ -17,7 +17,7 @@ const results = (...items: NonNullable<ClaudeMessage["toolResults"]>): ClaudeMes
 
 const summaryOf = (messages: ClaudeMessage[]): string => {
   const result = compact(messages, { keepRecentTokens: tailBudget(messages.at(-2)!, messages.at(-1)!) });
-  if (!("messages" in result)) throw new Error(result.skip);
+  if (!("messages" in result)) throw new Error(JSON.stringify(result));
   return result.messages[0]!.text;
 };
 
@@ -32,10 +32,28 @@ describe("compact: the cut", () => {
     });
   });
 
+  test("hands one long turn over the budget to core, which can cut inside a turn", () => {
+    const messages: ClaudeMessage[] = [
+      prompt("One long task."),
+      { role: "assistant", text: "Reading.", toolUses: [toolCall("Bash", { command: "seq 1 9000" }, "t1")] },
+      results({ tool_use_id: "t1", text: "x".repeat(4000), isError: false }),
+      reply("Done."),
+    ];
+    const budget = tailBudget(messages[2]!);
+    expect(tailBudget(...messages)).toBeGreaterThan(budget);
+    expect(compact(messages, { keepRecentTokens: budget })).toEqual({
+      core: "fabric: no prompt starts a tail within the budget, so core compacts this conversation",
+    });
+    // With no prompt at all, the same holds.
+    expect(compact(messages.slice(1), { keepRecentTokens: budget })).toEqual({
+      core: "fabric: no prompt starts a tail within the budget, so core compacts this conversation",
+    });
+  });
+
   test("keeps the newest messages that fit the budget", () => {
     const messages = [prompt("First."), reply("A."), prompt("Second."), reply("B."), prompt("Third."), reply("C.")];
     const result = compact(messages, { keepRecentTokens: tailBudget(messages[4]!, messages[5]!) });
-    if (!("messages" in result)) throw new Error(result.skip);
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
     expect(result.messages).toHaveLength(3);
     expect(result.messages[1]).toBe(messages[4]!);
     expect(result.messages[2]).toBe(messages[5]!);
@@ -53,7 +71,7 @@ describe("compact: the cut", () => {
     const budget = tailBudget(messages[2]!, messages[3]!, messages[4]!);
     expect(tailBudget(messages[1]!, messages[2]!, messages[3]!, messages[4]!)).toBeGreaterThan(budget);
     const result = compact(messages, { keepRecentTokens: budget });
-    if (!("messages" in result)) throw new Error(result.skip);
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
     expect(result.messages[1]).toBe(messages[3]!);
     expect(result.messages[2]).toBe(messages[4]!);
     expect(result.messages).toHaveLength(3);
@@ -73,7 +91,7 @@ describe("compact: the cut", () => {
   test("kept messages keep their handle", () => {
     const messages = [prompt("First."), reply("A."), prompt("Second.", "h2"), reply("B.", "h3")];
     const result = compact(messages, { keepRecentTokens: tailBudget(messages[2]!, messages[3]!) });
-    if (!("messages" in result)) throw new Error(result.skip);
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
     expect(result.messages[1]!.handle).toBe("h2");
     expect(result.messages[2]!.handle).toBe("h3");
     expect(result.messages[0]!.handle).toBeUndefined();
@@ -119,7 +137,7 @@ describe("compact: the summary", () => {
       reply("Continuing."),
     ];
     const first = compact(messages, { keepRecentTokens: tailBudget(messages.at(-2)!, messages.at(-1)!) });
-    if (!("messages" in first)) throw new Error(first.skip);
+    if (!("messages" in first)) throw new Error(JSON.stringify(first));
     const firstSummary = first.messages[0]!.text;
     // The fact sits past the 2,048-byte prose excerpt a plain user row keeps.
     expect(utf8Bytes(firstSummary)).toBeGreaterThan(2048);
@@ -133,7 +151,7 @@ describe("compact: the summary", () => {
       reply("Working."),
     ];
     const second = compact(later, { keepRecentTokens: tailBudget(later.at(-2)!, later.at(-1)!) });
-    if (!("messages" in second)) throw new Error(second.skip);
+    if (!("messages" in second)) throw new Error(JSON.stringify(second));
     const secondSummary = second.messages[0]!.text;
     expect(secondSummary).toContain("[Fabric summary]");
     expect(secondSummary).toContain("[Earlier summary]");
@@ -168,7 +186,7 @@ describe("compact: the summary", () => {
     }
     before.push(prompt("Latest request."), reply("Latest reply."));
     const first = compact(before, { keepRecentTokens: tailBudget(before.at(-2)!, before.at(-1)!) });
-    if (!("messages" in first)) throw new Error(first.skip);
+    if (!("messages" in first)) throw new Error(JSON.stringify(first));
     const firstSummary = first.messages[0]!.text;
     // Within a few KiB of the ceiling, so carrying it beside saturated sections must shrink it.
     expect(utf8Bytes(firstSummary)).toBeGreaterThan(MAX_SUMMARY_BYTES - 4096);
@@ -190,7 +208,7 @@ describe("compact: the summary", () => {
       keepRecentTokens: tailBudget(after.at(-2)!, after.at(-1)!),
       instructions: "KEEP_THIS_REQUEST finish the parser rewrite.",
     });
-    if (!("messages" in second)) throw new Error(second.skip);
+    if (!("messages" in second)) throw new Error(JSON.stringify(second));
     const secondSummary = second.messages[0]!.text;
     // One joint allocation holds the ceiling; nothing is dropped by a final clip.
     expect(utf8Bytes(secondSummary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
@@ -231,7 +249,7 @@ describe("compact: the summary", () => {
       keepRecentTokens: tailBudget(messages[2]!, messages[3]!),
       instructions: "Focus on the parser rewrite.",
     });
-    if (!("messages" in result)) throw new Error(result.skip);
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
     expect(result.messages[0]!.text).toContain("[Compaction Request]");
     expect(result.messages[0]!.text).toContain("Focus on the parser rewrite.");
   });
@@ -249,7 +267,7 @@ describe("compact: the summary", () => {
     }
     messages.push(prompt("Latest request."), reply("Latest reply."));
     const result = compact(messages, { keepRecentTokens: tailBudget(messages.at(-2)!, messages.at(-1)!) });
-    if (!("messages" in result)) throw new Error(result.skip);
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
     const text = result.messages[0]!.text;
     expect(utf8Bytes(text)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(text).toContain("[Earlier user messages]");

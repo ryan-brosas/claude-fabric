@@ -47,7 +47,9 @@ export const register: Register = (on, options) => {
   // precompute, and a compactor that throws falls back to core's own.
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
-    return compact(e.messages, { instructions: e.instructions });
+    const result = compact(e.messages, { instructions: e.instructions });
+    // One long turn over the budget has no prompt to cut at; core's compactor can cut inside it.
+    return "core" in result ? next(e) : result;
   }).catch(($, e, next) => next(e));
 
   // Started and not awaited: the loop runs outside this hook's 10 s budget and keeps polling
