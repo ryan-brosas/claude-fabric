@@ -67,12 +67,40 @@ export interface BridgeCatalog {
   servers: readonly BridgeServer[];
 }
 
-export interface BridgeJob {
+/** One job the mod runs: a connected MCP server's tool, or a built-in tool Claude Code owns. */
+export type BridgeJob = McpJob | BuiltinJob;
+
+export interface McpJob {
+  kind: "mcp";
   id: number;
+  /** The server's name in the tool list's spelling, which `$.mcp.call` accepts. */
   server: string;
+  /** The tool's raw name, as the server spells it. */
   tool: string;
   args: Record<string, unknown>;
 }
+
+/**
+ * One built-in tool Claude Code runs: `$.tool.call({ tool, ...input })`. Only a name in
+ * `BUILTIN_TOOLS` ever gets one, and the mod refuses any other name it is handed.
+ */
+export interface BuiltinJob {
+  kind: "builtin";
+  id: number;
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * The built-in tools a program may call through the mod. This plugin's `fabric_exec` skips the
+ * person's permission prompts and deny rules when `$.tool.call` runs a tool, so the list is
+ * fixed and holds only what a person would expect a search program to reach. The host sends a
+ * job only for one of these, and the mod runs only one of these: two walls, one list.
+ */
+export const BUILTIN_TOOLS: readonly string[] = ["WebSearch"];
+
+/** Whether the fixed list holds this built-in tool. */
+export const isBuiltinTool = (name: string): boolean => BUILTIN_TOOLS.includes(name);
 
 export type BridgeAnswer =
   | { id: number; ok: true; result: unknown }

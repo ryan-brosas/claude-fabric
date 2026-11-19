@@ -8,8 +8,8 @@ use `fabric_exec` instead of Claude Code's native code mode. It has to earn that
 ## What we're building
 
 - **One tool, `fabric_exec`.** Claude sends one TypeScript program. The program reads, searches,
-  edits and runs commands through `Read`, `Write`, `Edit`, `Grep`, `Glob` and `Bash`, with the
-  same names and fields as Claude Code's own tools. Independent calls run in parallel with
+  edits and runs commands through `Read`, `Write`, `Edit`, `Grep`, `Glob` and `Bash`, and the
+  web through `WebSearch`, with the same names and fields as Claude Code's own tools. Independent calls run in parallel with
   `Promise.all`. Only what the program returns or prints comes back, cut to a fixed size, so file
   contents and command output it only passes through never enter Claude's context.
 - **Checked before it runs.** Every program is type-checked first. A type error comes back with
@@ -36,11 +36,13 @@ Where it stands:
    (`proofs/repeat-guard.ts`) and the output budget's length arithmetic
    (`proofs/output-budget.ts`) are gdp-wired kernels too, compiled into
    `src/stages/verified/generated/`; those two stages decide through the compiled machines.
-5. **Done:** `store`/`load`, the session store a program keeps between calls, and
-   `mcp.<server>.<tool>()`: a program calls the session's other MCP servers through the mod's
-   `$.mcp.call`, over a Unix socket bridge, and the server keeps no MCP client. **Next, the rest
-   of the map:** `__bun`, prompt guidance, tool middleware, agents and mesh, in the order
-   architecture.md's probes allow.
+5. **Done:** `store`/`load`, the session store a program keeps between calls;
+   `mcp.<server>.<tool>()`, so a program calls the session's other MCP servers through the mod's
+   `$.mcp.call`, over a Unix socket bridge, and the server keeps no MCP client; and `WebSearch`,
+   the one built-in a program may call through the mod's `$.tool.call`, over the same job queue,
+   because that call skips the person's permission prompts and deny rules. `Agent` and every
+   other built-in stay top-level only. **Next, the rest of the map:** `__bun`, prompt guidance,
+   tool middleware, agents and mesh, in the order architecture.md's probes allow.
 6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
    with at most 10% more tokens.
@@ -58,7 +60,7 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
 ## What we never compromise on
 
 1. **Claude Code's vocabulary, not Pi's.** Program tools are `Read`, `Write`, `Edit`, `Grep`,
-   `Glob` and `Bash`, with Claude Code's field names. Model-facing text never says `pi.`.
+   `Glob`, `Bash` and `WebSearch`, with Claude Code's field names. Model-facing text never says `pi.`.
    Enforced by `test/server/server.test.ts` ("lists exactly one tool").
 2. **Nothing runs until it type-checks.** A type error returns line numbers, and no tool call
    happens. Enforced by the "type error is reported and nothing runs" test and the spike.
@@ -143,8 +145,11 @@ module in `src/stages/` with its own unit tests in `test/stages/`.
    before anything runs.
 6. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
    comes back to the host as a message; the host turns the raw arguments into that action's input
-   and runs it. An `mcp.<server>.<tool>()` call is the one message whose action is not a provider
-   function: `src/kernel/mcp.ts` checks the access rule and sends one job over the bridge. Every message passes the run's gate first (`src/kernel/verified/gate.ts`, rule and
+   and runs it. An `mcp.<server>.<tool>()` call is one message whose action is not a provider
+   function: `src/kernel/mcp.ts` checks the access rule and sends one job over the bridge.
+   `WebSearch` is the other: its provider's `run` sends a built-in tool job, which
+   `src/kernel/builtin.ts` lets through only for a tool in the fixed allowlist and the mod runs
+   with `$.tool.call`. Every message passes the run's gate first (`src/kernel/verified/gate.ts`, rule and
    laws in `proofs/gate.ts`): it must carry the run's token, no tool call is acted on after the
    done, and at most one done is admitted. The Worker is terminated on a timeout or when the call
    ends. The messages are typed in `src/kernel/protocol.ts`.

@@ -3,6 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import type { BuiltinLink } from "../kernel/builtin.ts";
 import { startBridge } from "../kernel/bridge/server.ts";
 import { run } from "../kernel/host.ts";
 import type { McpLink } from "../kernel/mcp.ts";
@@ -32,6 +33,12 @@ const started = await startBridge({
 const mcp: McpLink = "bridge" in started ? started.bridge : {
   catalog: () => ({ servers: [] }),
   call: () => Promise.reject(new Error("the bridge is not running")),
+  error: started.error,
+};
+
+// The same bridge carries a built-in tool job; without one, WebSearch says why instead of waiting.
+const builtin: BuiltinLink = "bridge" in started ? started.bridge : {
+  tool: () => Promise.reject(new Error("the bridge is not running")),
   error: started.error,
 };
 
@@ -100,7 +107,7 @@ export function createServer(): McpServer {
     async (raw) => {
       const parsed = ENVELOPE.safeParse(prepareArguments(raw));
       if (!parsed.success) return { content: [{ type: "text", text: bounded(envelopeError(parsed.error)) }], isError: true };
-      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store, mcp });
+      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store, mcp, builtin });
       return { content: [{ type: "text", text: bounded(result.text) }], isError: !result.ok };
     },
   );
@@ -115,7 +122,7 @@ if (import.meta.main) {
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { close(); process.exit(0); });
   } else {
     // stderr, never stdout: stdout is the MCP stream.
-    console.error("fabric: " + started.error + "; mcp.<server>.<tool>() will refuse");
+    console.error("fabric: " + started.error + "; mcp.<server>.<tool>() and WebSearch will refuse");
   }
   await createServer().connect(new StdioServerTransport());
 }

@@ -1,3 +1,4 @@
+import { builtinTools, type BuiltinLink } from "./builtin.ts";
 import { transpile } from "./check.ts";
 import { callMcp, type McpLink } from "./mcp.ts";
 import { MCP_REF, type Done, type HostToWorker, type WorkerToHost } from "./protocol.ts";
@@ -26,10 +27,12 @@ const FORGED = "protocol: a message without this run's token, or after its done,
 export async function execute(
   code: string,
   cwd: string,
-  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store; mcp?: McpLink } = {},
+  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store; mcp?: McpLink; builtin?: BuiltinLink } = {},
 ): Promise<Executed> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const js = transpile(code);
+  // The one link a built-in tool's run gets: the host's allowlist decides there, before any job.
+  const builtin = builtinTools(options.builtin);
   const worker = new Worker(WORKER);
   const token = crypto.randomUUID();
   let calls = 0;
@@ -70,7 +73,7 @@ export async function execute(
             const action = ACTIONS.get(msg.ref);
             if (!action) throw new Error("unknown action " + msg.ref);
             // A bad argument is this call's rejection, catchable inside the program.
-            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd }) };
+            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd, builtin }) };
           }
         } catch (error) {
           reply = { kind: "reply", id: msg.id, error: error instanceof Error ? error.message : String(error) };

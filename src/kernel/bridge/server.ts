@@ -9,12 +9,15 @@ import {
   type BridgeCatalog,
   type BridgeJob,
   type BridgePaths,
+  type BuiltinJob,
+  type McpJob,
 } from "../../bridge/contract.ts";
 
-// The server's half of the socket: it holds the session's MCP catalog and turns a program's mcp
-// call into one job the mod takes and answers. The mod is Claude Code's own client, so a program
-// reaches another MCP server with Claude Code's connections and credentials, and this server
-// keeps no MCP client of its own.
+// The server's half of the socket: it holds the session's MCP catalog and turns a program's call
+// into one job the mod takes and answers. Two calls cross it: an mcp call, which the mod runs with
+// Claude Code's own MCP connection, and a built-in tool call, which the mod runs with
+// `$.tool.call`. The mod is Claude Code's own client, so this server keeps no MCP client of its
+// own, and the one queue and one answer path serve both.
 
 /** How long one mcp call waits for the mod's answer before it rejects. Fixed; tests pass their own. */
 export const ANSWER_TIMEOUT_MS = 60_000;
@@ -42,6 +45,8 @@ export interface Bridge {
   catalog(): BridgeCatalog;
   /** Asks the mod to run one tool call and resolves its raw MCP result. */
   call(server: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
+  /** Asks the mod to run one built-in tool and resolves what `$.tool.call` gave it. */
+  tool(name: string, input: Record<string, unknown>): Promise<unknown>;
   /** Stops listening, fails every waiting call, and removes its socket and secret. */
   close(): void;
 }
@@ -290,29 +295,40 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
     }
   };
 
+  // What a job carries once the server has numbered it: its own kind, which the mod reads to
+  // decide how to run it. TypeScript cannot see that a spread of a union keeps its discriminant.
+  type JobRequest = Omit<McpJob, "id"> | Omit<BuiltinJob, "id">;
+
+  // One job to the mod, whichever kind it is, and its answer back: the queue and the answer path
+  // are shared, so both calls fail the same way and neither can be handed out twice.
+  const ask = (what: string, job: JobRequest): Promise<unknown> => {
+    // No mod, no answer: fail now rather than after the full limit.
+    if (!modHere()) {
+      return Promise.reject(new Error(
+        "no Fabric mod is connected in this session, so " + what + " cannot be reached (the bridge socket is " + paths.socket + ")",
+      ));
+    }
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        answers.delete(id);
+        // The call has given up: its job must not run later, or a retried write would repeat.
+        const at = jobs.findIndex((job) => job.id === id);
+        if (at !== -1) jobs.splice(at, 1);
+        reject(new Error("the Fabric mod did not answer within " + timeoutMs + "ms"));
+      }, timeoutMs);
+      answers.set(id, { resolve, reject, timer });
+      dispatch({ ...job, id } as BridgeJob);
+    });
+  };
+
   const bridge: Bridge = {
     paths,
     catalog: () => catalog,
-    call: (serverName, tool, args) => {
-      // No mod, no answer: fail now rather than after the full limit.
-      if (!modHere()) {
-        return Promise.reject(new Error(
-          "no Fabric mod is connected in this session, so Claude Code's MCP connections cannot be reached (the bridge socket is " + paths.socket + ")",
-        ));
-      }
-      const id = nextId++;
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          answers.delete(id);
-          // The call has given up: its job must not run later, or a retried write would repeat.
-          const at = jobs.findIndex((job) => job.id === id);
-          if (at !== -1) jobs.splice(at, 1);
-          reject(new Error("the Fabric mod did not answer within " + timeoutMs + "ms"));
-        }, timeoutMs);
-        answers.set(id, { resolve, reject, timer });
-        dispatch({ id, server: serverName, tool, args });
-      });
-    },
+    call: (serverName, tool, args) =>
+      ask("Claude Code's MCP connections", { kind: "mcp", server: serverName, tool, args }),
+    tool: (name, input) =>
+      ask("Claude Code's built-in tools", { kind: "builtin", tool: name, input }),
     close,
   };
   return { bridge };
