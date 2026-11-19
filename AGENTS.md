@@ -77,8 +77,8 @@ written by hand, and a test fails if they drift from that list:
 - **`kernel/guest.d.ts`**: the types the checker gives programs (`test/kernel.test.ts`).
 - **`server/index.ts`**: `DESCRIPTION`, which is what the model reads (`test/server.test.ts`).
 
-A changed field still has to be changed in both by hand, plus one test through the real MCP
-server.
+A changed field is not caught by any check: change it in `kernel/tools.ts`, `guest.d.ts` and
+`DESCRIPTION` by hand, and add one test through the real MCP server.
 
 ## Check
 

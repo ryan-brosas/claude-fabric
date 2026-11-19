@@ -14,6 +14,7 @@ export async function execute(
 ): Promise<Executed> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const impl = tools(cwd);
+  const js = transpile(code);
   const worker = new Worker(WORKER);
   let calls = 0;
   try {
@@ -32,7 +33,7 @@ export async function execute(
         }
         worker.postMessage(reply);
       };
-      const start: HostToWorker = { kind: "run", js: transpile(code), payloads: options.payloads ?? {} };
+      const start: HostToWorker = { kind: "run", js, payloads: options.payloads ?? {} };
       worker.postMessage(start);
     });
     return { done, calls };

@@ -6,8 +6,8 @@ const guest = new URL("../kernel/guest.d.ts", import.meta.url).pathname;
 
 test("guest.d.ts declares exactly the program tools, and print", async () => {
   const text = await Bun.file(guest).text();
-  const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]).filter((name) => name !== "print"));
-  expect([...declared].sort()).toEqual([...TOOL_NAMES].sort());
+  const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]));
+  expect([...declared].sort()).toEqual([...TOOL_NAMES, "print"].sort());
 });
 
 test("format returns a string value as is", () => {
