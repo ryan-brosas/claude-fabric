@@ -36,6 +36,9 @@ export const register: Register = (on, options) => {
   let ownSession = "";
   // Whether the last tool list held fabric_exec: only then is the deferred list shortened.
   let fabricInPool = false;
+  // fabricOnly's answer per loop and tool, fixed at the first ask (the one before the loop's first
+  // request): a later ask is the model calling the tool, and it gets the answer the list showed.
+  const offers = new Map<string, boolean>();
 
   // Compaction is Fabric's deterministic summary: no model call, so there is nothing to
   // precompute, and a compactor that throws falls back to core's own.
@@ -183,9 +186,16 @@ export const register: Register = (on, options) => {
 
   // With fabricOnly on, the main conversation's model is not offered the tools a program runs
   // (src/mod/fabric-only.ts). Agents keep them, and the pool is untouched, so $.tool.call too.
+  // A loop whose first ask came before fabric_exec joined keeps its tools for its life: hiding
+  // them later would refuse calls to a tool the model's list still shows.
   on("tool.offer", async ($, e, next) => {
     const answer = await next(e);
     if (!answer.isOffered || !programsOnly) return answer;
-    return { isOffered: offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool }) };
+    const key = (e.agentId ?? "") + "\n" + e.tool;
+    const first = offers.get(key);
+    if (first !== undefined) return { isOffered: first };
+    const isOffered = offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool });
+    offers.set(key, isOffered);
+    return { isOffered };
   }).catch(($, e, next) => next(e));
 };
