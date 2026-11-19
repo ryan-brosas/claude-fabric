@@ -188,3 +188,17 @@ test("one guard per server process warns at three identical calls and blocks the
   expect(seen[5]).toContain("has now executed 6 times in a row and was blocked");
   expect(await call({ code: 'return "repeat-guard-end";' })).toEqual({ isError: false, text: "repeat-guard-end" });
 });
+
+// Dogfooding: every program had a fixed 120 s, so a long build or test suite could not run at all
+// with fabricOnly on. The call now sets its own limit (proofs/call-timeout.ts).
+test("a call's timeout is its program's time limit, and a bad one is named", async () => {
+  const slow = "await new Promise((resolve) => setTimeout(resolve, 2_000)); return 'slow';";
+  const limited = await call({ code: slow, timeout: 300 });
+  expect(limited.isError).toBe(true);
+  expect(limited.text).toContain("timed out after 300ms");
+  expect(await call({ code: "return 'quick';", timeout: null })).toEqual({ isError: false, text: "quick" });
+  expect(await call({ code: "return 1;", timeout: 1.5 })).toEqual({
+    isError: true,
+    text: "fabric_exec: timeout must be a whole number of ms, like 300000; the most is 600000.",
+  });
+});

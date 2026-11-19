@@ -242,3 +242,64 @@ test("a timer that keeps rescheduling itself ends at the call's time limit", asy
   )).rejects.toThrow("timed out after 500ms");
   expect(Date.now() - started).toBeLessThan(5_000);
 });
+
+// A program that timed out used to leave its Bash running until Bash's own timeout.
+test("a Bash still running when its program times out is stopped with it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-abort-"));
+  try {
+    const marker = join(dir, "still-ran.txt");
+    await expect(run(
+      "await Bash({ command: " + JSON.stringify("sleep 1 && touch " + marker) + " }); return 'done';",
+      dir,
+      { timeoutMs: 200 },
+    )).rejects.toThrow("timed out after 200ms");
+    await Bun.sleep(1_500);
+    expect(await Bun.file(marker).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Sol on #34: killing bash -c alone leaves what it started. The whole process group stops.
+test("a process the command started in the background stops with its program too", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-tree-"));
+  try {
+    const ready = join(dir, "ready.txt");
+    const survived = join(dir, "survived.txt");
+    const command = "sh -c " + JSON.stringify("touch " + ready + "; sleep 1; touch " + survived) + " & wait";
+    await expect(run(
+      "await Bash({ command: " + JSON.stringify(command) + " }); return 'done';",
+      dir,
+      { timeoutMs: 400 },
+    )).rejects.toThrow("timed out after 400ms");
+    expect(await Bun.file(ready).exists()).toBe(true);
+    await Bun.sleep(1_500);
+    expect(await Bun.file(survived).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Bash's own timeout kills the command's children and does not hang on their pipes", async () => {
+  const started = Date.now();
+  const result = await run("return await Bash({ command: 'sleep 30 & sleep 30; echo never', timeout: 300 });", process.cwd(), { timeoutMs: 10_000 });
+  expect(result.ok).toBe(false);
+  expect(result.text).toContain("Bash timed out after 300ms");
+  expect(Date.now() - started).toBeLessThan(5_000);
+});
+
+// Sol on #34: a child the command left in the background, output redirected, escaped cleanup.
+test("a child a finished command left in the background stops when its program ends", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-bg-"));
+  try {
+    const survived = join(dir, "survived.txt");
+    const command = "(sleep 1; touch " + survived + ") >/dev/null 2>&1 &";
+    const result = await run("await Bash({ command: " + JSON.stringify(command) + " }); return 'left';", dir);
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe("left");
+    await Bun.sleep(1_500);
+    expect(await Bun.file(survived).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -35,6 +35,9 @@ export async function execute(
   const builtin = builtinTools(options.builtin);
   const worker = new Worker(WORKER);
   const token = crypto.randomUUID();
+  // Ends every tool call still in flight when the run ends, so a Bash the program started does not
+  // outlive it (a timed-out program used to leave its command running to Bash's own timeout).
+  const ended = new AbortController();
   let calls = 0;
   let finished = false;
   try {
@@ -73,7 +76,7 @@ export async function execute(
             const action = ACTIONS.get(msg.ref);
             if (!action) throw new Error("unknown action " + msg.ref);
             // A bad argument is this call's rejection, catchable inside the program.
-            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd, builtin }) };
+            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd, builtin, signal: ended.signal }) };
           }
         } catch (error) {
           reply = { kind: "reply", id: msg.id, error: error instanceof Error ? error.message : String(error) };
@@ -96,6 +99,7 @@ export async function execute(
     });
     return { done, calls };
   } finally {
+    ended.abort();
     worker.terminate();
   }
 }

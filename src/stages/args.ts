@@ -13,7 +13,7 @@ const PI_ONLY_KEYS = [
 ] as const;
 
 // The optional keys. A null one is absent, not invalid.
-const OPTIONAL_KEYS = ["payloads", "strings", "display"] as const;
+const OPTIONAL_KEYS = ["payloads", "strings", "display", "timeout"] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

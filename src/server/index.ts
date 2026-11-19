@@ -9,7 +9,9 @@ import { run } from "../kernel/host.ts";
 import type { McpLink } from "../kernel/mcp.ts";
 import { MAX_RESULT_CHARS } from "../kernel/result.ts";
 import { Store } from "../kernel/store.ts";
+import { callTimeoutMs } from "../kernel/verified/call-timeout.ts";
 import { STORE } from "../providers/store/index.ts";
+import { stopAllShells } from "../providers/tools/bash.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { globalLines, toolLines } from "../registry/generate.ts";
 import { MCP_INTRO, MCP_LINE } from "../registry/mcp.ts";
@@ -56,6 +58,7 @@ const OUTRO = [
   "- print(...values) adds a line to the output.",
   "- π.<key> reads a string from this call's payloads argument. Put long or syntax-heavy text there instead of in code.",
   "- A program that fails, times out or crashes commits no store() writes.",
+  "- A program runs for at most 120 s. For a long build or test suite, set this call's timeout (ms, up to 600000).",
   "",
   "Run independent calls together in one Promise.all. In a large file, find lines with Grep, then Read only that range; don't cat files through Bash. Return only what the next step needs, not raw output. A type error stops the program before it runs and lists line numbers; fix it and call again.",
 ];
@@ -72,6 +75,7 @@ const INPUT = z.looseObject({
     z.string(),
     z.object({ name: z.string().optional(), description: z.string().optional() }).passthrough(),
   ]).nullish().describe("Short label for this program."),
+  timeout: z.number().nullish().describe("Milliseconds this program may run: default 120000, at most 600000."),
 });
 
 // The envelope after repair: one program string, an optional payload record, an optional label.
@@ -79,6 +83,7 @@ const ENVELOPE = z.object({
   code: z.string().min(1),
   payloads: z.record(z.string(), z.string()).optional(),
   display: z.object({ name: z.string().optional(), description: z.string().optional() }).optional(),
+  timeout: z.number().int().positive().optional(),
 });
 
 // Every text this server returns passes the one cap. The result is already bounded by the host;
@@ -92,6 +97,7 @@ function envelopeError(error: z.ZodError): string {
   const field = first?.path.length ? String(first.path[0]) : "";
   if (field === "code") return "fabric_exec: code must be one TypeScript program string, or an array of lines; empty code is not a call.";
   if (field === "payloads") return 'fabric_exec: payloads must be an object of strings, like {"name": "text"}, or a JSON object string.';
+  if (field === "timeout") return "fabric_exec: timeout must be a whole number of ms, like 300000; the most is 600000.";
   return "fabric_exec: " + (field || "arguments") + ": " + (first?.message ?? "invalid argument");
 }
 
@@ -107,7 +113,9 @@ export function createServer(): McpServer {
     async (raw) => {
       const parsed = ENVELOPE.safeParse(prepareArguments(raw));
       if (!parsed.success) return { content: [{ type: "text", text: bounded(envelopeError(parsed.error)) }], isError: true };
-      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store, mcp, builtin });
+      // The limit is the compiled machine of proofs/call-timeout.ts: default 120000, never over 600000.
+      const timeoutMs = callTimeoutMs(parsed.data.timeout);
+      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, timeoutMs, guard, store, mcp, builtin });
       return { content: [{ type: "text", text: bounded(result.text) }], isError: !result.ok };
     },
   );
@@ -115,11 +123,13 @@ export function createServer(): McpServer {
 }
 
 if (import.meta.main) {
+  // Commands run in their own process groups, out of the terminal's reach: stop them on the way out.
+  // A signal ends the process without "exit" unless it is handled, so both cases handle it.
+  process.on("exit", stopAllShells);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => process.exit(0));
   if ("bridge" in started) {
     const bridge = started.bridge;
-    const close = (): void => bridge.close();
-    process.on("exit", close);
-    for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { close(); process.exit(0); });
+    process.on("exit", () => bridge.close());
   } else {
     // stderr, never stdout: stdout is the MCP stream.
     console.error("fabric: " + started.error + "; mcp.<server>.<tool>() and WebSearch will refuse");

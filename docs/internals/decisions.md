@@ -135,7 +135,11 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   the 60 s answer limit, and an answer for an unconfirmed job is refused. Nothing is ever resent, so
   no MCP or WebSearch effect can run twice. The rule is a gdp-wired kernel
   ([proofs/job-receipt.ts](../../proofs/job-receipt.ts)).
-- **No background shell tasks.** `Bash` waits. Long jobs use Claude's own Bash in the background.
+- **No background shell tasks.** `Bash` waits. A long job sets the call's `timeout` (default
+  120000 ms, at most 600000, Bash's own foreground limit; `proofs/call-timeout.ts`). Every command
+  runs in its own process group, which is stopped when its program ends, so nothing a program
+  started outlives it. Past Claude Code's 120 s MCP wait, the call moves to the background and its
+  result arrives as a notification.
 
 ## Planned, not built
 
@@ -162,8 +166,8 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   every tool, and the pool is untouched, so `$.tool.call` still reaches them; `tool.list` was tried
   first and removes a tool from the whole session, agents and the mod included. Read stays for images
   and PDFs, and WebSearch because a program's WebSearch skips the person's permission prompts. The
-  main conversation also loses Bash's background jobs (a program's Bash waits, within the 120 s
-  deadline). It is an option, not the default, because it changes every session. An env var cannot
+  main conversation also loses Bash's background jobs (a program's Bash waits, within the call's
+  `timeout`). It is an option, not the default, because it changes every session. An env var cannot
   carry it: `$.process.hookEnv` returns only Claude Code's own variables. The rule is a gdp-wired
   kernel, `proofs/tool-visibility.ts` (5 laws, 6 broken variants refused), and the hook hides a tool
   only through its compiled verdict. Its answer per loop and tool is fixed at the first ask
