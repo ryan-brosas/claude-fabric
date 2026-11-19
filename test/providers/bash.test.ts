@@ -19,3 +19,21 @@ test("stopAllShells stops a command that no run owns", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Sol on #34: a finished command's group id must not stay armed after the group is empty.
+test("a finished command with nothing left in its group is released at once", async () => {
+  const ended = new AbortController();
+  const kill = process.kill;
+  const signaled: number[] = [];
+  process.kill = ((pid: number, sig?: string | number) => {
+    if (sig === "SIGKILL") signaled.push(pid);
+    return kill(pid, sig as any);
+  }) as typeof process.kill;
+  try {
+    expect((await Bash.run({ command: "true" }, { cwd: process.cwd(), signal: ended.signal })).exitCode).toBe(0);
+    ended.abort();
+    expect(signaled).toEqual([]);
+  } finally {
+    process.kill = kill;
+  }
+});

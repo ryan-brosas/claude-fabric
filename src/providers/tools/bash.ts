@@ -9,13 +9,27 @@ const POSIX = process.platform !== "win32";
 // the terminal's Ctrl-C, so the server stops them all on its way out (stopAllShells).
 const live = new Set<() => void>();
 
+/** True while any process is left in the command's group: a group id is not reused until it empties. */
+function groupAlive(p: Bun.Subprocess): boolean {
+  if (!POSIX) return false;
+  try {
+    process.kill(-p.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The one way to stop a command: once, and never again after, so a reused group id is never hit. */
-function owned(p: Bun.Subprocess): () => void {
+function owned(p: Bun.Subprocess): { stop: () => void; release: () => void } {
   let done = false;
-  const stop = (): void => {
-    if (done) return;
+  const release = (): void => {
     done = true;
     live.delete(stop);
+  };
+  const stop = (): void => {
+    if (done) return;
+    release();
     try {
       if (POSIX) process.kill(-p.pid, "SIGKILL");
       else p.kill("SIGKILL");
@@ -24,7 +38,7 @@ function owned(p: Bun.Subprocess): () => void {
     }
   };
   live.add(stop);
-  return stop;
+  return { stop, release };
 }
 
 /** Stops every command still running: the server calls this before it exits. */
@@ -51,7 +65,7 @@ export const Bash = defineAction({
     // would hang the read. Windows has no process groups: there only the shell itself is stopped.
     const p = Bun.spawn(["bash", "-c", i.command], { cwd, stdout: "pipe", stderr: "pipe", detached: POSIX });
     let timedOut = false;
-    const stop = owned(p);
+    const { stop, release } = owned(p);
     const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
     // The group is the run's until the run ends: a child the command left in the background dies then.
     signal?.addEventListener("abort", stop, { once: true });
@@ -62,6 +76,9 @@ export const Bash = defineAction({
       exitCode = await p.exited;
     } finally {
       clearTimeout(timer);
+      // An empty group is released now, so its id, free for reuse, is never signaled at the run's end.
+      // A group with a child left in it keeps its id, and the run's end stops that child.
+      if (!groupAlive(p)) release();
     }
     const output = out + err;
     if (timedOut) throw new Error("Bash timed out after " + timeout + "ms: " + output.slice(-2000));
