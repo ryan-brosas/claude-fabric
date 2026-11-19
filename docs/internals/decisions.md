@@ -143,7 +143,9 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   result to a child or guard a child's writes (`agents/write-guard.ts`). The last two are part of
   agents.
 - Agents and mesh: these need a program to start an agent, and `Agent` stays top-level only.
-  Whether `$.tool.call` can run it is still an open probe in architecture.md.
+  The mechanism exists (architecture.md, Answered probes: `$.agent.spawn`, the answer at
+  `turn.complete`); a spawned agent then runs with no permission prompt from the person, so
+  opening it to programs is the person's decision, not a port step.
 - After the benchmark, native code mode is turned off with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`,
   not by a mod: hiding `REPL` from the tool list with code mode on put every MCP tool's schema in
   the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool
