@@ -1,7 +1,7 @@
 // One fresh Worker per fabric_exec call. Every tool call crosses to the host; store() and load()
 // stay here, and the run's staged writes leave with the done message.
 import { copyValue, storable, write } from "../stages/store.ts";
-import type { CallMessage, DoneMessage, HostToWorker, StoreDelta } from "./protocol.ts";
+import { MCP_REF, type CallMessage, type DoneMessage, type HostToWorker, type StoreDelta } from "./protocol.ts";
 
 declare const self: Worker;
 
@@ -36,6 +36,16 @@ const call = (ref: string, args: unknown[]) =>
   });
 
 const print = (...values: unknown[]) => { logs.push(values.map((v) => (typeof v === "string" ? v : JSON.stringify(v))).join(" ")); };
+
+// mcp.<server>.<tool>(args): the two keys the program wrote travel to the host with the call's
+// arguments. Any key is reachable here; the host's catalog decides what may be called, so this
+// thread holds no catalog and imports no provider.
+const empty: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+const mcp = new Proxy(empty, {
+  get: (_target, serverKey) => typeof serverKey !== "string" ? undefined : new Proxy(empty, {
+    get: (_inner, toolKey) => typeof toolKey !== "string" ? undefined : (...args: unknown[]) => call(MCP_REF, [serverKey, toolKey, ...args]),
+  }),
+});
 
 self.onmessage = async (event: MessageEvent<HostToWorker>) => {
   const msg = event.data;
@@ -84,8 +94,8 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       // The host names the tools, so this thread stays light: no providers, no schemas.
       const names = msg.names;
       const toolFns = names.map((name) => (...args: unknown[]) => call(name, args));
-      const run = new Function(...names, "print", "π", "store", "load", "return " + msg.js);
-      const value = await run(...toolFns, print, π, store, load);
+      const run = new Function(...names, "print", "π", "store", "load", "mcp", "return " + msg.js);
+      const value = await run(...toolFns, print, π, store, load, mcp);
       send({ kind: "done", ok: true, value, logs, writes });
     } catch (error) {
       send({ kind: "done", ok: false, error: error instanceof Error ? error.message : String(error), logs, writes });

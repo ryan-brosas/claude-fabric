@@ -20,7 +20,8 @@ const harness = () => {
     calls.push(event);
     return { messages: replies };
   };
-  let handler: Handler | undefined;
+  // The mod registers more than one hook, so each is kept by its own topic.
+  const handlers = new Map<string, Handler>();
   let fallback: Handler | undefined;
   const registration: Registration = {
     catch(candidate) {
@@ -28,12 +29,13 @@ const harness = () => {
       return registration;
     },
   };
-  const on = (_topic: string, registered: Handler): Registration => {
-    handler = registered;
+  const on = (topic: string, registered: Handler): Registration => {
+    handlers.set(topic, registered);
     return registration;
   };
   register(on as never, {} as never);
   const run = (event: Event): unknown => {
+    const handler = handlers.get("session.compact");
     if (!handler || !fallback) throw new Error("the mod registered no compaction hook with a catch");
     try {
       return handler({}, event, next);

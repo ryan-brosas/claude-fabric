@@ -3,12 +3,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { startBridge } from "../kernel/bridge/server.ts";
 import { run } from "../kernel/host.ts";
+import type { McpLink } from "../kernel/mcp.ts";
 import { MAX_RESULT_CHARS } from "../kernel/result.ts";
 import { Store } from "../kernel/store.ts";
 import { STORE } from "../providers/store/index.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { globalLines, toolLines } from "../registry/generate.ts";
+import { MCP_INTRO, MCP_LINE } from "../registry/mcp.ts";
 import { prepareArguments } from "../stages/args.ts";
 import { RepeatGuard } from "../stages/repeat-guard.ts";
 
@@ -18,10 +21,27 @@ const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const guard = new RepeatGuard();
 const store = new Store();
 
+// The socket to the mod. Claude Code gives the server this session's id and the plugin's data
+// folder; the mod reads the same two and meets it here. Without them, or with a path too long for
+// a Unix socket, an mcp call says why instead of waiting.
+const started = await startBridge({
+  pluginData: process.env.CLAUDE_PLUGIN_DATA ?? "",
+  sessionId: process.env.CLAUDE_CODE_SESSION_ID ?? "",
+});
+
+const mcp: McpLink = "bridge" in started ? started.bridge : {
+  catalog: () => ({ servers: [] }),
+  call: () => Promise.reject(new Error("the bridge is not running")),
+  error: started.error,
+};
+
 const INTRO = "Run one type-checked TypeScript program that calls tools and returns one result. Use it for file reads, searches, shell commands, and any multi-step or parallel work, instead of many separate tool calls.\n\nThe program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call runs in a fresh worker, and the store below is the only state that carries to the next one.\n\nTools inside the program (same names and fields as Claude Code's tools; a single string means the main field):";
 
 // The store globals are not tools: nothing crosses the bridge for them.
 const STORE_INTRO = "\nThe session's store, shared by every fabric_exec call in this session (globals, not tools):";
+
+// The mcp surface comes from the session's catalog; the line says it exists without listing it.
+const MCP_INTRO_LINE = "\n" + MCP_INTRO;
 
 // The tool lines come from the actions themselves; this prose is about the program as a whole.
 const OUTRO = [
@@ -33,7 +53,7 @@ const OUTRO = [
   "Run independent calls together with Promise.all. Search before reading, then read only the range you need. A type error stops the program before it runs and lists line numbers; fix it and call again.",
 ];
 
-export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), STORE_INTRO, ...globalLines(STORE), ...OUTRO].join("\n");
+export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), MCP_INTRO_LINE, MCP_LINE, STORE_INTRO, ...globalLines(STORE), ...OUTRO].join("\n");
 
 // The shape the model may send. Deliberately loose: a program as an array of lines, payloads as
 // JSON text, a display label as a bare string and null optional fields are all repaired by
@@ -80,7 +100,7 @@ export function createServer(): McpServer {
     async (raw) => {
       const parsed = ENVELOPE.safeParse(prepareArguments(raw));
       if (!parsed.success) return { content: [{ type: "text", text: bounded(envelopeError(parsed.error)) }], isError: true };
-      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store });
+      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, guard, store, mcp });
       return { content: [{ type: "text", text: bounded(result.text) }], isError: !result.ok };
     },
   );
@@ -88,5 +108,14 @@ export function createServer(): McpServer {
 }
 
 if (import.meta.main) {
+  if ("bridge" in started) {
+    const bridge = started.bridge;
+    const close = (): void => bridge.close();
+    process.on("exit", close);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { close(); process.exit(0); });
+  } else {
+    // stderr, never stdout: stdout is the MCP stream.
+    console.error("fabric: " + started.error + "; mcp.<server>.<tool>() will refuse");
+  }
   await createServer().connect(new StdioServerTransport());
 }

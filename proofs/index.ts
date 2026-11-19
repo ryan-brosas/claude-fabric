@@ -7,6 +7,7 @@ import { contextKernels, CONTEXT_BUGS } from "./context.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
 import type { Kernel } from "./kernel.ts";
+import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
@@ -37,4 +38,5 @@ export const modules: readonly KernelModule[] = [
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
   { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
+  { stem: "mcp-access", source: "proofs/mcp-access.ts", out: kernel, kernels: mcpAccessKernels as any, bugs: MCP_ACCESS_BUGS },
 ];

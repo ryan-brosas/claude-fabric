@@ -1,5 +1,6 @@
 import { transpile } from "./check.ts";
-import type { Done, HostToWorker, WorkerToHost } from "./protocol.ts";
+import { callMcp, type McpLink } from "./mcp.ts";
+import { MCP_REF, type Done, type HostToWorker, type WorkerToHost } from "./protocol.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import type { AnyAction } from "../registry/action.ts";
 import { parseArgs } from "../registry/generate.ts";
@@ -25,7 +26,7 @@ const FORGED = "protocol: a message without this run's token, or after its done,
 export async function execute(
   code: string,
   cwd: string,
-  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store } = {},
+  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store; mcp?: McpLink } = {},
 ): Promise<Executed> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const js = transpile(code);
@@ -62,10 +63,15 @@ export async function execute(
         calls++;
         let reply: HostToWorker;
         try {
-          const action = ACTIONS.get(msg.ref);
-          if (!action) throw new Error("unknown action " + msg.ref);
-          // A bad argument is this call's rejection, catchable inside the program.
-          reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd }) };
+          // One mcp call is one job to the mod, decided by the access rule before anything leaves.
+          if (msg.ref === MCP_REF) {
+            reply = { kind: "reply", id: msg.id, value: await callMcp(options.mcp, msg.args) };
+          } else {
+            const action = ACTIONS.get(msg.ref);
+            if (!action) throw new Error("unknown action " + msg.ref);
+            // A bad argument is this call's rejection, catchable inside the program.
+            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd }) };
+          }
         } catch (error) {
           reply = { kind: "reply", id: msg.id, error: error instanceof Error ? error.message : String(error) };
         }

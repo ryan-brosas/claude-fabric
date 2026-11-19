@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
 
-// A mod may import only files inside the plugin, and only type declarations from claude-code.
-// The hooks worker refuses anything else, so this test reads the graph with TypeScript's own
-// parser and fails on any.
+// Two rules a mod's source has to keep, both read here with TypeScript's own parser:
+//
+//   1. A mod may import only files inside the plugin, and only type declarations from claude-code.
+//      The hooks worker refuses anything else.
+//   2. `$` is never a value. The hooks compiler refuses a `$` handed to another function or module,
+//      so every `$` call is spelled inside a hook body.
 
 interface Imported { specifier: string; typeOnly: boolean; dynamic: boolean }
 interface Finding { file: string; specifier: string; reason: string }
@@ -43,10 +46,44 @@ function scanSource(file: string, text: string): Finding[] {
   return findings;
 }
 
-// Every module under src/mod, following relative imports from each file found there.
-async function scanMod(root: string): Promise<Finding[]> {
+/** The hooks compiler's words: the rule a failure repeats, because a mod's `$` has one spelling. */
+const DOLLAR_RULE = "$ itself is passed as an argument (bound, passed, spread, returned or read); " +
+  "$ is always spelled $.noun.event(...) at the call site, on is always on(\"<event>\", hook), and " +
+  "next.to always next.to(e, \"<tier>\")";
+
+/** Where the compiler allows a `$`: a hook's own parameter, or the object of `$.noun`. */
+function dollarAllowed(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (ts.isParameter(parent) && parent.name === node) return true;
+  return ts.isPropertyAccessExpression(parent) && parent.expression === node;
+}
+
+/** Every `$` that is a value, each with the rule it broke and the fix. */
+function dollarFindings(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2023, true, ts.ScriptKind.TS);
+  const lines = text.split("\n");
+  const findings: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === "$" && !dollarAllowed(node)) {
+      const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
+      const spelled = (lines[line] ?? "").trim();
+      findings.push(
+        `${file}:${line + 1}:${character + 1} uses \`$\` as a value: ${spelled}\n` +
+        `The hooks compiler refuses it: "${DOLLAR_RULE}".\n` +
+        "Fix: spell the call `$.noun.method(...)` at the call site inside the hook body in " +
+        "src/mod/index.ts, and give a helper in src/mod/bridge.ts plain data to answer with.",
+      );
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return findings;
+}
+
+// Every module under a folder, following relative imports from each file found there.
+async function scanTree<T>(root: string, scan: (file: string, text: string) => T[]): Promise<T[]> {
   const seen = new Set<string>();
-  const findings: Finding[] = [];
+  const findings: T[] = [];
   const queue: string[] = [];
   for await (const file of new Bun.Glob("**/*.{ts,tsx}").scan({ cwd: root })) queue.push(resolve(root, file));
   while (queue.length > 0) {
@@ -54,7 +91,7 @@ async function scanMod(root: string): Promise<Finding[]> {
     if (seen.has(file)) continue;
     seen.add(file);
     const text = await Bun.file(file).text();
-    findings.push(...scanSource(file, text));
+    findings.push(...scan(file, text));
     for (const { specifier, dynamic } of importsOf(text)) {
       if (!dynamic && specifier.startsWith(".")) queue.push(resolve(dirname(file), specifier));
     }
@@ -62,9 +99,47 @@ async function scanMod(root: string): Promise<Finding[]> {
   return findings;
 }
 
+const modRoot = (): string => new URL("../../src/mod/", import.meta.url).pathname;
+
 test("the mod imports only relative files, and only a type from claude-code", async () => {
-  const root = new URL("../../src/mod/", import.meta.url).pathname;
-  expect(await scanMod(root)).toEqual([]);
+  expect(await scanTree(modRoot(), scanSource)).toEqual([]);
+});
+
+test("the mod spells every $ call inside a hook body, and hands no helper a $", async () => {
+  // A `$` handed to another function or module does not load: the compiler refuses it, and
+  // `claude plugin validate` reports it as an error.
+  expect(await scanTree(modRoot(), dollarFindings)).toEqual([]);
+});
+
+const brokenSource = {
+  "passed to another function": 'on("session.start", ($, e, next) => { start($); return next(e); });',
+  "returned": 'on("session.start", ($, e, next) => $);',
+  "spread into an array": 'on("session.start", ($, e, next) => [...$]);',
+  "spread into an object": 'on("session.start", ($, e, next) => ({ ...$, e }));',
+  "stored in a variable": 'on("session.start", ($, e, next) => { const kept = $; return next(e); });',
+  "read through an index": 'on("session.start", ($, e, next) => $["http"]);',
+  "put in an object by shorthand": 'on("session.start", ($, e, next) => ({ $, e }));',
+} as const;
+
+test.each(Object.keys(brokenSource))("the check names the rule when $ is %s", (name) => {
+  const findings = dollarFindings("inline.ts", brokenSource[name as keyof typeof brokenSource]);
+  expect(findings.length).toBeGreaterThan(0);
+  for (const finding of findings) {
+    expect(finding).toContain(DOLLAR_RULE);
+    expect(finding).toContain("Fix: spell the call");
+  }
+});
+
+test("the check allows a hook's parameter and a literal $.noun.method(...) beside it", () => {
+  const text = [
+    'on("session.start", ($, e, next) => {',
+    "  void (async () => {",
+    '    await $.http.fetch("http://bridge/next", { socketPath: "/tmp/s.sock" });',
+    "  })();",
+    "  return next(e);",
+    '}).catch(($, e, next) => next(e));',
+  ].join("\n");
+  expect(dollarFindings("inline.ts", text)).toEqual([]);
 });
 
 test("the scanner flags refused imports wherever they sit", () => {

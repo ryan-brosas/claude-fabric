@@ -36,9 +36,11 @@ Where it stands:
    (`proofs/repeat-guard.ts`) and the output budget's length arithmetic
    (`proofs/output-budget.ts`) are gdp-wired kernels too, compiled into
    `src/stages/verified/generated/`; those two stages decide through the compiled machines.
-5. **Done:** `store`/`load`, the session store a program keeps between calls. **Next, the rest
-   of the map:** `__bun`, `mcp.<server>.<tool>()`, prompt guidance, tool middleware, agents and
-   mesh, in the order architecture.md's probes allow.
+5. **Done:** `store`/`load`, the session store a program keeps between calls, and
+   `mcp.<server>.<tool>()`: a program calls the session's other MCP servers through the mod's
+   `$.mcp.call`, over a Unix socket bridge, and the server keeps no MCP client. **Next, the rest
+   of the map:** `__bun`, prompt guidance, tool middleware, agents and mesh, in the order
+   architecture.md's probes allow.
 6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
    with at most 10% more tokens.
@@ -90,6 +92,12 @@ A changed field changes one provider file. `test/registry/generate.test.ts` prin
 and fails if they drift from `TOOLS`, and `test/server/server.test.ts` calls the tool through
 the real MCP server with a bad argument, so a field the model must fill fails there too.
 
+The mcp surface is printed from runtime data instead: `src/registry/mcp.ts` prints its
+declarations and its one DESCRIPTION line from the session's catalog, and `src/kernel/mcp.ts`
+resolves a call against that same catalog, so a name the check accepts is a name the host
+resolves. The mod API exposes no input schemas for a session's MCP tools, so arguments are one
+loose object in the declarations and the server checks them at dispatch.
+
 ## Check
 
 ```sh
@@ -135,7 +143,8 @@ module in `src/stages/` with its own unit tests in `test/stages/`.
    before anything runs.
 6. **Execute** (`src/kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
    comes back to the host as a message; the host turns the raw arguments into that action's input
-   and runs it. Every message passes the run's gate first (`src/kernel/verified/gate.ts`, rule and
+   and runs it. An `mcp.<server>.<tool>()` call is the one message whose action is not a provider
+   function: `src/kernel/mcp.ts` checks the access rule and sends one job over the bridge. Every message passes the run's gate first (`src/kernel/verified/gate.ts`, rule and
    laws in `proofs/gate.ts`): it must carry the run's token, no tool call is acted on after the
    done, and at most one done is admitted. The Worker is terminated on a timeout or when the call
    ends. The messages are typed in `src/kernel/protocol.ts`.

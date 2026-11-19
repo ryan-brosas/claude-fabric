@@ -75,7 +75,7 @@ const PRINT = [
 
 const HEADER = "// Globals a fabric_exec program sees. Names and fields follow Claude Code's own tools.";
 
-export function guestTypes(actions: readonly AnyAction[], globals: readonly Builtin[] = []): string {
+export function guestTypes(actions: readonly AnyAction[], globals: readonly Builtin[] = [], extras: readonly string[] = []): string {
   const blocks: string[] = [];
   for (const action of actions) {
     const input = schemaOf(action.input);
@@ -102,6 +102,8 @@ export function guestTypes(actions: readonly AnyAction[], globals: readonly Buil
     blocks.push(declarations.join("\n"));
   }
   if (globals.length) blocks.push(globals.map((builtin) => "/** " + builtin.doc + " */\ndeclare " + builtin.signature + ";").join("\n"));
+  // A surface printed from runtime data (the session's MCP catalog) comes in as ready text.
+  for (const extra of extras) blocks.push(extra);
   blocks.push(PRINT);
   return HEADER + "\n\n" + blocks.join("\n\n") + "\n";
 }
