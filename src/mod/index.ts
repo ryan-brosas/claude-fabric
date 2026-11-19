@@ -131,6 +131,14 @@ export const register: Register = (on) => {
     };
   }).catch(($, e, next) => next(e));
 
+  // An MCP server's tools sit behind ToolSearch by default, so the model never sees fabric_exec
+  // until it searches, and the guidance names a tool it cannot call. Pin it into the prompt's list.
+  on("tool.describe", async ($, e, next) => {
+    const described = await next(e);
+    if (e.tool !== FABRIC_EXEC_TOOL) return described;
+    return { ...described, isDeferred: false };
+  }).catch(($, e, next) => next(e));
+
   // The session's tool pool is the catalog a program's mcp calls are checked against, and the
   // engine raises this event again when that pool changes. The answer goes back untouched.
   on("tool.list", async ($, e, next) => {
