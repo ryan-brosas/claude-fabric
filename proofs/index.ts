@@ -14,6 +14,7 @@ import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
 import { STORE_BUGS, storeLimitKernels } from "./store-limits.ts";
+import { TOOL_VISIBILITY_BUGS, toolVisibilityKernels } from "./tool-visibility.ts";
 
 export interface KernelModule {
   /** Generated module stem: `<out>/<stem>.js`. */
@@ -30,6 +31,7 @@ export interface KernelModule {
 const compaction = "src/compaction/verified/generated";
 const stages = "src/stages/verified/generated";
 const kernel = "src/kernel/verified/generated";
+const mod = "src/mod/verified/generated";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const modules: readonly KernelModule[] = [
@@ -43,4 +45,5 @@ export const modules: readonly KernelModule[] = [
   { stem: "mcp-access", source: "proofs/mcp-access.ts", out: kernel, kernels: mcpAccessKernels as any, bugs: MCP_ACCESS_BUGS },
   { stem: "builtin-access", source: "proofs/builtin-access.ts", out: kernel, kernels: builtinAccessKernels as any, bugs: BUILTIN_ACCESS_BUGS },
   { stem: "bridge-binding", source: "proofs/bridge-binding.ts", out: kernel, kernels: bridgeBindingKernels as any, bugs: BRIDGE_BINDING_BUGS },
+  { stem: "tool-visibility", source: "proofs/tool-visibility.ts", out: mod, kernels: toolVisibilityKernels as any, bugs: TOOL_VISIBILITY_BUGS },
 ];

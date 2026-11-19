@@ -16,6 +16,7 @@ import {
   retryDelay,
 } from "./bridge.ts";
 import { compactDeferred } from "./deferred.ts";
+import { fabricOnly, offered } from "./fabric-only.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -25,7 +26,9 @@ import { compactDeferred } from "./deferred.ts";
 // spelled `$.noun.method(...)` at the call site, inside a hook body. So every `$` call is literal
 // here, and src/mod/bridge.ts holds the plain-data helpers these bodies call. test/mod/imports.test.ts
 // refuses the mistake again.
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  // The person's `fabricOnly` option (plugin.json userConfig), read once at load.
+  const programsOnly = fabricOnly(options);
   // Between hook bodies: the catalog to publish, and this session's socket once it is known.
   let state = emptyState();
   let socket: BridgePaths | undefined;
@@ -176,5 +179,13 @@ export const register: Register = (on) => {
       }
     }
     return listed;
+  }).catch(($, e, next) => next(e));
+
+  // With fabricOnly on, the main conversation's model is not offered the tools a program runs
+  // (src/mod/fabric-only.ts). Agents keep them, and the pool is untouched, so $.tool.call too.
+  on("tool.offer", async ($, e, next) => {
+    const answer = await next(e);
+    if (!answer.isOffered || !programsOnly) return answer;
+    return { isOffered: offered(e.tool, { optionOn: programsOnly, agentId: e.agentId, fabricInPool }) };
   }).catch(($, e, next) => next(e));
 };

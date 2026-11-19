@@ -137,7 +137,18 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - After the benchmark, native code mode is turned off with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`,
   not by a mod: hiding `REPL` from the tool list with code mode on put every MCP tool's schema in
   the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool
-  stays visible.
+  stays visible unless the person turns on `fabricOnly`.
+- **`fabricOnly`, off by default** (plugin.json `userConfig`, `src/mod/fabric-only.ts`). pi-fabric's
+  full code mode, cut down: with code mode off, the mod's `tool.offer` hook keeps Bash, Edit, Write,
+  Grep and Glob from the main conversation's model while `fabric_exec` is in the pool. Agents keep
+  every tool, and the pool is untouched, so `$.tool.call` still reaches them; `tool.list` was tried
+  first and removes a tool from the whole session, agents and the mod included. Read stays for images
+  and PDFs, and WebSearch because a program's WebSearch skips the person's permission prompts. The
+  main conversation also loses Bash's background jobs (a program's Bash waits, within the 120 s
+  deadline). It is an option, not the default, because it changes every session. An env var cannot
+  carry it: `$.process.hookEnv` returns only Claude Code's own variables. The rule is a gdp-wired
+  kernel, `proofs/tool-visibility.ts` (5 laws, 6 broken variants refused), and the hook hides a tool
+  only through its compiled verdict. Whether it lowers a task's total is not yet measured.
 
 ## Out of scope
 
