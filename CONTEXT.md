@@ -13,8 +13,10 @@ The TypeScript a model sends in `code`. It is an async function body, so top-lev
 _Avoid_: script, snippet, guest code (except inside the kernel)
 
 **Program tool**:
-A function a program calls: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`. Each has the same
-name and fields as the Claude Code tool. One string means the main field.
+A function a program calls: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`, `WebSearch`. Each has
+the same name and fields as the Claude Code tool. One string means the main field. All but
+`WebSearch` run in the server; `WebSearch` is one of Claude Code's own tools, the only built-in
+a program may call, and runs in the mod.
 _Avoid_: action, pi.read and the other Pi names
 
 **Top-level tool**:

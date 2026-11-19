@@ -10,8 +10,10 @@ import {
   bridgePathProblem,
   bridgePaths,
   isBridgeCatalog,
+  isBuiltinTool,
   isFabricServer,
   splitMcpToolName,
+  type BridgeJob,
 } from "../../src/bridge/contract.ts";
 import { startBridge, type Bridge, type BridgeStart } from "../../src/kernel/bridge/server.ts";
 
@@ -99,6 +101,11 @@ describe("the tool-name spelling", () => {
     expect(isFabricServer("plugin_fabric_fabric")).toBe(true);
     expect(isFabricServer("context7")).toBe(false);
   });
+
+  test("allows exactly one built-in tool through the bridge", () => {
+    expect(isBuiltinTool("WebSearch")).toBe(true);
+    for (const name of ["Agent", "Read", "Bash", "WebFetch", "Skill"]) expect({ name, allowed: isBuiltinTool(name) }).toEqual({ name, allowed: false });
+  });
 });
 
 describe("the catalog the mod sends", () => {
@@ -155,11 +162,30 @@ describe("the bridge over its socket", () => {
     await post(paths.socket, "/next", {}, secret); // the mod is here, and takes nothing yet
     const pending = bridge.call("context7", "resolve-library-id", { libraryName: "react" });
     void pending.catch(() => undefined);
-    const reply = await (await post(paths.socket, "/next", {}, secret)).json() as { job: { id: number; server: string; tool: string; args: unknown } };
-    expect(reply.job).toEqual({ id: 1, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
+    const reply = await (await post(paths.socket, "/next", {}, secret)).json() as { job: BridgeJob };
+    expect(reply.job).toEqual({ kind: "mcp", id: 1, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
     const result = { content: [{ type: "text", text: "Found." }], isError: false };
     expect(await (await answer(paths.socket, secret, { id: 1, ok: true, result })).json()).toEqual({ ok: true });
     expect(await pending).toEqual(result);
+  });
+
+  test("carries a built-in tool job on the same queue, and its answer back", async () => {
+    const { bridge, paths } = await serve({ pollMs: 200 });
+    const secret = await secretOf(paths);
+    await post(paths.socket, "/next", {}, secret); // the mod is here, and takes nothing yet
+    const pending = bridge.tool("WebSearch", { query: "pi fabric", mode: "standard" });
+    void pending.catch(() => undefined);
+    const reply = await (await post(paths.socket, "/next", {}, secret)).json() as { job: BridgeJob };
+    expect(reply.job).toEqual({ kind: "builtin", id: 1, tool: "WebSearch", input: { query: "pi fabric", mode: "standard" } });
+    const value = { result: { query: "pi fabric", results: [] }, text: "No results." };
+    expect(await (await answer(paths.socket, secret, { id: 1, ok: true, result: value })).json()).toEqual({ ok: true });
+    expect(await pending).toEqual(value);
+  });
+
+  test("a built-in tool call fails at once when no mod ever polled, naming the built-in tools", async () => {
+    const { bridge } = await serve();
+    await expect(bridge.tool("WebSearch", { query: "x" }))
+      .rejects.toThrow("no Fabric mod is connected in this session, so Claude Code's built-in tools cannot be reached");
   });
 
   test("takes a call while the mod's poll is parked, and answers in the same poll", async () => {
@@ -191,6 +217,12 @@ describe("the bridge over its socket", () => {
     const start = performance.now();
     await expect(bridge.call("context7", "x", {})).rejects.toThrow("no Fabric mod is connected in this session");
     expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  test("a built-in tool call fails at its own limit when the mod stops answering", async () => {
+    const { bridge, paths } = await serve({ pollMs: 20, answerTimeoutMs: 120 });
+    await post(paths.socket, "/next", {}, await secretOf(paths)); // the mod is here, and takes nothing
+    await expect(bridge.tool("WebSearch", { query: "x" })).rejects.toThrow("did not answer within 120ms");
   });
 
   test("fails at its own limit when the mod stops answering", async () => {

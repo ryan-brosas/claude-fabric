@@ -32,6 +32,8 @@ interface Fake {
   $: Record<string, unknown>;
   requests: Request[];
   asked: Asked[];
+  /** Every built-in tool call the mod made, as the input it passed `$.tool.call`. */
+  ran: Record<string, unknown>[];
   waits: number[];
   deliver: (job: unknown) => void;
   refuse: (times: number) => void;
@@ -40,6 +42,7 @@ interface Fake {
 function fake(pluginData = "/data/plugins"): Fake {
   const requests: Request[] = [];
   const asked: Asked[] = [];
+  const ran: Record<string, unknown>[] = [];
   const waits: number[] = [];
   const jobs: unknown[] = [];
   const parked: ((job: unknown) => void)[] = [];
@@ -68,6 +71,12 @@ function fake(pluginData = "/data/plugins"): Fake {
         return { content: [{ type: "text", text: "answered" }], isError: false };
       },
     },
+    tool: {
+      call: async (input: Record<string, unknown>) => {
+        ran.push(input);
+        return { result: { query: input.query, results: [] }, text: "A web answer." };
+      },
+    },
     http: {
       fetch: async (url: string, init: { headers: Record<string, string>; body: string; socketPath?: string }) => {
         if (refusals > 0) {
@@ -87,6 +96,7 @@ function fake(pluginData = "/data/plugins"): Fake {
     $,
     requests,
     asked,
+    ran,
     waits,
     deliver: (job) => {
       const waiter = parked.shift();
@@ -176,12 +186,24 @@ describe("the plain data the hook bodies hand around", () => {
     });
   });
 
-  test("a poll's job is read whole, and a body that is not one is no job", () => {
-    expect(jobOf('{"job":{"id":7,"server":"context7","tool":"x","args":{"a":1}}}'))
-      .toEqual({ id: 7, server: "context7", tool: "x", args: { a: 1 } });
-    expect(jobOf('{"job":{"id":8,"server":"context7","tool":"x"}}'))
-      .toEqual({ id: 8, server: "context7", tool: "x", args: {} });
-    for (const text of ['{"job":null}', "{}", "not json", '{"job":{"id":"7","server":"s","tool":"t"}}', '{"job":{"id":7,"tool":"t"}}']) {
+  test("a poll's job is read whole, in both kinds, and a body that is not one is no job", () => {
+    expect(jobOf('{"job":{"kind":"mcp","id":7,"server":"context7","tool":"x","args":{"a":1}}}'))
+      .toEqual({ kind: "mcp", id: 7, server: "context7", tool: "x", args: { a: 1 } });
+    expect(jobOf('{"job":{"kind":"mcp","id":8,"server":"context7","tool":"x"}}'))
+      .toEqual({ kind: "mcp", id: 8, server: "context7", tool: "x", args: {} });
+    expect(jobOf('{"job":{"kind":"builtin","id":9,"tool":"WebSearch","input":{"query":"pi"}}}'))
+      .toEqual({ kind: "builtin", id: 9, tool: "WebSearch", input: { query: "pi" } });
+    expect(jobOf('{"job":{"kind":"builtin","id":10,"tool":"WebSearch"}}'))
+      .toEqual({ kind: "builtin", id: 10, tool: "WebSearch", input: {} });
+    for (const text of [
+      '{"job":null}', "{}", "not json",
+      '{"job":{"id":"7","server":"s","tool":"t"}}',
+      '{"job":{"kind":"mcp","id":7,"tool":"t"}}',
+      '{"job":{"kind":"builtin","id":7}}',
+      // A job of no known kind is not run on a guess.
+      '{"job":{"id":7,"server":"s","tool":"t","args":{}}}',
+      '{"job":{"kind":"other","id":7,"tool":"t"}}',
+    ]) {
       expect({ text, job: jobOf(text) }).toEqual({ text, job: undefined });
     }
   });
@@ -215,7 +237,7 @@ describe("the mod's socket loop", () => {
     expect(catalog?.socketPath).toBe(paths.socket);
     expect(harness.requests.find((request) => request.path === "/next")?.socketPath).toBe(paths.socket);
 
-    harness.deliver({ id: 7, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
+    harness.deliver({ kind: "mcp", id: 7, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
     await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
     expect(harness.asked).toEqual([{ server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } }]);
     expect(harness.requests.find((request) => request.path === "/answer")?.body).toEqual({
@@ -230,9 +252,51 @@ describe("the mod's socket loop", () => {
     const harness = fake("/data/plugins");
     harness.$.mcp = { call: async () => { throw new Error("the server needs sign-in"); } };
     await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
-    harness.deliver({ id: 9, server: "context7", tool: "resolve-library-id", args: {} });
+    harness.deliver({ kind: "mcp", id: 9, server: "context7", tool: "resolve-library-id", args: {} });
     await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
     expect(harness.requests.find((request) => request.path === "/answer")?.body).toEqual({ id: 9, ok: false, error: "the server needs sign-in" });
+  });
+
+  test("a built-in tool job is run with `$.tool.call`, and its answer carries what that returned", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    harness.deliver({ kind: "builtin", id: 11, tool: "WebSearch", input: { query: "pi fabric", mode: "standard" } });
+    await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
+    // One literal call, with the job's own name and its input spread beside it.
+    expect(harness.ran).toEqual([{ tool: "WebSearch", query: "pi fabric", mode: "standard" }]);
+    expect(harness.asked).toEqual([]);
+    expect(harness.requests.find((request) => request.path === "/answer")?.body).toEqual({
+      id: 11,
+      ok: true,
+      result: { result: { query: "pi fabric", results: [] }, text: "A web answer." },
+    });
+  });
+
+  test("the mod's own wall refuses a built-in tool the host's allowlist does not hold", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    harness.deliver({ kind: "builtin", id: 12, tool: "Agent", input: { description: "d", prompt: "p" } });
+    await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
+    expect(harness.ran).toEqual([]);
+    expect(harness.requests.find((request) => request.path === "/answer")?.body).toEqual({
+      id: 12,
+      ok: false,
+      error: 'the Fabric mod runs no built-in tool named "Agent"; a program may call only WebSearch',
+    });
+  });
+
+  test("a tool key inside a WebSearch job's input cannot name another tool", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    harness.deliver({ kind: "builtin", id: 13, tool: "WebSearch", input: { query: "q", tool: "Bash", command: "id" } });
+    await waitFor(() => harness.requests.some((request) => request.path === "/answer"));
+    expect(harness.ran.map((call) => (call as { tool: string }).tool)).toEqual(["WebSearch"]);
   });
 
   test("a socket that is not up yet is asked again, and the wait grows", async () => {
@@ -265,7 +329,7 @@ describe("the mod's socket loop", () => {
     await Bun.sleep(50); // let the loop and the hook settle their one publish
     const before = harness.requests.filter((request) => request.path === "/catalog").length;
     harness.$.fs = { read: async () => "a-new-secret\n" };
-    harness.deliver({ id: 3, server: "context7", tool: "resolve-library-id", args: {} });
+    harness.deliver({ kind: "mcp", id: 3, server: "context7", tool: "resolve-library-id", args: {} });
     await waitFor(() => harness.requests.filter((request) => request.path === "/catalog").length > before);
     const last = harness.requests.filter((request) => request.path === "/catalog").at(-1);
     expect(last?.secret).toBe("a-new-secret");
@@ -279,7 +343,7 @@ describe("the mod's socket loop", () => {
     harness.$.ui = { log: (line: string) => logs.push(line) };
     await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
     await waitFor(() => logs.length > 0);
-    expect(logs).toEqual(["fabric: CLAUDE_PLUGIN_DATA is empty, so mcp.<server>.<tool>() cannot reach this session's MCP servers"]);
+    expect(logs).toEqual(["fabric: CLAUDE_PLUGIN_DATA is empty, so mcp.<server>.<tool>() and WebSearch cannot reach this session's tools"]);
     expect(harness.requests).toEqual([]);
   });
 });

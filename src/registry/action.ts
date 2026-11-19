@@ -1,7 +1,16 @@
 import type { z } from "zod";
 
+/** The way a tool that runs inside Claude Code reaches the mod: one job, and its raw answer. */
+export interface BuiltinToolLink {
+  call(tool: string, input: Record<string, unknown>): Promise<unknown>;
+}
+
 // What a program tool's run() may use besides its own input.
-export interface ActionContext { cwd: string }
+export interface ActionContext {
+  cwd: string;
+  /** Claude Code's built-in tools, gated by the host's allowlist. Absent when the run has no bridge. */
+  builtin?: BuiltinToolLink;
+}
 
 // One program tool, defined once. Guest types, the model-facing description and the runtime
 // argument check are all generated from this (see generate.ts).

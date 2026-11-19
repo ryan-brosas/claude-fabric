@@ -3,6 +3,7 @@
 // The registered kernels. Each module is proved, refused in every broken
 // variant, cross-checked against its builders, and compiled to
 // `<out>/<module>.js`.
+import { BUILTIN_ACCESS_BUGS, builtinAccessKernels } from "./builtin-access.ts";
 import { contextKernels, CONTEXT_BUGS } from "./context.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
@@ -39,4 +40,5 @@ export const modules: readonly KernelModule[] = [
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
   { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
   { stem: "mcp-access", source: "proofs/mcp-access.ts", out: kernel, kernels: mcpAccessKernels as any, bugs: MCP_ACCESS_BUGS },
+  { stem: "builtin-access", source: "proofs/builtin-access.ts", out: kernel, kernels: builtinAccessKernels as any, bugs: BUILTIN_ACCESS_BUGS },
 ];

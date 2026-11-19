@@ -46,12 +46,16 @@ Probed 2026-11-18 on Claude Code 2.1.327 with a throwaway mod loaded through `--
     A server tool waited 15 ms for a built-in Read this way. The loop runs outside the 10 s hook
     budget. Before the server listens and after it exits, the fetch is ECONNREFUSED, so the
     loop retries.
+  - `await $.tool.call({ tool: "WebSearch", query: "..." })` from the mod answers `{ result, text }`:
+    `result` is `{ query, results: [{ tool_use_id, content: [{ title, url, snippet? }] } | string],
+    durationSeconds, searchCount? }`, and `text` is the plain string the model would see. `mode`
+    may be left out.
   - Built on those probes: the bridge is the plugin's own. The server listens on
     `<CLAUDE_PLUGIN_DATA>/bridge/<session id>.sock`, writes a per-session secret beside it (0600)
     that every request must carry, and fails an mcp call at once when no mod is polling. The mod's
-    loop reads the secret with `$.fs`, long-polls `/next`, runs the job with `$.mcp.call` and
-    posts `/answer`. The catalog of connected MCP servers rides the same socket, sent by the
-    mod's `tool.list` hook, which the engine raises again when the tool pool changes.
+    loop reads the secret with `$.fs`, long-polls `/next`, runs the job with `$.mcp.call` or
+    `$.tool.call` and posts `/answer`. The catalog of connected MCP servers rides the same socket,
+    sent by the mod's `tool.list` hook, which the engine raises again when the tool pool changes.
 
 The rest of the table below comes from the generated mod types
 (`.claude-plugin/types/claude-code/index.d.ts`, written by Claude Code for its own version) and
@@ -66,6 +70,21 @@ catalog holds, and never this plugin's own server, sends a job. The job goes ove
 mod runs it with `$.mcp.call` on Claude Code's own connection and posts the raw result back; the
 host turns it into the call's value. The server starts no MCP client of its own.
 
+## How a WebSearch travels
+
+A program's `WebSearch({ query, ... })` is an ordinary program tool in `src/providers/tools/`, so
+the registry prints its types, its tool line and its argument check from the one definition. Its
+`run` does not run in the server: the host asks the access machine
+([proofs/builtin-access.ts](../../proofs/builtin-access.ts)) and, only for a tool the fixed
+allowlist holds (`BUILTIN_TOOLS` in `src/bridge/contract.ts`, whose one entry is `WebSearch`),
+sends a built-in tool job down the mcp call's own queue and answer path. The mod answers it with
+one literal `$.tool.call({ tool: job.tool, ...job.input })` and posts back `{ result, text }`;
+the program's value is `{ text, results }`, the hits flattened out of `result.results`, and
+`mode` defaults to `"standard"`. The mod checks the same allowlist again before it calls
+anything, so a host bug is not a second way to a built-in tool. `Agent` and every other built-in
+stay top-level only: `$.tool.call` skips the person's permission prompts and deny rules, so the
+list is the user's decision ([decisions.md](decisions.md)).
+
 ## pi-fabric part by part
 
 | pi-fabric part | Pi surface it uses | Claude Code surface | Status |
@@ -76,7 +95,7 @@ host turns it into the call's value. The server starts no MCP client of its own.
 | Prompt guidance (`core/prompt-guidance`, `core-override-guidance`) | `before_agent_start` | `prompt.section`, `prompt.compose` | fires (proven); rewrite documented |
 | Tool middleware (`tool_call`, `tool_result`, bash errors, capture) | `tool_call`, `tool_result` | `tool.call` (rewrite, deny, answer), `session.append` door `tool-result` | documented |
 | Tool ownership and full code mode | `context_with_system` | `tool.describe` (`isDeferred`), `tool.call` deny, `agent.offer` | hiding built-ins proven (`tool.list`); the hidden tool is gone for the mod too |
-| Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, over the socket bridge | bridge and `$.tool.call` (Read) proven; WebSearch and Agent untried |
+| Top-level tools inside programs (WebSearch, Agent) | `pi.*` providers | `$.tool.call` from the mod, over the socket bridge | WebSearch built behind the allowlist, over the jobs an mcp call uses; Read and WebSearch proven; Agent stays out |
 | `mcp.<server>.<tool>()` (the MCP provider) | provider descriptors, the guest `mcp` proxy | `$.mcp.call` from the mod, over the bridge; the catalog from the `tool.list` hook | built |
 | Input transforms (pasted images) | `input` | `prompt.submit` can rewrite text; its attachment list is pinned, so adding image blocks is not covered | gap for images; text documented |
 | Agents and actors | Pi child processes | `$.agent.spawn/call/list`, `agent.spawn` hook | documented |
@@ -102,16 +121,17 @@ src/
                 sections, tool middleware, commands, UI; index.ts holds every $ call and the
                 socket loop, bridge.ts the pure helpers the hook bodies call
   server/       binding 2, MCP: fabric_exec and the mod's heavy calls
-  kernel/       check -> stages -> execute -> bound; mcp.ts dispatches a program's mcp call;
-                bridge/ is the server's half of the socket; executors/
-  bridge/       the socket contract both halves read: paths, the secret header, catalog, job,
-                answer, and the mcp tool-name spelling
+  kernel/       check -> stages -> execute -> bound; mcp.ts dispatches a program's mcp call,
+                builtin.ts a program's built-in tool call; bridge/ is the server's half of the
+                socket; executors/
+  bridge/       the socket contract both halves read: paths, the secret header, catalog, both job
+                kinds, answer, the mcp tool-name spelling and the built-in allowlist
   registry/     defineAction({ name, doc, input, output, positional, run }), and defineBuiltin
                 for a guest global that is not a tool; generates guest types, the DESCRIPTION lines
                 and the argument check. mcp.ts prints the mcp surface from the session's catalog
                 and resolves a call against it
-  providers/    one folder per namespace: tools/ (Read..Bash), store (the store/load globals),
-                then agents, ...
+  providers/    one folder per namespace: tools/ (Read..Bash, WebSearch), store (the store/load
+                globals), then agents, ...
   stages/       pure stages: args, code repair, type guidance, repeat guard, budget, the store's
                 limits and commit
   compaction/   the deterministic compactor, pure
@@ -142,7 +162,7 @@ test/           mirrors src/
 
 ## Open probes
 
-- Whether `$.tool.call` runs WebSearch and Agent for a program (Read works).
+- Whether `$.tool.call` runs Agent for a program (Read and WebSearch do).
 - Whether `session.append` door `compaction` fires for core's own compaction (it did not in the
   first probe).
 

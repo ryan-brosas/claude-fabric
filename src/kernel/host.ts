@@ -1,3 +1,4 @@
+import type { BuiltinLink } from "./builtin.ts";
 import { check } from "./check.ts";
 import { execute } from "./execute.ts";
 import type { McpLink } from "./mcp.ts";
@@ -27,6 +28,8 @@ export interface RunOptions {
   store?: Store;
   /** The session's MCP link: the catalog the check prints from and the socket a call crosses. */
   mcp?: McpLink;
+  /** The session's bridge to Claude Code's built-in tools: the socket a WebSearch crosses. */
+  builtin?: BuiltinLink;
 }
 
 export interface RunResult { ok: boolean; text: string; ms: { check: number; run: number }; calls: number }

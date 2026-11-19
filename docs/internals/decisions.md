@@ -57,6 +57,20 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   name a program writes resolves its exact raw server or tool first, then a sanitized alias, so
   `mcp["a_b"]` reaches the server really named `a_b` even when `a-b` is also connected, and the
   lookup's answer is a tag, so a server or tool really named `none` is still callable.
+- **A program reaches one built-in tool, WebSearch, and nothing else** (the user's call,
+  2026-11-19). The mod's `$.tool.call` skips the person's permission prompts and deny rules: it
+  runs the tool as the plugin, with nobody asked. So a program that could name a built-in tool at
+  all could reach every one of them, `Agent` included. The list is fixed in
+  `src/bridge/contract.ts` (`BUILTIN_TOOLS`, whose one entry is `WebSearch`); the host sends a
+  job only through the gdp-wired access rule
+  ([proofs/builtin-access.ts](../../proofs/builtin-access.ts)), and the mod refuses a job naming
+  any other tool before it calls one, so a host bug is not a second way in. `Agent` and the rest
+  stay top-level only. A program's `WebSearch({ query, allowed_domains?, blocked_domains?,
+  mode? })` keeps Claude Code's own name and fields, defaults `mode` to `"standard"` (an
+  `"extended"` search costs several times more) and returns `{ text, results }`: the text the
+  model would read, and the hits flattened out of `result.results`. Both job kinds ride one queue
+  and one answer path, so a call fails the same way whether the mod is absent, slow or refused the
+  job.
 - **The mod spells every `$` call inside a hook body.** The hooks compiler refuses a `$` bound,
   passed, spread, returned or read, so a `$` cannot be handed to a helper or another module: the
   loop and every `$.http.fetch`, `$.mcp.call`, `$.process.hookEnv`, `$.fs.read` and `$.session.id` sit

@@ -7,10 +7,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { BRIDGE_HEADER, bridgePaths, type BridgeAnswer, type BridgeCatalog, type BridgeJob } from "../../src/bridge/contract.ts";
+import { BRIDGE_HEADER, bridgePaths, type BridgeAnswer, type BridgeCatalog, type BridgeJob, type McpJob } from "../../src/bridge/contract.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
 const SESSION = "fabric-mcp-test";
+
+/** The MCP half of a job: these tests answer only MCP calls. */
+const mcpJob = (job: BridgeJob): McpJob => {
+  if (job.kind !== "mcp") throw new Error("this test answers only MCP jobs");
+  return job;
+};
 
 const CATALOG: BridgeCatalog = {
   servers: [
@@ -125,19 +131,19 @@ test("a program calls a connected server's tool, and gets its text and structure
   const result = await call('return await mcp.context7.resolve_library_id({ libraryName: "react" });');
   expect(result.isError).toBe(false);
   expect(JSON.parse(result.text)).toEqual({ text: "Found: /facebook/react\nsecond block", structuredContent: { id: "/facebook/react" } });
-  expect(received.at(-1)).toEqual({ id: 1, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
+  expect(received.at(-1)).toEqual({ kind: "mcp", id: 1, server: "context7", tool: "resolve-library-id", args: { libraryName: "react" } });
 });
 
 test("the sanitized key and the bracket key reach the same server and tool", async () => {
-  answer = (job) => ({ id: job.id, ok: true, result: { content: [{ type: "text", text: job.server + "/" + job.tool }], isError: false } });
+  answer = (job) => ({ id: job.id, ok: true, result: { content: [{ type: "text", text: mcpJob(job).server + "/" + mcpJob(job).tool }], isError: false } });
   const result = await call('return [await mcp.claude_ai_Gmail.list_messages(), await mcp["claude.ai Gmail"].list_messages()];');
   expect(result.isError).toBe(false);
   expect(JSON.parse(result.text)).toEqual([{ text: "claude.ai Gmail/list_messages" }, { text: "claude.ai Gmail/list_messages" }]);
-  expect(received.slice(-2).map((job) => job.server)).toEqual(["claude.ai Gmail", "claude.ai Gmail"]);
+  expect(received.slice(-2).map((job) => mcpJob(job).server)).toEqual(["claude.ai Gmail", "claude.ai Gmail"]);
 });
 
 test("parallel mcp calls are parallel jobs, and each answer comes back to its own call", async () => {
-  answer = (job) => ({ id: job.id, ok: true, result: { content: [{ type: "text", text: job.server + "/" + job.tool }], isError: false } });
+  answer = (job) => ({ id: job.id, ok: true, result: { content: [{ type: "text", text: mcpJob(job).server + "/" + mcpJob(job).tool }], isError: false } });
   const result = await call('const [a, b] = await Promise.all([mcp.context7.resolve_library_id({ libraryName: "a" }), mcp.claude_ai_Gmail.list_messages()]); return [a.text, b.text];');
   expect(result.isError).toBe(false);
   expect(JSON.parse(result.text)).toEqual(["context7/resolve-library-id", "claude.ai Gmail/list_messages"]);

@@ -7,6 +7,7 @@
 import type { ToolInfo } from "claude-code";
 import {
   BRIDGE_HEADER,
+  BUILTIN_TOOLS,
   RETRY_MS,
   isFabricServer,
   splitMcpToolName,
@@ -89,20 +90,42 @@ export function publishPlan(state: BridgeState): { path: string; body: BridgeCat
   return { path: "/catalog", body: state.catalog, version: state.version };
 }
 
-/** The job a poll's body carries, or undefined while the poll found none. */
+const objectOrEmpty = (value: unknown): Record<string, unknown> =>
+  (typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {});
+
+/**
+ * The job a poll's body carries, or undefined while the poll found none. Two kinds ride the one
+ * queue: an MCP call, which the mod runs with `$.mcp.call`, and a built-in tool call, which it
+ * runs with `$.tool.call`. A body of neither shape is no job.
+ */
 export const jobOf = (text: string): BridgeJob | undefined => {
   try {
     const body = JSON.parse(text) as { job?: unknown };
     const job = body.job;
     if (typeof job !== "object" || job === null) return undefined;
     const record = job as Record<string, unknown>;
-    if (typeof record.id !== "number" || typeof record.server !== "string" || typeof record.tool !== "string") return undefined;
-    const args = typeof record.args === "object" && record.args !== null ? record.args as Record<string, unknown> : {};
-    return { id: record.id, server: record.server, tool: record.tool, args };
+    if (typeof record.id !== "number" || typeof record.tool !== "string") return undefined;
+    if (record.kind === "mcp") {
+      if (typeof record.server !== "string") return undefined;
+      return { kind: "mcp", id: record.id, server: record.server, tool: record.tool, args: objectOrEmpty(record.args) };
+    }
+    if (record.kind === "builtin") {
+      return { kind: "builtin", id: record.id, tool: record.tool, input: objectOrEmpty(record.input) };
+    }
+    return undefined;
   } catch {
     return undefined;
   }
 };
+
+/**
+ * Why the mod refuses a built-in job: the tool is not on the host's fixed list. The host never
+ * sends one; the mod checks again so a host bug is not a second way to a tool that skips the
+ * person's permission prompts and deny rules.
+ */
+export const refusedBuiltin = (tool: string): string =>
+  "the Fabric mod runs no built-in tool named " + JSON.stringify(tool) + "; a program may call only " +
+  BUILTIN_TOOLS.join(", ");
 
 /** The answer to a job the mod ran: Claude Code's own MCP result, untouched. */
 export const answerOf = (id: number, result: unknown): BridgeAnswer => ({ id, ok: true, result });

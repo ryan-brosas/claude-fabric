@@ -1,6 +1,6 @@
 import type { Register } from "claude-code";
 import { compact } from "../compaction/compact.ts";
-import { bridgePathProblem, bridgePaths, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
+import { bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
 import {
   answerOf,
   emptyState,
@@ -10,12 +10,14 @@ import {
   notedSecret,
   notedTools,
   publishPlan,
+  refusedBuiltin,
   requestOf,
   retryDelay,
 } from "./bridge.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
-// mcp.<server>.<tool>() reach Claude Code's own MCP connections.
+// mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
+// Code's own search tool.
 //
 // The hooks compiler refuses a `$` that is bound, passed, spread, returned or read: `$` is always
 // spelled `$.noun.method(...)` at the call site, inside a hook body. So every `$` call is literal
@@ -53,7 +55,7 @@ export const register: Register = (on) => {
         .then((env) => env.CLAUDE_PLUGIN_DATA ?? "")
         .catch(() => "");
       if (data === "") {
-        say("CLAUDE_PLUGIN_DATA is empty, so mcp.<server>.<tool>() cannot reach this session's MCP servers");
+        say("CLAUDE_PLUGIN_DATA is empty, so mcp.<server>.<tool>() and WebSearch cannot reach this session's tools");
         return;
       }
       const sessionId = await $.session.id().catch(() => "");
@@ -89,7 +91,15 @@ export const register: Register = (on) => {
             void (async () => {
               let answer: BridgeAnswer;
               try {
-                answer = answerOf(job.id, await $.mcp.call(job.server, job.tool, job.args));
+                if (job.kind === "mcp") {
+                  answer = answerOf(job.id, await $.mcp.call(job.server, job.tool, job.args));
+                } else if (!isBuiltinTool(job.tool)) {
+                  // The second wall: the host's allowlist decides which tool a job may name, and
+                  // the mod refuses every other name before it reaches `$.tool.call`.
+                  answer = failureOf(job.id, new Error(refusedBuiltin(job.tool)));
+                } else {
+                  answer = answerOf(job.id, await $.tool.call({ ...job.input, tool: job.tool }));
+                }
               } catch (error) {
                 answer = failureOf(job.id, error);
               }
