@@ -4,14 +4,20 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 ## Shape
 
-- **A new lean codebase that follows Fabric's design.** It is not a fork. Copy only the Pi-free
-  modules that make `fabric_exec` correct itself (argument prepare, code repair, output budget,
-  type-error guidance, type checker), with MIT credit to pi-fabric.
+- **A port of pi-fabric's whole runtime to Claude Code** (the user's call, 2026-11-18). It is
+  not a fork: each part is rebuilt on the Claude Code surface that fits it, copying Pi-free modules
+  with MIT credit. [architecture.md](architecture.md) maps every part to its surface and marks
+  what is proven, documented or a gap.
+- **A mod plus an MCP server.** The mod runs inside Claude Code and handles compaction, prompt
+  sections, tool middleware, commands and UI. The MCP server serves `fabric_exec` and does the
+  heavy work. The mod stays thin because of its 10 s hook budget and import limits.
+- **Fabric's compactor replaces Claude Code's.** A `session.compact` hook that returns
+  `{ messages }` answers in core's place, with no model call (proven 2026-11-18).
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
-- **An MCP server is the only way in.** A plugin can add a tool the model sees only through an
-  MCP server. Claude passes `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` to it, so no hook
-  is needed.
+- **`fabric_exec` stays an MCP tool.** Claude passes `CLAUDE_PROJECT_DIR` and
+  `CLAUDE_CODE_SESSION_ID` to the server. A mod can also register tools, but the type checker and
+  Worker can't run inside the hooks worker.
 - **A fresh Bun Worker per call.** It costs about 1.3 ms, against 14 ms for `Bun.spawn`. Node's
   `vm` is faster but gives no thread to terminate. `terminate()` handles timeouts.
 - **A warm type checker in the server, run before every call.**
@@ -42,5 +48,7 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 
 ## Out of scope
 
-Agents, actors, mesh, state, schema, components, memory, Python, Fabric's MCP client
-(mcporter), extension capture, Fabric compaction, cache warming and a TUI.
+What Claude Code gives a plugin no surface for: custom model providers and Jev auth, cache
+warming leases, per-request context projection (Pi's `context` event), and Pi's session tree.
+Pi's TUI is not ported; UI is rebuilt on mod elements. Revisit a gap when Claude Code adds the
+surface.

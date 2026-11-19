@@ -1,9 +1,9 @@
 # claude-fabric
 
-A Claude Code plugin that brings [pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s
-`fabric_exec` to Claude Code. The goal is for Claude to use it instead of Claude Code's native
-code mode. It has to earn that in the benchmark (step 4 below); until then, that it saves tokens
-is a hypothesis.
+A Claude Code plugin that ports [pi-fabric](https://github.com/fabric-runtime/pi-fabric)'s
+runtime to Claude Code, starting with `fabric_exec` and its compactor. The goal is for Claude to
+use `fabric_exec` instead of Claude Code's native code mode. It has to earn that in the benchmark
+(step 6 below); until then, that it saves tokens is a hypothesis.
 
 ## What we're building
 
@@ -14,25 +14,30 @@ is a hypothesis.
   contents and command output it only passes through never enter Claude's context.
 - **Checked before it runs.** Every program is type-checked first. A type error comes back with
   line numbers, and no tool call has happened.
-- **Shipped as a plugin.** A Claude Code plugin can add a tool only through an MCP server, so
-  the plugin starts one MCP server (`server/`) with one tool. The tool shows up as
-  `mcp__plugin_fabric_fabric__fabric_exec`.
-- **Only `fabric_exec` from pi-fabric.** pi-fabric is a whole runtime for the Pi agent (agents,
-  actors, mesh, workflows, memory). We take `fabric_exec` and the modules that make it correct
-  itself, and nothing else. Pi names (`pi.read`, `pi.bash`) never appear.
+- **Shipped as a plugin with two parts.** An MCP server serves `fabric_exec` (it shows up as
+  `mcp__plugin_fabric_fabric__fabric_exec`) and does the heavy work. A mod runs inside Claude
+  Code for what Pi did with `pi.on(...)`: compaction, prompt sections, tool middleware, commands
+  and UI. [docs/internals/architecture.md](docs/internals/architecture.md) maps every pi-fabric
+  part to its Claude Code surface.
+- **All of pi-fabric that Claude Code has a surface for.** Pi names (`pi.read`, `pi.bash`)
+  never appear.
 
 Where it stands:
 
 1. **Done:** the kernel (check, fresh Bun Worker per call, bounded result), the MCP server and
    plugin, and Claude Code tool names inside programs.
-2. **Next:** port pi-fabric's self-correcting modules: argument repair, code repair, output
-   budget, type-error guidance and a repeat guard. Copy them with MIT credit.
-3. **Then:** `store`/`load` between calls, `__bun` with logged writes and spawns, and
-   `mcp.<server>.<tool>()` inside programs.
-4. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
+2. **Next:** move to the `src/` layout in architecture.md, with the action registry and an
+   empty mod that loads.
+3. **Then compaction:** port the deterministic compactor into `src/compaction/` and answer
+   `session.compact` with it.
+4. **Then** the self-correcting stages (argument repair, code repair, output budget, type-error
+   guidance, repeat guard), copied with MIT credit.
+5. **Then the rest of the map:** `store`/`load`, `__bun`, `mcp.<server>.<tool>()`, prompt
+   guidance, tool middleware, agents and mesh, in the order architecture.md's probes allow.
+6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
    the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
    with at most 10% more tokens.
-5. **Last:** turn native code mode off and run the benchmark again.
+7. **Last:** turn native code mode off and run the benchmark again.
 
 Each step's details and the things we chose not to build are in
 [docs/internals/decisions.md](docs/internals/decisions.md).
