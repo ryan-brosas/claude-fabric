@@ -127,6 +127,19 @@ export const refusedBuiltin = (tool: string): string =>
   "the Fabric mod runs no built-in tool named " + JSON.stringify(tool) + "; a program may call only " +
   BUILTIN_TOOLS.join(", ");
 
+/**
+ * Whether the server accepted the mod's receipt for a job: only then does the mod run it. A job
+ * the server already failed (its receipt limit passed) or never handed out is not run, so no call
+ * a program gave up on runs late.
+ */
+export const receiptAccepted = (text: string): boolean => {
+  try {
+    return (JSON.parse(text) as { ok?: unknown }).ok === true;
+  } catch {
+    return false;
+  }
+};
+
 /** The answer to a job the mod ran: Claude Code's own MCP result, untouched. */
 export const answerOf = (id: number, result: unknown): BridgeAnswer => ({ id, ok: true, result });
 

@@ -8,6 +8,7 @@ import { BUILTIN_ACCESS_BUGS, builtinAccessKernels } from "./builtin-access.ts";
 import { contextKernels, CONTEXT_BUGS } from "./context.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
+import { JOB_RECEIPT_BUGS, jobReceiptKernels } from "./job-receipt.ts";
 import type { Kernel } from "./kernel.ts";
 import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
 import { OFFER_MEMO_BUGS, offerMemoKernels } from "./offer-memo.ts";
@@ -45,6 +46,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
   { stem: "mcp-access", source: "proofs/mcp-access.ts", out: kernel, kernels: mcpAccessKernels as any, bugs: MCP_ACCESS_BUGS },
   { stem: "builtin-access", source: "proofs/builtin-access.ts", out: kernel, kernels: builtinAccessKernels as any, bugs: BUILTIN_ACCESS_BUGS },
+  { stem: "job-receipt", source: "proofs/job-receipt.ts", out: kernel, kernels: jobReceiptKernels as any, bugs: JOB_RECEIPT_BUGS },
   { stem: "bridge-binding", source: "proofs/bridge-binding.ts", out: kernel, kernels: bridgeBindingKernels as any, bugs: BRIDGE_BINDING_BUGS },
   { stem: "tool-visibility", source: "proofs/tool-visibility.ts", out: mod, kernels: toolVisibilityKernels as any, bugs: TOOL_VISIBILITY_BUGS },
   { stem: "offer-memo", source: "proofs/offer-memo.ts", out: mod, kernels: offerMemoKernels as any, bugs: OFFER_MEMO_BUGS },

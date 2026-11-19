@@ -11,6 +11,7 @@ import {
   notedSecret,
   notedTools,
   publishPlan,
+  receiptAccepted,
   refusedBuiltin,
   requestOf,
   retryDelay,
@@ -104,6 +105,13 @@ export const register: Register = (on, options) => {
           const job = jobOf(response.text);
           if (job !== undefined) {
             void (async () => {
+              // Confirm the job before running it, and run it only if the server took the receipt:
+              // a job whose call already failed at the receipt limit must not run late.
+              const confirm = requestOf("/receipt", secret, { id: job.id }, paths);
+              const confirmed = await $.http.fetch(confirm.url, confirm.init)
+                .then((reply) => reply.ok && receiptAccepted(reply.text))
+                .catch(() => false);
+              if (!confirmed) return;
               let answer: BridgeAnswer;
               try {
                 if (job.kind === "mcp") {

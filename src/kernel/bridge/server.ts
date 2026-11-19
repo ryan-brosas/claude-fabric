@@ -13,6 +13,7 @@ import {
   type BuiltinJob,
   type McpJob,
 } from "../../bridge/contract.ts";
+import { JobLedger } from "../verified/job-receipt.ts";
 
 // The server's half of the socket: it holds the session's MCP catalog and turns a program's call
 // into one job the mod takes and answers. Two calls cross it: an mcp call, which the mod runs with
@@ -30,6 +31,13 @@ export const ANSWER_TIMEOUT_MS = 60_000;
  */
 export const MOD_GRACE_MS = 5_000;
 
+/**
+ * How long a job handed to the mod's poll may wait for the mod's receipt. The mod confirms a job
+ * before it runs it, so a job whose poll response was lost on the way fails here, never run,
+ * instead of at the answer limit. Fixed; tests pass their own.
+ */
+export const RECEIPT_TIMEOUT_MS = 5_000;
+
 export interface BridgeOptions {
   pluginData: string;
   sessionId: string;
@@ -37,6 +45,8 @@ export interface BridgeOptions {
   answerTimeoutMs?: number;
   /** How long one long poll waits for a job; JOB_WAIT_MS when absent. */
   pollMs?: number;
+  /** How long a handed job waits for the mod's receipt; RECEIPT_TIMEOUT_MS when absent. */
+  receiptTimeoutMs?: number;
 }
 
 /** What the server process holds while it runs: one per session, closed with the process. */
@@ -131,6 +141,7 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
   if (problem !== undefined) return { error: problem };
   const timeoutMs = options.answerTimeoutMs ?? ANSWER_TIMEOUT_MS;
   const pollMs = options.pollMs ?? JOB_WAIT_MS;
+  const receiptMs = options.receiptTimeoutMs ?? RECEIPT_TIMEOUT_MS;
 
   // The folder is the plugin's own, and the secret beside the socket is what keeps another local
   // process that finds the socket from draining or answering jobs.
@@ -153,6 +164,10 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
   const jobs: BridgeJob[] = [];
   const waiters: ((job: BridgeJob | null) => void)[] = [];
   const answers = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** Each live job's machine (proofs/job-receipt.ts): the server acts only on an event it accepts. */
+  const ledger = new JobLedger();
+  /** The receipt limit of each job handed out and not yet confirmed. */
+  const receipts = new Map<number, ReturnType<typeof setTimeout>>();
   let nextId = 1;
   /** When the mod last reached the socket: 0 until its first authenticated request. */
   let seenAt = 0;
@@ -218,12 +233,37 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
     waiters.push(waiter);
   });
 
+  /** A job is on its way to the mod: the mod must confirm it before the receipt limit. */
+  const handed = (id: number): void => {
+    if (!ledger.step(id, "hand")) return;
+    receipts.set(id, setTimeout(() => {
+      receipts.delete(id);
+      if (!ledger.step(id, "receiptLimit")) return;
+      const slot = answers.get(id);
+      if (slot === undefined) return;
+      answers.delete(id);
+      clearTimeout(slot.timer);
+      slot.reject(new Error("the Fabric mod never confirmed job " + id + " within " + receiptMs + "ms, so it was not run"));
+    }, receiptMs));
+  };
+
+  /** The mod's receipt: accepted once, for a job handed to it, and only then does the mod run it. */
+  const receipt = (body: unknown): boolean => {
+    const id = typeof body === "object" && body !== null ? (body as Record<string, unknown>).id : undefined;
+    if (typeof id !== "number" || !ledger.step(id, "receipt")) return false;
+    clearTimeout(receipts.get(id));
+    receipts.delete(id);
+    return true;
+  };
+
   const answer = (body: unknown): boolean => {
     if (typeof body !== "object" || body === null) return false;
     const record = body as Record<string, unknown>;
     if (typeof record.id !== "number") return false;
     const slot = answers.get(record.id);
     if (slot === undefined) return false;
+    // An answer for a job the mod never confirmed is not this job's: refuse it.
+    if (!ledger.step(record.id, "answer")) return false;
     answers.delete(record.id);
     clearTimeout(slot.timer);
     if (record.ok === true) slot.resolve(record.result);
@@ -242,7 +282,12 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
       catalog = body;
       return json({ ok: true });
     }
-    if (path === "/next") return json({ job: await take(req.signal) });
+    if (path === "/next") {
+      const job = await take(req.signal);
+      if (job !== null) handed(job.id);
+      return json({ job });
+    }
+    if (path === "/receipt") return json({ ok: receipt(await req.json().catch(() => undefined)) });
     if (path === "/answer") return json({ ok: answer(await req.json().catch(() => undefined)) });
     return new Response("not found", { status: 404 });
   };
@@ -282,6 +327,9 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
       slot.reject(new Error("the Fabric bridge closed before the mod answered"));
     }
     answers.clear();
+    for (const timer of receipts.values()) clearTimeout(timer);
+    receipts.clear();
+    ledger.clear();
     for (const waiter of waiters.splice(0)) waiter(null);
     jobs.length = 0;
     try {
@@ -313,12 +361,16 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         answers.delete(id);
+        ledger.step(id, "answerLimit");
+        clearTimeout(receipts.get(id));
+        receipts.delete(id);
         // The call has given up: its job must not run later, or a retried write would repeat.
         const at = jobs.findIndex((job) => job.id === id);
         if (at !== -1) jobs.splice(at, 1);
         reject(new Error("the Fabric mod did not answer within " + timeoutMs + "ms"));
       }, timeoutMs);
       answers.set(id, { resolve, reject, timer });
+      ledger.open(id);
       dispatch({ ...job, id } as BridgeJob);
     });
   };
