@@ -9,14 +9,15 @@
 // failed by a limit). Events: the server hands it out, the mod's receipt, the mod's answer, the
 // receipt limit, the answer limit. The server steps one machine per job
 // (src/kernel/verified/job-receipt.ts) and acts only on an event the machine accepts.
-import { all, oneOf, rule, when, yes } from "gdp-wired";
+import { all, no, oneOf, rule, when, yes } from "gdp-wired";
 import type { Kernel } from "./kernel.ts";
 
 export type JobReceiptBug =
   | "a second receipt runs the job again"
   | "an answer for an unconfirmed job is taken"
   | "the receipt limit fails a confirmed job"
-  | "a settled job is handed out again";
+  | "a settled job is handed out again"
+  | "the answer limit leaves the job live";
 
 export const JOB_QUEUED = 0, JOB_HANDED = 1, JOB_CONFIRMED = 2, JOB_SETTLED = 3;
 
@@ -32,7 +33,7 @@ const job = (bug?: JobReceiptBug) => rule("bridge job")
       ? phase.eq(JOB_HANDED).or(phase.eq(JOB_CONFIRMED)) : phase.eq(JOB_CONFIRMED)),
     receiptLimit: event.is("receiptLimit").and(bug === "the receipt limit fails a confirmed job"
       ? phase.eq(JOB_HANDED).or(phase.eq(JOB_CONFIRMED)) : phase.eq(JOB_HANDED)),
-    answerLimit: event.is("answerLimit").and(phase.ne(JOB_SETTLED)),
+    answerLimit: event.is("answerLimit").and(bug === "the answer limit leaves the job live" ? no : phase.ne(JOB_SETTLED)),
   }))
   .step(({ phase, hand, receipt, answer, receiptLimit, answerLimit, hands, runs, answers }) => ({
     phase: when(hand, JOB_HANDED, when(receipt, JOB_CONFIRMED,
@@ -75,6 +76,9 @@ export const jobReceiptKernels = (bug?: JobReceiptBug): Kernel[] => {
       j.stepLaw("receipt_limit_spares_confirmed: the receipt limit never fails a job the mod is running",
         (e, after) => e.phase.eq(JOB_CONFIRMED).implies(after.phase.eq(JOB_CONFIRMED)),
         ({ event }) => event.is("receiptLimit")),
+      j.stepLaw("answer_limit_settles: once its caller gives up, a live job settles, so it can no longer be confirmed or answered",
+        (_e, after) => after.phase.eq(JOB_SETTLED),
+        ({ event }) => event.is("answerLimit")),
       j.stepLaw("unconfirmed_fails_at_receipt_limit: a handed job with no receipt settles at the receipt limit, never run",
         (e, after) => all(after.phase.eq(JOB_SETTLED), after.runs.eq(e.runs)),
         ({ event, phase }) => all(event.is("receiptLimit"), phase.eq(JOB_HANDED))),
@@ -87,4 +91,5 @@ export const JOB_RECEIPT_BUGS: JobReceiptBug[] = [
   "an answer for an unconfirmed job is taken",
   "the receipt limit fails a confirmed job",
   "a settled job is handed out again",
+  "the answer limit leaves the job live",
 ];
