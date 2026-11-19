@@ -91,3 +91,9 @@ test("payloads arrive as π and a missing key names the provided keys", async ()
 test("unknown display keys are accepted", async () => {
   expect(await call({ code: "return 1 + 1;", display: { name: "sum", extra: true } })).toEqual({ isError: false, text: "2" });
 });
+
+test("a program without return runs, and its print output comes back", async () => {
+  const r = await call({ code: 'print("ran");' });
+  expect(r.isError).toBe(false);
+  expect(r.text.startsWith("ran")).toBe(true);
+});

@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 const PREFIX = "export {};\nasync function __fabric_main(): Promise<unknown> {\n";
 const SUFFIX = "\n}\n";
 const PREFIX_LINES = 2;
+// TS2355 "must return a value": the wrapper declares Promise<unknown> so every return is still
+// checked, but a program may end without a return. Drop only that error, and only on the wrapper.
+const MISSING_RETURN = 2355;
 const GUEST = "/fabric/guest.ts";
 const GUEST_TYPES = join(import.meta.dir, "guest.d.ts");
 
@@ -40,7 +43,9 @@ export function check(code: string): CheckResult {
   };
   const program = ts.createProgram({ rootNames: [GUEST, GUEST_TYPES], options, host, oldProgram: previous });
   previous = program;
-  const diags = ts.getPreEmitDiagnostics(program).filter((d) => d.file?.fileName === GUEST || !d.file);
+  const diags = ts.getPreEmitDiagnostics(program)
+    .filter((d) => d.file?.fileName === GUEST || !d.file)
+    .filter((d) => !(d.code === MISSING_RETURN && d.start !== undefined && d.start < PREFIX.length));
   const errors = diags.map((d) => {
     const msg = ts.flattenDiagnosticMessageText(d.messageText, "\n");
     if (!d.file || d.start === undefined) return msg;

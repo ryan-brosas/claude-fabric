@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { TOOL_NAMES } from "../kernel/protocol.ts";
+import { check } from "../kernel/check.ts";
 import { run } from "../kernel/host.ts";
 import { MAX_RESULT_CHARS, bound, format } from "../kernel/result.ts";
 
@@ -51,4 +52,11 @@ test("a worker crash outside the protocol reports the real error at once, bounde
   const big = await run(crash('"x".repeat(100_000)'), process.cwd(), { timeoutMs: 3_000 });
   expect(big.ok).toBe(false);
   expect(big.text.endsWith(`[result cut at ${MAX_RESULT_CHARS} chars]`)).toBe(true);
+});
+
+test("a program may end without return, but every return is still checked", () => {
+  expect(check('print("x");')).toEqual({ ok: true, errors: [] });
+  const thenable = check('const fallback: unknown = 0; return π.mode === "bad" ? { then() {} } : fallback;');
+  expect(thenable.ok).toBe(false);
+  expect(thenable.errors[0]).toStartWith("line 1:");
 });
