@@ -44,10 +44,16 @@ Where it stands:
    other built-in stay top-level only. Prompt guidance is done too: one `fabric:guidance`
    system prompt section appended by `prompt.compose` when the pool holds `fabric_exec`. **Next:**
    `__bun`, tool middleware, agents and mesh, in the order architecture.md's probes allow.
-6. **Benchmark:** plain Claude, Claude with native code mode, and Claude with `fabric_exec`, on
-   the same tasks. It passes when `fabric_exec` solves at least as many tasks as native code mode
-   with at most 10% more tokens.
-7. **Last:** turn native code mode off and run the benchmark again.
+6. **Done, the benchmark:** plain Claude, Claude with native code mode, and Claude with
+   `fabric_exec` (code mode off), on 15 tasks, 5 runs each, on Sonnet 5.5, on 2026-11-19.
+   `fabric_exec` solved 70 of 75, the same as native code mode, at 1.052 times its tokens (152k
+   against 145k mean), so it passes. Plain Claude solved 68 of 74 at 167k. It took the deferred
+   tool list by server (#16) and guidance that says to reach for `fabric_exec` first (#17).
+7. **Next:** turn native code mode off. A mod cannot do it cheaply: hiding `REPL` and `Poll`
+   with code mode on loads every MCP tool's schema (103k tokens on the first call, against 26k).
+   So the switch is `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`, which is what the benchmark's
+   `fabric_exec` arm ran with. What is left is dogfooding: daily sessions with the plugin and
+   code mode off.
 
 Each step's details and the things we chose not to build are in
 [docs/internals/decisions.md](docs/internals/decisions.md).
