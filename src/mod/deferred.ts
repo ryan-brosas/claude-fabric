@@ -8,9 +8,9 @@
 export const DEFERRED_HEADER = "The following deferred tools are now available via ToolSearch.";
 
 const COMPACT_HEADER =
-  "The following deferred tools are available via ToolSearch. Their schemas are NOT loaded: " +
-  'call ToolSearch with a keyword to find a tool, or with "select:<name>[,<name>...]" to load one, ' +
-  "before calling it. Built-in tools by name, then MCP servers by tool name prefix with their tool count:";
+  'Deferred tools, schemas NOT loaded: call ToolSearch with a keyword, or with "select:<name>[,<name>...]", before calling one. ' +
+  "A fabric_exec program calls an MCP tool with no ToolSearch: mcp.<server>.<tool>(args), - and . written _. " +
+  "Built-ins by name, then MCP servers by prefix and tool count:";
 
 const MCP_NAME = /^mcp__(.+?)__(.+)$/;
 

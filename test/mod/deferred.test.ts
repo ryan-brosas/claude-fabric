@@ -31,6 +31,8 @@ describe("compactDeferred", () => {
       "mcp__plugin_easel_easel__* (1 tool)",
     ]);
     expect(sections[1]).toContain("ToolSearch");
+    // The program route to an MCP tool, which loads no schema.
+    expect(sections[1]).toContain("mcp.<server>.<tool>(args)");
     expect(compactDeferred(delta).length).toBeLessThan(delta.length / 2);
   });
 
