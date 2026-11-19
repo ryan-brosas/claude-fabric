@@ -196,3 +196,15 @@ test("a failed check with many errors stays within the cap", async () => {
     await removeSaved(r.text);
   }
 });
+
+// Dogfooding: programs that waited between calls failed the check, since lib.es2023 has no timers.
+test("a program may wait with setTimeout and cancel with clearTimeout", async () => {
+  const waited = await run(
+    "const cancelled = setTimeout(() => print('never'), 5); clearTimeout(cancelled);\n" +
+    "await new Promise((resolve) => setTimeout(resolve, 20));\n" +
+    "return 'waited';",
+    process.cwd(),
+  );
+  expect(waited.ok).toBe(true);
+  expect(waited.text).toBe("waited");
+});
