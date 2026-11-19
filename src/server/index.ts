@@ -11,6 +11,7 @@ import { MAX_RESULT_CHARS } from "../kernel/result.ts";
 import { Store } from "../kernel/store.ts";
 import { callTimeoutMs } from "../kernel/verified/call-timeout.ts";
 import { STORE } from "../providers/store/index.ts";
+import { stopAllShells } from "../providers/tools/bash.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { globalLines, toolLines } from "../registry/generate.ts";
 import { MCP_INTRO, MCP_LINE } from "../registry/mcp.ts";
@@ -122,11 +123,13 @@ export function createServer(): McpServer {
 }
 
 if (import.meta.main) {
+  // Commands run in their own process groups, out of the terminal's reach: stop them on the way out.
+  // A signal ends the process without "exit" unless it is handled, so both cases handle it.
+  process.on("exit", stopAllShells);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => process.exit(0));
   if ("bridge" in started) {
     const bridge = started.bridge;
-    const close = (): void => bridge.close();
-    process.on("exit", close);
-    for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { close(); process.exit(0); });
+    process.on("exit", () => bridge.close());
   } else {
     // stderr, never stdout: stdout is the MCP stream.
     console.error("fabric: " + started.error + "; mcp.<server>.<tool>() and WebSearch will refuse");

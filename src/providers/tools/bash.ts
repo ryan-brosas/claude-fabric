@@ -3,6 +3,34 @@ import { defineAction } from "../../registry/action.ts";
 
 const DEFAULT_MS = 120_000;
 const MAX_MS = 600_000;
+const POSIX = process.platform !== "win32";
+
+// Every process group a Bash call started and nobody has stopped yet. Detached groups do not get
+// the terminal's Ctrl-C, so the server stops them all on its way out (stopAllShells).
+const live = new Set<() => void>();
+
+/** The one way to stop a command: once, and never again after, so a reused group id is never hit. */
+function owned(p: Bun.Subprocess): () => void {
+  let done = false;
+  const stop = (): void => {
+    if (done) return;
+    done = true;
+    live.delete(stop);
+    try {
+      if (POSIX) process.kill(-p.pid, "SIGKILL");
+      else p.kill("SIGKILL");
+    } catch {
+      // The group is already gone.
+    }
+  };
+  live.add(stop);
+  return stop;
+}
+
+/** Stops every command still running: the server calls this before it exits. */
+export function stopAllShells(): void {
+  for (const stop of [...live]) stop();
+}
 
 export const Bash = defineAction({
   name: "Bash",
@@ -18,27 +46,22 @@ export const Bash = defineAction({
   run: async (i, { cwd, signal }) => {
     const timeout = Math.min(Number(i.timeout ?? DEFAULT_MS), MAX_MS);
     // Its own process group, so a timeout or the end of the run kills everything the command
-    // started (a test runner's workers, a nested shell), not just bash -c. A child left alive
-    // could keep writing after the call ended, and one holding the pipes would hang the read.
-    const p = Bun.spawn(["bash", "-c", i.command], { cwd, stdout: "pipe", stderr: "pipe", detached: true });
+    // started (a test runner's workers, a nested shell, a child left in the background), not just
+    // bash -c. A child left alive could keep writing after the call ended, and one holding the pipes
+    // would hang the read. Windows has no process groups: there only the shell itself is stopped.
+    const p = Bun.spawn(["bash", "-c", i.command], { cwd, stdout: "pipe", stderr: "pipe", detached: POSIX });
     let timedOut = false;
-    const killTree = (): void => {
-      try {
-        process.kill(-p.pid, "SIGKILL");
-      } catch {
-        // The group is already gone.
-      }
-    };
-    const timer = setTimeout(() => { timedOut = true; killTree(); }, timeout);
-    signal?.addEventListener("abort", killTree, { once: true });
-    if (signal?.aborted) killTree();
+    const stop = owned(p);
+    const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
+    // The group is the run's until the run ends: a child the command left in the background dies then.
+    signal?.addEventListener("abort", stop, { once: true });
+    if (signal?.aborted) stop();
     let out: string, err: string, exitCode: number;
     try {
       [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
       exitCode = await p.exited;
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", killTree);
     }
     const output = out + err;
     if (timedOut) throw new Error("Bash timed out after " + timeout + "ms: " + output.slice(-2000));
