@@ -137,7 +137,15 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - After the benchmark, native code mode is turned off with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0`,
   not by a mod: hiding `REPL` from the tool list with code mode on put every MCP tool's schema in
   the prompt (103k tokens on the first call, 313k once all servers connected). Every other tool
-  stays visible.
+  stays visible unless the person turns on `fabricOnly`.
+- **`fabricOnly`, off by default** (plugin.json `userConfig`, `src/mod/fabric-only.ts`). pi-fabric's
+  full code mode, cut down: with code mode off, the mod's `tool.list` hook drops Bash, Edit, Write,
+  Grep and Glob while `fabric_exec` is in the pool. Read stays for images and PDFs, and WebSearch
+  stays because a hidden tool is hidden from the mod's `$.tool.call` too. It is an option, not
+  the default, because it changes every session. An env var cannot carry it: `$.process.hookEnv`
+  returns only Claude Code's own variables. Live, `claude -p` with the option on listed no Bash,
+  Edit or Write, and its first request was 24,379 tokens against 26,358 with it off; the debug log
+  says "3 removed". Whether it lowers a task's total is not yet measured.
 
 ## Out of scope
 

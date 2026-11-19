@@ -16,6 +16,7 @@ import {
   retryDelay,
 } from "./bridge.ts";
 import { compactDeferred } from "./deferred.ts";
+import { fabricOnly, withoutProgramTools } from "./fabric-only.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -25,7 +26,9 @@ import { compactDeferred } from "./deferred.ts";
 // spelled `$.noun.method(...)` at the call site, inside a hook body. So every `$` call is literal
 // here, and src/mod/bridge.ts holds the plain-data helpers these bodies call. test/mod/imports.test.ts
 // refuses the mistake again.
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  // The person's `fabricOnly` option (plugin.json userConfig), read once at load.
+  const programsOnly = fabricOnly(options);
   // Between hook bodies: the catalog to publish, and this session's socket once it is known.
   let state = emptyState();
   let socket: BridgePaths | undefined;
@@ -175,6 +178,8 @@ export const register: Register = (on) => {
         }
       }
     }
-    return listed;
+    // With fabricOnly on, the tools a program runs leave the model's list (src/mod/fabric-only.ts).
+    if (!programsOnly) return listed;
+    return { ...listed, value: [...withoutProgramTools(listed.value)] };
   }).catch(($, e, next) => next(e));
 };
