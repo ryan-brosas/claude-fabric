@@ -1,22 +1,23 @@
 // One fresh Worker per fabric_exec call. Every tool call crosses to the host.
-export {};
+import { TOOL_NAMES, type HostToWorker, type ToolName, type WorkerToHost } from "./protocol.ts";
 declare const self: Worker;
 let next = 0;
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 const logs: string[] = [];
 
-const call = (ref: string, args: unknown[]) =>
+const send = (msg: WorkerToHost) => self.postMessage(msg);
+
+const call = (ref: ToolName, args: unknown[]) =>
   new Promise((resolve, reject) => {
     const id = next++;
     pending.set(id, { resolve, reject });
-    self.postMessage({ kind: "call", id, ref, args });
+    send({ kind: "call", id, ref, args });
   });
 
-const TOOL_NAMES = ["Read", "Write", "Edit", "Grep", "Glob", "Bash"] as const;
 const toolFns = TOOL_NAMES.map((name) => (...args: unknown[]) => call(name, args));
 const print = (...values: unknown[]) => { logs.push(values.map((v) => typeof v === "string" ? v : JSON.stringify(v)).join(" ")); };
 
-self.onmessage = async (event: MessageEvent) => {
+self.onmessage = async (event: MessageEvent<HostToWorker>) => {
   const msg = event.data;
   if (msg.kind === "reply") {
     const p = pending.get(msg.id);
@@ -36,9 +37,9 @@ self.onmessage = async (event: MessageEvent) => {
       });
       const run = new Function(...TOOL_NAMES, "print", "π", "return " + msg.js);
       const value = await run(...toolFns, print, π);
-      self.postMessage({ kind: "done", value, logs });
+      send({ kind: "done", value, logs });
     } catch (error) {
-      self.postMessage({ kind: "done", error: error instanceof Error ? error.message : String(error), logs });
+      send({ kind: "done", error: error instanceof Error ? error.message : String(error), logs });
     }
   }
 };

@@ -51,7 +51,7 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
 2. **Nothing runs until it type-checks.** A type error returns line numbers, and no tool call
    happens. Enforced by the "type error is reported and nothing runs" test and the spike.
 3. **One bounded result.** Only the return value and `print()` lines reach the model, and
-   they are cut at a fixed size (`kernel/host.ts`).
+   they are cut at a fixed size (`kernel/result.ts`).
 
 ## The ways to hurt yourself
 
@@ -70,14 +70,15 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
 
 ## Hit every surface
 
-The common miss is a program tool that changes in one place only. When you add or change a
-tool or a field, update all of these:
+`kernel/protocol.ts` holds the one list of program tools, `TOOL_NAMES`. The worker reads it,
+and `kernel/tools.ts` must implement every name or the typecheck fails. Two places are still
+written by hand, and a test fails if they drift from that list:
 
-- **`kernel/tools.ts`**: the host implementation.
-- **`kernel/guest.d.ts`**: the types the checker gives programs.
-- **`kernel/worker.ts`**: `TOOL_NAMES`, the globals the worker passes in.
-- **`server/index.ts`**: `DESCRIPTION`, which is what the model reads.
-- **`test/server.test.ts`**: one test through the real MCP server.
+- **`kernel/guest.d.ts`**: the types the checker gives programs (`test/kernel.test.ts`).
+- **`server/index.ts`**: `DESCRIPTION`, which is what the model reads (`test/server.test.ts`).
+
+A changed field still has to be changed in both by hand, plus one test through the real MCP
+server.
 
 ## Check
 
@@ -93,11 +94,20 @@ Green doesn't prove the plugin loads in Claude Code. For that, run
 
 ## How it works
 
-`server/index.ts` gets a call. `kernel/check.ts` wraps the code as an async function body and
-type-checks it against `guest.d.ts` with a warm TypeScript program. `kernel/host.ts` then starts
-a fresh Bun Worker. Each tool call in the program goes to the host as a message, and the host
-runs it from `kernel/tools.ts`. On a timeout or when the call ends, the host terminates the
-Worker.
+`server/index.ts` gets a call and hands it to `run()` in `kernel/host.ts`, which is a pipeline
+of separate stages:
+
+1. **Check** (`kernel/check.ts`): wrap the code as an async function body and type-check it
+   against `guest.d.ts` with a warm TypeScript program.
+2. **Execute** (`kernel/execute.ts`): start a fresh Bun Worker. Each tool call in the program
+   comes back to the host as a message and runs from `kernel/tools.ts`. The Worker is
+   terminated on a timeout or when the call ends. The messages are typed in
+   `kernel/protocol.ts`.
+3. **Format and bound** (`kernel/result.ts`): print lines, then the returned value, cut at a
+   fixed size. These are pure functions with unit tests.
+
+pi-fabric's self-correcting modules (argument repair, code repair, type-error guidance, output
+budget) go in as new stages of this pipeline, each with its own unit tests.
 
 ## Docs and scratch
 
