@@ -259,3 +259,31 @@ test("a Bash still running when its program times out is stopped with it", async
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Sol on #34: killing bash -c alone leaves what it started. The whole process group stops.
+test("a process the command started in the background stops with its program too", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-tree-"));
+  try {
+    const ready = join(dir, "ready.txt");
+    const survived = join(dir, "survived.txt");
+    const command = "sh -c " + JSON.stringify("touch " + ready + "; sleep 1; touch " + survived) + " & wait";
+    await expect(run(
+      "await Bash({ command: " + JSON.stringify(command) + " }); return 'done';",
+      dir,
+      { timeoutMs: 400 },
+    )).rejects.toThrow("timed out after 400ms");
+    expect(await Bun.file(ready).exists()).toBe(true);
+    await Bun.sleep(1_500);
+    expect(await Bun.file(survived).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Bash's own timeout kills the command's children and does not hang on their pipes", async () => {
+  const started = Date.now();
+  const result = await run("return await Bash({ command: 'sleep 30 & sleep 30; echo never', timeout: 300 });", process.cwd(), { timeoutMs: 10_000 });
+  expect(result.ok).toBe(false);
+  expect(result.text).toContain("Bash timed out after 300ms");
+  expect(Date.now() - started).toBeLessThan(5_000);
+});
