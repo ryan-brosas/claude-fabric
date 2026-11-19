@@ -47,7 +47,7 @@ Where it stands:
 6. **Done, the benchmark:** plain Claude, Claude with native code mode, and Claude with
    `fabric_exec` (code mode off), on 15 tasks, 5 runs each, on Sonnet 5.5, on 2026-11-19.
    `fabric_exec` solved 70 of 75, the same as native code mode, at 1.052 times its tokens (152k
-   against 145k mean), so it passes. Plain Claude solved 68 of 74 at 167k. It took the deferred
+   against 145k mean), so it passes. Plain Claude solved 68 of its 74 recorded runs at 167k. It took the deferred
    tool list by server (#16) and guidance that says to reach for `fabric_exec` first (#17).
 7. **Next:** turn native code mode off. A mod cannot do it cheaply: hiding `REPL` and `Poll`
    with code mode on loads every MCP tool's schema (103k tokens on the first call, against 26k).

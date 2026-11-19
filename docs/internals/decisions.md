@@ -111,7 +111,7 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   used the same model. 15 tasks (bug fixes, features, refactors, investigations), each with a hidden
   check, 5 runs per arm, each run an interactive session in tmux, since code mode runs only there.
   Tokens are a run's input, cache and output tokens summed over its API calls. Result: `fabric_exec`
-  70/75, native code mode 70/75, plain 68/74 (one run hit the turn limit), `fabric_exec` at 1.052
+  70/75, native code mode 70/75, plain 68/74 (one plain run of task 12 left no record, and one hit the turn limit, so its token mean covers 73 runs), `fabric_exec` at 1.052
   times native's tokens. Task 06 failed every run of every arm, and nothing else failed: its prompt leaves the output
   calls and the `slowest` format open, and its check expects one form of each.
 
