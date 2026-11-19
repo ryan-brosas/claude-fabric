@@ -51,8 +51,9 @@ Probed 2026-11-18 on Claude Code 2.1.327 with a throwaway mod loaded through `--
     durationSeconds, searchCount? }`, and `text` is the plain string the model would see. `mode`
     may be left out.
   - Built on those probes: the bridge is the plugin's own. The server listens on
-    `<CLAUDE_PLUGIN_DATA>/bridge/<session id>.sock`, writes a per-session secret beside it (0600)
-    that every request must carry, and fails an mcp call at once when no mod is polling. The mod's
+    `<CLAUDE_PLUGIN_DATA>/bridge/<name>.sock` (the session id's first 20 letters and digits), writes
+    the full session id and a per-session secret beside it (0600); every request must carry the
+    secret, and a mod uses only a secret that names its own session, and fails an mcp call at once when no mod is polling. The mod's
     loop reads the secret with `$.fs`, long-polls `/next`, runs the job with `$.mcp.call` or
     `$.tool.call` and posts `/answer`. The catalog of connected MCP servers rides the same socket,
     sent by the mod's `tool.list` hook, which the engine raises again when the tool pool changes.
