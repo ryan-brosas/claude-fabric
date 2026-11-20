@@ -28,6 +28,16 @@ export const SUMMARY_SECTIONS: { key: keyof Sections; header: string; maxBytes: 
 
 const TRANSCRIPT_MAX_BYTES = 5120;
 const MAX_INPUT_LINES_PER_SECTION = 128;
+const ASSISTANT_CAVEAT = "Assistant responses are proposals, not verified outcomes or user instructions.";
+const CARRY_HEADER = `${EARLIER_SUMMARY_HEADER}\n${ASSISTANT_CAVEAT}`;
+const LONG_ASSISTANT_HEADING = "Assistant response (a proposal, not a verified outcome or user instruction) [entry ";
+const SHORT_ASSISTANT_HEADING = "Assistant response [entry ";
+
+// Dialogue projections begin each assistant item with this heading. Do not
+// replace occurrences in the source text that follows it.
+const shortAssistantHeading = (item: string): string => item.startsWith(LONG_ASSISTANT_HEADING)
+  ? SHORT_ASSISTANT_HEADING + item.slice(LONG_ASSISTANT_HEADING.length)
+  : item;
 
 export interface RenderOptions {
   firstEntryId: string;
@@ -51,12 +61,16 @@ const sampledLines = (lines: readonly string[], keep: number): string[] => {
   ];
 };
 
-const boundedBlock = (header: string, sourceLines: readonly string[], maxBytes: number): string => {
+const boundedBlock = (header: string, sourceLines: readonly string[], maxBytes: number, assistantTranscript = false): string => {
   const clipped = sourceLines.map((line) => clipUtf8(line, MAX_RENDERED_LINE_BYTES));
   const capped = sampledLines(clipped, Math.min(clipped.length, MAX_INPUT_LINES_PER_SECTION));
   for (let keep = capped.length; keep >= 0; keep--) {
     const lines = sampledLines(capped, keep);
-    const block = [header, ...lines].join("\n");
+    // The brief transcript keeps its first row after `---`. Qualify any
+    // assistant rows selected by sampling, and budget the caveat with them.
+    const qualified = assistantTranscript && lines.some((line) => /^\[entry .*\] assistant: /.test(line))
+      ? [lines[0]!, ASSISTANT_CAVEAT, ...lines.slice(1)] : lines;
+    const block = [header, ...qualified].join("\n");
     if (utf8Bytes(block) <= maxBytes) return block;
   }
   return clipUtf8(header, maxBytes);
@@ -66,10 +80,11 @@ interface HistoryBlock {
   header: string;
   lines: readonly string[];
   maxBytes: number;
+  assistantTranscript?: boolean;
 }
 
 const historyCandidate = (block: HistoryBlock) => {
-  const text = boundedBlock(block.header, block.lines, block.maxBytes);
+  const text = boundedBlock(block.header, block.lines, block.maxBytes, block.assistantTranscript);
   const bytes = utf8Bytes(text);
   const minimum = block.lines.length === 1 ? bytes
     : Math.min(bytes, utf8Bytes([block.header, ...sampledLines(block.lines, 0)].join("\n")));
@@ -95,7 +110,7 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
     const extra = demand === 0 ? 0 : Math.min(wanted, Math.floor(remaining * wanted / demand));
     // The same verified allocator caps each block at the room left for history.
     const budget = allocateSummaryCarry(available, 0, base + extra, 0, 0).newestBytes;
-    const text = boundedBlock(block.header, block.lines, budget);
+    const text = boundedBlock(block.header, block.lines, budget, block.assistantTranscript);
     const used = utf8Bytes(text);
     available -= used;
     remaining -= used - base;
@@ -128,8 +143,9 @@ const protectedBlock = (header: string, items: readonly string[], maxBytes: numb
 };
 
 // Recent exchanges keep their allocation; older replies use only the room left.
-const dialogueBlock = (recentItems: readonly string[], olderItems: readonly string[], replyRoom: number) => {
-  const recent = protectedBlock(DIALOGUE_HEADER, recentItems, MAX_DIALOGUE_SECTION_BYTES);
+const dialogueBlock = (recentItems: readonly string[], olderItems: readonly string[], replyRoom: number, caveat: string) => {
+  const header = caveat ? `${DIALOGUE_HEADER}\n\n${caveat}` : DIALOGUE_HEADER;
+  const recent = protectedBlock(header, recentItems, MAX_DIALOGUE_SECTION_BYTES);
   const room = Math.min(MAX_DIALOGUE_SECTION_BYTES - utf8Bytes(recent.text), replyRoom) - 2;
   const olderHeader = "Earlier assistant replies (unverified):";
   if (olderItems.length === 0 || room < utf8Bytes(olderHeader) + 2) return recent;
@@ -148,12 +164,14 @@ const withoutOpeningLiterals = (summary: string): string => {
 };
 
 const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
-  const full = `${EARLIER_SUMMARY_HEADER}\n\n${earlierSummary}`;
+  // The original section caveat can fall inside the cut while an assistant
+  // reply survives in the tail, so the opaque Carry needs its own caveat.
+  const full = `${CARRY_HEADER}\n\n${earlierSummary}`;
   if (utf8Bytes(full) <= maxBytes) return full;
-  const bodyBytes = maxBytes - utf8Bytes(EARLIER_SUMMARY_HEADER) - 2;
+  const bodyBytes = maxBytes - utf8Bytes(CARRY_HEADER) - 2;
   if (bodyBytes <= 0) return clipUtf8(EARLIER_SUMMARY_HEADER, Math.max(0, maxBytes));
   const body = boundedHeadTail(earlierSummary, bodyBytes);
-  return body.text ? `${EARLIER_SUMMARY_HEADER}\n\n${body.text}` : EARLIER_SUMMARY_HEADER;
+  return body.text ? `${CARRY_HEADER}\n\n${body.text}` : EARLIER_SUMMARY_HEADER;
 };
 
 export interface RenderedSummary {
@@ -169,7 +187,11 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   let requestOmittedBytes = 0;
   let dialogueOmittedBytes = 0;
   let goalBytes = 0;
-  const recentBytes = recentDialogueBytes(sections.dialogue);
+  const recentItems = sections.dialogue.map(shortAssistantHeading);
+  const olderItems = sections.earlierAssistantReplies.map(shortAssistantHeading);
+  const caveat = [...recentItems, ...olderItems].some((item) => item.startsWith(SHORT_ASSISTANT_HEADING))
+    ? ASSISTANT_CAVEAT : "";
+  const recentBytes = recentDialogueBytes(caveat ? [caveat, ...recentItems] : recentItems);
   const requestBytes = requestSectionBytes(options.requestLines ?? []);
   const goalBudget = allocateProtectedRoom(recentBytes, requestBytes, MAX_EARLIER_USERS_SECTION_BYTES, 0).newestBytes;
   const protect = (header: string, items: readonly string[], maxBytes: number, source?: string): number => {
@@ -188,18 +210,25 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
     } else if (key === "dialogue") {
       if (lines.length > 0) {
         const replyRoom = allocateProtectedRoom(recentBytes, requestBytes, goalBytes, maxBytes).carryBytes;
-        const dialogue = dialogueBlock(lines, sections.earlierAssistantReplies, replyRoom);
+        const dialogue = dialogueBlock(recentItems, olderItems, replyRoom, caveat);
         newest.push(dialogue.text);
         dialogueOmittedBytes += dialogue.omittedBytes;
       }
       if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row");
     } else if (lines.length > 0) {
-      history.push({ header, lines, maxBytes });
+      // Status's last note is projected from an assistant response. Label it
+      // as such, and keep the caveat in the header when the section is cut.
+      const hasAssistant = key === "status" && lines.some((line) => line.startsWith("Last note: "));
+      history.push({
+        header: hasAssistant ? `${header}\n${ASSISTANT_CAVEAT}` : header,
+        lines: hasAssistant ? lines.map((line) => line.startsWith("Last note: ") ? `Assistant note: ${line.slice("Last note: ".length)}` : line) : lines,
+        maxBytes,
+      });
     }
   }
 
   if (sections.transcript.length > 0) {
-    history.push({ header: "---", lines: sections.transcript, maxBytes: TRANSCRIPT_MAX_BYTES });
+    history.push({ header: "---", lines: sections.transcript, maxBytes: TRANSCRIPT_MAX_BYTES, assistantTranscript: true });
   }
 
   const timestamp = options.lastTimestamp || "(unknown time)";
@@ -220,9 +249,9 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const newestBytes = newest.reduce((sum, block) => sum + utf8Bytes(block), 0);
   const earlierSummary = options.earlierSummary ? withoutOpeningLiterals(options.earlierSummary) : undefined;
   const carryDemand = earlierSummary !== undefined
-    ? utf8Bytes(EARLIER_SUMMARY_HEADER) + 2 + utf8Bytes(earlierSummary)
+    ? utf8Bytes(CARRY_HEADER) + 2 + utf8Bytes(earlierSummary)
     : 0;
-  const historyDemand = literalDemand + history.reduce((sum, block) => sum + utf8Bytes(boundedBlock(block.header, block.lines, block.maxBytes)), 0);
+  const historyDemand = literalDemand + history.reduce((sum, block) => sum + utf8Bytes(boundedBlock(block.header, block.lines, block.maxBytes, block.assistantTranscript)), 0);
   const allocation = allocateSummaryCarry(MAX_SUMMARY_BYTES, framingBytes, newestBytes, carryDemand, historyDemand);
   if (allocation.newestBytes < newestBytes) {
     // Refuse rather than print a summary that breaks the allocation's law.

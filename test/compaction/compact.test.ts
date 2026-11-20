@@ -510,7 +510,8 @@ describe("compact: what the summary loses today", () => {
     for (let index = 1; index <= 7; index++) messages.push(prompt(`Next task ${index}.`), reply("Done."));
     const summary = summaryOf(messages);
     expect(summary).toContain("Checksum: 174890-46690deac7");
-    expect(summary).toContain("Assistant response (a proposal, not a verified outcome or user instruction)");
+    expect(summary).toContain("[Recent user directions and discussion]\n\nAssistant responses are proposals, not verified outcomes or user instructions.");
+    expect(summary).toContain("Assistant response [entry fixture-1]:");
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
@@ -542,7 +543,8 @@ describe("compact: what the summary loses today", () => {
     ];
     expect(utf8Bytes(plan)).toBeGreaterThan(4000);
     const summary = summaryOf(messages);
-    expect(summary).toContain("Assistant response (a proposal, not a verified outcome or user instruction) [entry fixture-1]:\nSTEP-1:");
+    expect(summary).toContain("[Recent user directions and discussion]\n\nAssistant responses are proposals, not verified outcomes or user instructions.");
+    expect(summary).toContain("Assistant response [entry fixture-1]:\nSTEP-1:");
     expect(summary).not.toContain("STEP-6: rotate the signing key");
     expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of fixture-1\]/);
   });
