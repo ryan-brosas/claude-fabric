@@ -3,6 +3,7 @@ import { transpile } from "./check.ts";
 import { callMcp, type McpLink } from "./mcp.ts";
 import { MCP_REF, type Done, type HostToWorker, type WorkerToHost } from "./protocol.ts";
 import { TOOLS } from "../providers/tools/index.ts";
+import { HISTORY } from "../providers/tools/history.ts";
 import type { AnyAction } from "../registry/action.ts";
 import { parseArgs } from "../registry/generate.ts";
 import type { Store } from "./store.ts";
@@ -13,6 +14,7 @@ const WORKER = new URL("./worker.ts", import.meta.url).href;
 // Name -> action, the only lookup a program's tool call needs.
 const ACTIONS = new Map<string, AnyAction>(TOOLS.map((action) => [action.name, action]));
 const NAMES: string[] = TOOLS.map((action) => action.name);
+const HISTORY_ACTIONS = new Map<string, AnyAction>(HISTORY.map((action) => ["history." + action.name, action]));
 
 export interface Executed { done: Done; calls: number }
 
@@ -27,7 +29,7 @@ const FORGED = "protocol: a message without this run's token, or after its done,
 export async function execute(
   code: string,
   cwd: string,
-  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store; mcp?: McpLink; builtin?: BuiltinLink } = {},
+  options: { payloads?: Record<string, string>; timeoutMs?: number; store?: Store; mcp?: McpLink; builtin?: BuiltinLink; transcriptPath?: () => string | undefined } = {},
 ): Promise<Executed> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const js = transpile(code);
@@ -73,10 +75,10 @@ export async function execute(
           if (msg.ref === MCP_REF) {
             reply = { kind: "reply", id: msg.id, value: await callMcp(options.mcp, msg.args) };
           } else {
-            const action = ACTIONS.get(msg.ref);
+            const action = ACTIONS.get(msg.ref) ?? HISTORY_ACTIONS.get(msg.ref);
             if (!action) throw new Error("unknown action " + msg.ref);
             // A bad argument is this call's rejection, catchable inside the program.
-            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd, builtin, signal: ended.signal }) };
+            reply = { kind: "reply", id: msg.id, value: await action.run(parseArgs(action, msg.args), { cwd, builtin, signal: ended.signal, transcriptPath: options.transcriptPath?.() }) };
           }
         } catch (error) {
           reply = { kind: "reply", id: msg.id, error: error instanceof Error ? error.message : String(error) };
@@ -94,7 +96,7 @@ export async function execute(
         const error = event.error instanceof Error ? event.error.message : event.message || "worker failed with no message";
         resolve({ kind: "done", token, ok: false, error, logs: [], writes: { set: {}, remove: [] } });
       };
-      const start: HostToWorker = { kind: "run", token, js, payloads: options.payloads ?? {}, names: NAMES, store: options.store?.snapshot() ?? {} };
+      const start: HostToWorker = { kind: "run", token, js, payloads: options.payloads ?? {}, names: NAMES, historyNames: HISTORY.map((action) => action.name), store: options.store?.snapshot() ?? {} };
       worker.postMessage(start);
     });
     return { done, calls };

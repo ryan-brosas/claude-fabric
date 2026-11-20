@@ -2,6 +2,9 @@
 import { acceptSampleAccounting } from "./verified/policy.ts";
 
 export const MAX_SUMMARY_BYTES = 32 * 1024;
+export const MAX_RENDERED_LINE_BYTES = 1024;
+export const EARLIER_USERS_HEADER = "[Earlier user messages]";
+export const MAX_EARLIER_USERS_SECTION_BYTES = 8192;
 
 const encoder = new TextEncoder();
 
@@ -22,6 +25,20 @@ export const clipUtf8 = (text: string, maxBytes: number, suffix = "…"): string
     used += bytes;
   }
   return `${output}${suffix}`;
+};
+
+// Allocate the same protected-block room before message text loses its source handle.
+export const protectedBudgets = (header: string, items: readonly string[], maxBytes: number): number[] => {
+  if (items.length === 0) return [];
+  let remaining = Math.max(0, maxBytes - utf8Bytes(header) - 2 * items.length);
+  const share = Math.floor(remaining / items.length);
+  const budgets = items.map((item) => Math.min(utf8Bytes(item), share));
+  remaining -= budgets.reduce((sum, bytes) => sum + bytes, 0);
+  return items.map((item, index) => {
+    const extra = Math.min(remaining, utf8Bytes(item) - budgets[index]!);
+    remaining -= extra;
+    return budgets[index]! + extra;
+  });
 };
 
 const charBytes = (character: string): number => {
@@ -67,15 +84,18 @@ export const boundedSuffix = (text: string, maxBytes: number): { text: string; o
 };
 
 // Preserve complete multiline text when it fits, and make byte loss explicit.
-export const boundedExcerpt = (text: string, maxBytes: number): { text: string; omittedBytes: number } => {
+export const boundedExcerpt = (text: string, maxBytes: number, source?: string): { text: string; omittedBytes: number } => {
   const sourceBytes = utf8Bytes(text);
   if (sourceBytes <= maxBytes) return { text, omittedBytes: 0 };
-  const prefix = clipUtf8(text, Math.max(0, maxBytes - 64), "");
+  const note = (omitted: number) => `[omitted ${omitted} UTF-8 bytes${source ? ` of ${source}` : ""}]`;
+  // The full source length has at least as many digits as the omitted count.
+  const marker = note(sourceBytes);
+  const room = maxBytes - utf8Bytes(marker);
+  if (room < 0) return { text: "", omittedBytes: sourceBytes };
+  if (room === 0) return { text: marker, omittedBytes: sourceBytes };
+  const prefix = clipUtf8(text, room - 1, "");
   const omittedBytes = sourceBytes - utf8Bytes(prefix);
-  return {
-    text: clipUtf8(`${prefix}\n[omitted ${omittedBytes} UTF-8 bytes]`, maxBytes, ""),
-    omittedBytes,
-  };
+  return { text: `${prefix}\n${note(omittedBytes)}`, omittedBytes };
 };
 
 export interface AddressedValue {

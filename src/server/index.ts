@@ -13,7 +13,8 @@ import { callTimeoutMs } from "../kernel/verified/call-timeout.ts";
 import { STORE } from "../providers/store/index.ts";
 import { stopAllShells } from "../providers/tools/bash.ts";
 import { TOOLS } from "../providers/tools/index.ts";
-import { globalLines, toolLines } from "../registry/generate.ts";
+import { HISTORY } from "../providers/tools/history.ts";
+import { globalLines, namespaceLines, toolLines } from "../registry/generate.ts";
 import { MCP_INTRO, MCP_LINE } from "../registry/mcp.ts";
 import { prepareArguments } from "../stages/args.ts";
 import { RepeatGuard } from "../stages/repeat-guard.ts";
@@ -63,7 +64,7 @@ const OUTRO = [
   "Run independent calls together in one Promise.all. In a large file, find lines with Grep, then Read only that range; don't cat files through Bash. Return only what the next step needs, not raw output. A type error stops the program before it runs and lists line numbers; fix it and call again.",
 ];
 
-export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), MCP_INTRO_LINE, MCP_LINE, STORE_INTRO, ...globalLines(STORE), ...OUTRO].join("\n");
+export const DESCRIPTION = [INTRO, ...toolLines(TOOLS), MCP_INTRO_LINE, MCP_LINE, STORE_INTRO, ...globalLines(STORE), "\nSession history:", ...namespaceLines("history", HISTORY), ...OUTRO].join("\n");
 
 // The shape the model may send. Deliberately loose: a program as an array of lines, payloads as
 // JSON text, a display label as a bare string and null optional fields are all repaired by
@@ -115,7 +116,7 @@ export function createServer(): McpServer {
       if (!parsed.success) return { content: [{ type: "text", text: bounded(envelopeError(parsed.error)) }], isError: true };
       // The limit is the compiled machine of proofs/call-timeout.ts: default 120000, never over 600000.
       const timeoutMs = callTimeoutMs(parsed.data.timeout);
-      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, timeoutMs, guard, store, mcp, builtin });
+      const result = await run(parsed.data.code, cwd, { payloads: parsed.data.payloads, timeoutMs, guard, store, mcp, builtin, transcriptPath: () => "bridge" in started ? started.bridge.transcriptPath() : undefined });
       return { content: [{ type: "text", text: bounded(result.text) }], isError: !result.ok };
     },
   );

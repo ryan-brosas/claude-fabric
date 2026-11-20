@@ -130,6 +130,16 @@ export function toolLines(actions: readonly AnyAction[]): string[] {
   });
 }
 
+/** A namespace of object-argument actions, printed from the same schemas parseArgs checks. */
+export function namespaceTypes(name: string, actions: readonly AnyAction[]): string {
+  const methods = actions.map((action) => `  /** ${action.doc} */\n  ${key(action.name)}(input: ${typeText(schemaOf(action.input))}): Promise<${typeText(schemaOf(action.output))}>;`);
+  return `declare const ${name}: {\n${methods.join("\n")}\n};`.replaceAll("\\n", "\n");
+}
+
+export function namespaceLines(name: string, actions: readonly AnyAction[]): string[] {
+  return toolLines(actions).map((line) => line.replace("- ", `- ${name}.`));
+}
+
 /** The model-facing lines for the guest globals that are not tools: one line each, then its doc. */
 export function globalLines(globals: readonly Builtin[]): string[] {
   return globals.map((builtin) => "- " + builtin.call + ". " + builtin.doc);

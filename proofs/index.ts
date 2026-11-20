@@ -16,6 +16,7 @@ import { NO_CUT_BUGS, noCutKernels } from "./no-cut.ts";
 import { OFFER_MEMO_BUGS, offerMemoKernels } from "./offer-memo.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
+import { RECALL_BUGS, recallKernels } from "./recall.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
 import { STORE_BUGS, storeLimitKernels } from "./store-limits.ts";
 import { TOOL_VISIBILITY_BUGS, toolVisibilityKernels } from "./tool-visibility.ts";
@@ -43,6 +44,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "context", source: "proofs/context.ts", out: compaction, kernels: contextKernels as any, bugs: CONTEXT_BUGS },
   { stem: "cut", source: "proofs/cut.ts", out: compaction, kernels: cutKernels as any, bugs: CUT_BUGS },
   { stem: "no-cut", source: "proofs/no-cut.ts", out: compaction, kernels: noCutKernels as any, bugs: NO_CUT_BUGS },
+  { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },

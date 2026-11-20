@@ -77,7 +77,8 @@ describe("protected compaction dialogue", () => {
       user("Keep going."),
     ]));
     const text = sections.dialogue.join("\n");
-    expect(text).toContain("UTF-8 bytes]");
+    expect(text).toMatch(/\[omitted \d+ UTF-8 bytes of 1\]/);
+    expect(text).toMatch(/\[omitted \d+ UTF-8 bytes of 2\]/);
     expect(text).not.toContain("�");
   });
 

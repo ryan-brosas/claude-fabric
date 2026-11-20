@@ -1,0 +1,9 @@
+{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"The harbor token is before compaction."}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"secret-note.txt"}}]}}
+{"type":"user","uuid":"r1","parentUuid":"a1","toolUseResultStripped":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The hidden token is ALMANAC-493."}]}}
+{"type":"user","uuid":"s1","parentUuid":"b1","isCompactSummary":true,"message":{"role":"user","content":"Earlier work summary."}}
+{"type":"assistant","uuid":"off","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"OFF-CHAIN-ONLY"}]}}
+{"type":"assistant","uuid":"side","parentUuid":"r1","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"SIDE-CHAIN-ONLY"}]}}
+{"type":"system","subtype":"compact_boundary","uuid":"b1","parentUuid":null,"logicalParentUuid":"r1","compactMetadata":{"preservedMessages":{"uuids":["u1","a1"],"allUuids":["u1","a1","missing-uuid"]}}}
+{"type":"user","uuid":"u2","parentUuid":"s1","message":{"role":"user","content":"Continue the work."}}
+{"type":"queue-operation","operation":"dequeue"}

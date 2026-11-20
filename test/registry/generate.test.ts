@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { z } from "zod";
 import { STORE } from "../../src/providers/store/index.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
+import { HISTORY } from "../../src/providers/tools/history.ts";
 import { defineAction } from "../../src/registry/action.ts";
 import { defineBuiltin } from "../../src/registry/builtin.ts";
-import { globalLines, guestTypes, parseArgs, toolLines } from "../../src/registry/generate.ts";
+import { globalLines, guestTypes, namespaceLines, namespaceTypes, parseArgs, toolLines } from "../../src/registry/generate.ts";
 
 const Fixture = defineAction({
   name: "Fixture",
@@ -39,6 +40,18 @@ test("guestTypes declares exactly the program tools, the store globals, print an
   const text = guestTypes(TOOLS, STORE);
   const declared = new Set([...text.matchAll(/declare function (\w+)/g)].map((m) => m[1]));
   expect([...declared].sort()).toEqual([...TOOLS.map((action) => action.name), ...STORE.map((builtin) => builtin.name), "print", "setTimeout", "clearTimeout"].sort());
+});
+
+test("history declarations, description and runtime checks come from the same actions", () => {
+  const declarations = namespaceTypes("history", HISTORY);
+  expect(declarations).toContain("recall(input: { query: string; limit?: number");
+  expect(declarations).toContain("follow: { binding: { bytes: number; sha256: string }");
+  expect(declarations).toContain("expand(input: { binding:");
+  const lines = namespaceLines("history", HISTORY);
+  expect(lines.map((line) => line.split("(")[0])).toEqual(["- history.recall", "- history.expand"]);
+  expect(lines[0]).toContain("Wrap the whole query in double quotes for an exact phrase.");
+  expect(() => parseArgs(HISTORY[0]!, [{ query: 42 }])).toThrow("query");
+  expect(() => parseArgs(HISTORY[1]!, [{ binding: { bytes: 1, sha256: "bad" } }])).toThrow("binding.sha256");
 });
 
 test("guestTypes prints a builtin from its one definition, and nothing without it", () => {

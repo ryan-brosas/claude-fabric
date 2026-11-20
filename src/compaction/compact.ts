@@ -110,11 +110,17 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
   // with its raw user reply. Never summarize the tail's tool history.
   const retainedDialogue = events.filter((event) =>
     Number(event.entryId) >= start && (event.kind === "user" || event.kind === "assistantText"));
-  const { sections } = projectWithMetadata(summarizedEvents, retainedDialogue);
+  const source = (position: number): string => {
+    const handle = messages[position]?.handle ?? messages[position]?.uuid;
+    if (!handle) throw new Error("fabric: a message has no source handle for recall");
+    return handle;
+  };
+  const addressed = (event: typeof events[number]) => ({ ...event, entryId: source(Number(event.entryId)) });
+  const { sections } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed));
   const instructions = options.instructions?.trim();
   const summary = renderSummary(sections, {
-    firstEntryId: String(0),
-    lastEntryId: String(start - 1),
+    firstEntryId: source(0),
+    lastEntryId: source(start - 1),
     lastTimestamp: "",
     ...(instructions ? { requestLines: [instructions] } : {}),
     ...(earlierSummary ? { earlierSummary } : {}),

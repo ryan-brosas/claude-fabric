@@ -14,6 +14,7 @@ export interface RunMessage {
   js: string;
   payloads: Record<string, string>;
   names: string[];
+  historyNames: string[];
   /** The session store the run starts from; the worker stages its writes itself. */
   store: Record<string, unknown>;
 }

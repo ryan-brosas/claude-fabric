@@ -1,5 +1,6 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/projections.ts at d331f629; dropped custom messages, Fabric run/phase/operation events and their activity fold, Pi's pi.* ref forms and the fresh-entry option, and reads Claude Code tool names and fields.
-import { boundedExcerpt, clipUtf8, omissionLine, sampleAddressed, sampleAddressedFrom } from "./bounds.ts";
+import { boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, omissionLine,
+  protectedBudgets, sampleAddressed, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
 import { foldFailureLedger } from "./verified/context.ts";
 import { projectDialogue, recentDialogue } from "./dialogue.ts";
 import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
@@ -7,7 +8,7 @@ import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-clau
 // Section folds: each projection is a pure function of the typed event stream.
 // Together they implement graded decay (principle 4): the oldest turns
 // collapse to one line, recent events stay as a collapsed transcript with
-// stable `(#N)` references, and the very last action is surfaced in Current
+// stable `[entry <handle>]` references, and the very last action is surfaced in Current
 // Status. Salience (principle 3) is *computed* from the event stream by the
 // outstanding fold's state machine — nothing is remembered, only re-derived.
 
@@ -155,14 +156,17 @@ const commonRoot = (paths: string[]): string => {
 const stripRoot = (root: string, path: string): string =>
   root ? path.replace(root, "") : path;
 
+const earlierUserHeading = (entryId: string): string => `User [entry ${entryId}]:\n`;
+
 /** One earlier user message as the summary renders it: verbatim up to a byte bound. */
-export const earlierUserItem = (user: { entryId: string; text: string }): string =>
-  `User [entry ${user.entryId}]:\n${boundedExcerpt(user.text.trim(), MAX_USER_MESSAGE_BYTES).text}`;
+export const earlierUserItem = (user: { entryId: string; text: string }, maxBytes = MAX_USER_MESSAGE_BYTES): string =>
+  `${earlierUserHeading(user.entryId)}${boundedExcerpt(user.text, Math.min(maxBytes, MAX_USER_MESSAGE_BYTES), user.entryId).text}`;
 
 // Earlier user messages are the user's own words, kept verbatim and in order.
 // They are evidence of what was asked, not an inferred active mandate.
 const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>): ProjectedSection => {
   const lines: string[] = [];
+  const users = new Map<number, Extract<CompactionEvent, { kind: "user" }>>();
   function* historicalUsers(): Generator<Extract<CompactionEvent, { kind: "user" }>> {
     for (const event of events) {
       if (event.kind === "user" && !protectedUsers.has(event.entryId) && event.text.trim()) yield event;
@@ -178,7 +182,18 @@ const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<stri
         "user messages",
       ));
     }
-    lines.push(earlierUserItem(sampled.values[index]!));
+    const user = sampled.values[index]!;
+    users.set(lines.length, user);
+    lines.push(earlierUserItem(user));
+  }
+  // Re-clip each original message, not its rendered item, if the block is full.
+  if (utf8Bytes([EARLIER_USERS_HEADER, ...lines].join("\n\n")) > MAX_EARLIER_USERS_SECTION_BYTES) {
+    const budgets = protectedBudgets(EARLIER_USERS_HEADER, lines, MAX_EARLIER_USERS_SECTION_BYTES);
+    for (const [index, user] of users) {
+      if (utf8Bytes(lines[index]!) <= budgets[index]!) continue;
+      const bodyBytes = Math.max(0, budgets[index]! - utf8Bytes(earlierUserHeading(user.entryId)));
+      lines[index] = earlierUserItem(user, bodyBytes);
+    }
   }
   return { lines, omitted: sampled.omitted };
 };
@@ -446,6 +461,33 @@ const summarizeArgs = (name: string, args: Record<string, unknown>): string => {
   return entries.map(([key, value]) => `${key}=${truncate(String(value), 40)}`).join(" ");
 };
 
+// Count source characters (Unicode code points), including line breaks and whitespace
+// removed when the first line is flattened. Give the marker room inside the line cap.
+const transcriptLine = (prefix: string, text: string): string => {
+  const first = firstLine(text).replace(/\s+/g, " ").trim();
+  const chars = Array.from(first);
+  let keep = chars.length > MAX_TRANSCRIPT_LINE ? MAX_TRANSCRIPT_LINE - 1 : chars.length;
+  let total = 0, extraLines = 0;
+  for (const char of text) {
+    total++;
+    if (char === "\n") extraLines++;
+  }
+  const candidate = (): string => {
+    const preview = chars.slice(0, keep).join("") + (keep < chars.length ? "…" : "");
+    const omitted = total - keep;
+    if (!omitted) return prefix + preview;
+    const lines = extraLines ? `${extraLines} ${extraLines === 1 ? "line" : "lines"}, ` : "";
+    return `${prefix}${preview} [${lines}${omitted} ${omitted === 1 ? "char" : "chars"} cut; history.expand]`;
+  };
+  let line = candidate();
+  while (utf8Bytes(line) > MAX_RENDERED_LINE_BYTES && keep > 0) {
+    keep--;
+    line = candidate();
+  }
+  if (utf8Bytes(line) > MAX_RENDERED_LINE_BYTES) throw new Error("fabric: transcript handle leaves no room for its omission marker");
+  return line;
+};
+
 // Brief transcript — the "collapsed transcript" tier of graded decay. A
 // rolling window of the last 40 events rendered as one-liners, each prefixed
 // with its stable `(#N)` reference so the agent can point back at a specific
@@ -463,16 +505,16 @@ const projectTranscript = (events: CompactionEvent[]): ProjectedSection => {
     ));
   }
   for (const e of window) {
-    const ref = `(#${e.index})`;
+    const ref = `[entry ${e.entryId}]`;
     if (e.kind === "user") {
-      lines.push(`${ref} user: ${truncate(firstLine(e.text), MAX_TRANSCRIPT_LINE)}`);
+      lines.push(transcriptLine(`${ref} user: `, e.text));
     } else if (e.kind === "assistantText") {
-      lines.push(`${ref} assistant: ${truncate(firstLine(e.text), MAX_TRANSCRIPT_LINE)}`);
+      lines.push(transcriptLine(`${ref} assistant: `, e.text));
     } else if (e.kind === "toolCall") {
       lines.push(`${ref} ${e.name}(${summarizeArgs(e.name, e.args)})`);
     } else if (e.kind === "toolResult") {
       const status = e.isError ? "error" : "ok";
-      lines.push(`${ref} → ${status}: ${truncate(firstLine(e.text), MAX_TRANSCRIPT_LINE)}`);
+      lines.push(transcriptLine(`${ref} → ${status}: `, e.text));
     } else if (e.kind === "bash") {
       const status = e.isError ? "error" : "ok";
       lines.push(`${ref} Bash(${truncate(firstLine(e.command), MAX_TRANSCRIPT_CMD)}) → ${status}`);

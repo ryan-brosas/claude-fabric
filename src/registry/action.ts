@@ -8,6 +8,8 @@ export interface BuiltinToolLink {
 // What a program tool's run() may use besides its own input.
 export interface ActionContext {
   cwd: string;
+  /** This session’s transcript path, published by the mod. */
+  transcriptPath?: string;
   /** Claude Code's built-in tools, gated by the host's allowlist. Absent when the run has no bridge. */
   builtin?: BuiltinToolLink;
   /** Aborted when the run ends, by its done, an error or its time limit: a process a call started stops with it. */

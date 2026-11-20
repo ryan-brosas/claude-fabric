@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { MAX_RESULT_CHARS } from "../../src/kernel/result.ts";
+import { BRIDGE_HEADER, boundSecret, bridgePaths } from "../../src/bridge/contract.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 
 const root = new URL("../..", import.meta.url).pathname;
@@ -43,6 +44,51 @@ test("lists exactly one tool, fabric_exec, documented with Claude tool names", a
   const description = String(tools[0]?.description ?? "");
   expect(description).toContain("mcp.<server>.<tool>(args)");
   expect(description.split("\n").filter((line) => line.startsWith("- mcp."))).toHaveLength(1);
+});
+
+test("history explains when this session has no transcript path", async () => {
+  const result = await call({ code: 'return await history.recall({query: "missing"});' });
+  expect(result.isError).toBe(true);
+  expect(result.text).toContain("transcript path is unknown");
+});
+
+test("history calls cross the real server and expand the fixture token", async () => {
+  const data = await mkdtemp(join(tmpdir(), "frec-"));
+  const session = "history-fixture";
+  const paths = bridgePaths(data, session);
+  const fixture = join(work, "history.jsonl");
+  await Bun.write(fixture, Bun.file(new URL("../recall/fixtures/chain.jsonl", import.meta.url)));
+  const other = new Client({ name: "history-test", version: "0.0.0" });
+  try {
+    await other.connect(new StdioClientTransport({ command: "bun", args: [root + "src/server/index.ts"],
+      env: { ...process.env, CLAUDE_PROJECT_DIR: work, CLAUDE_PLUGIN_DATA: data, CLAUDE_CODE_SESSION_ID: session } as Record<string, string> }));
+    const started = performance.now();
+    while (!(await Bun.file(paths.secret).exists()) && performance.now() - started < 4000) await Bun.sleep(10);
+    const secret = boundSecret(await Bun.file(paths.secret).text(), session);
+    expect(secret).toBeDefined();
+    const post = (value: string) => fetch("http://bridge/session", { method: "POST", unix: paths.socket,
+      headers: { [BRIDGE_HEADER]: value, "content-type": "application/json" }, body: JSON.stringify({ transcriptPath: fixture }) });
+    expect((await post("wrong-secret")).status).toBe(403);
+    expect((await post(secret!)).status).toBe(200);
+    const r = await other.callTool({ name: "fabric_exec", arguments: { code: 'const hits = await history.recall({query: "ALMANAC-493"}); const page = await history.expand(hits.hits[0]!.follow); return page.entries[0]!.text;' } });
+    expect(r.isError).toBe(false);
+    expect((r.content as { text: string }[])[0]!.text).toContain("ALMANAC-493");
+    const phrase = await other.callTool({ name: "fabric_exec", arguments: { code: `
+      const found = await history.recall({ query: '\"harbor token\"' });
+      const reversed = await history.recall({ query: '\"token harbor\"' });
+      const page = await history.expand(found.hits[0]!.follow);
+      return { ids: found.hits.map(hit => hit.uuid), reversed: reversed.total, text: page.entries[0]!.text };
+    ` } });
+    expect(phrase.isError).toBe(false);
+    expect(JSON.parse((phrase.content as { text: string }[])[0]!.text))
+      .toEqual({ ids: ["u1"], reversed: 0, text: "The harbor token is before compaction." });
+    const bad = await other.callTool({ name: "fabric_exec", arguments: { code: 'return await history.recall({query: 42 as any});' } });
+    expect(bad.isError).toBe(true);
+    expect((bad.content as { text: string }[])[0]!.text).toContain("query");
+  } finally {
+    await other.close();
+    await rm(data, { recursive: true, force: true });
+  }
 });
 
 test("Read numbers lines like cat -n and honors offset and limit", async () => {

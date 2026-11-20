@@ -69,12 +69,13 @@ export const dialogueExcerpts = (exchange: DialogueExchange): DialogueExcerpt[] 
   // leave the remainder available for the preceding assistant response.
   const assistantBytes = exchange.assistant && !exchange.assistant.retained ? utf8Bytes(exchange.assistant.text) : 0;
   const userBudget = exchange.assistant ? Math.max(available / 2, available - assistantBytes) : available;
-  const user = boundedExcerpt(userText, Math.floor(userBudget));
+  const user = boundedExcerpt(userText, Math.floor(userBudget), exchange.user.entryId);
   const excerpts: DialogueExcerpt[] = [{ heading: userHeading, ...user }];
   if (exchange.assistant) {
     const assistant = boundedExcerpt(
       exchange.assistant.retained ? "" : exchange.assistant.text,
       available - utf8Bytes(user.text),
+      exchange.assistant.entryId,
     );
     excerpts.unshift({ heading: assistantHeading, ...assistant });
   }

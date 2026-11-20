@@ -89,12 +89,40 @@ export const register: Register = (on, options) => {
       socket = paths;
       ownSession = sessionId;
 
+      // session.start has no transcript field; retry info beside the bridge poll until it has a path.
+      let transcriptPath = "";
+      let infoPending = false;
+      let sessionPostedTo = "";
+      let sessionPosting = false;
+      const postSession = async (secret: string): Promise<void> => {
+        if (!transcriptPath || sessionPostedTo === secret || sessionPosting) return;
+        sessionPosting = true;
+        try {
+          const post = requestOf("/session", secret, { transcriptPath }, paths);
+          if ((await $.http.fetch(post.url, post.init)).ok) sessionPostedTo = secret;
+        } catch { /* The bridge loop will retry. */ }
+        finally { sessionPosting = false; }
+      };
       let failures = 0;
       for (;;) {
+        if (transcriptPath === "" && !infoPending) {
+          infoPending = true;
+          void (async () => {
+            try {
+              transcriptPath = (await $.session.info()).transcriptPath || "";
+              if (transcriptPath) {
+                const secret = boundSecret(await $.fs.read(paths.secret), sessionId);
+                if (secret !== undefined) void postSession(secret);
+              }
+            } catch { /* The session or its bridge may not be ready yet. */ }
+            finally { infoPending = false; }
+          })();
+        }
         try {
           const secret = boundSecret(await $.fs.read(paths.secret), sessionId);
           if (secret === undefined) throw new Error("the bridge secret is empty or names another session");
           state = notedSecret(state, secret);
+          void postSession(secret);
           const plan = publishPlan(state);
           if (plan !== undefined) {
             const post = requestOf(plan.path, secret, plan.body, paths);

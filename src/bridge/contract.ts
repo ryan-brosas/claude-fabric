@@ -92,6 +92,9 @@ export interface BridgeCatalog {
   servers: readonly BridgeServer[];
 }
 
+/** The main conversation transcript path published by the session.start hook. */
+export interface BridgeSession { transcriptPath: string }
+
 /** One job the mod runs: a connected MCP server's tool, or a built-in tool Claude Code owns. */
 export type BridgeJob = McpJob | BuiltinJob;
 
@@ -137,6 +140,11 @@ export interface BridgeNext {
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Whether a session path message has the expected shape. An empty path means unavailable. */
+export function isBridgeSession(value: unknown): value is BridgeSession {
+  return isObject(value) && typeof value.transcriptPath === "string";
+}
 
 /** Whether a body is a catalog the server can hold. A malformed one would poison the checker. */
 export function isBridgeCatalog(value: unknown): value is BridgeCatalog {
