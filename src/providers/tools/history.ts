@@ -15,7 +15,7 @@ const hit = z.object({ uuid: z.string(), kind, score: z.number(), snippet: z.str
 const Recall = defineAction({ name: "recall", doc: "Search this session's transcript. Wrap the whole query in double quotes for an exact phrase. Each hit carries follow arguments for history.expand.",
   input: recallInput, output: z.object({ binding, hits: z.array(hit), total: z.number(), unresolvable: z.array(z.string()), next: recallInput.nullable() }),
   positional: [], run: (input, ctx) => recall(ctx.transcriptPath ?? "", input) });
-const Expand = defineAction({ name: "expand", doc: "Read full source text by bound UUIDs or inclusive range; next continues a page.",
+const Expand = defineAction({ name: "expand", doc: "Read any named non-sidechain conversation entry in the bound transcript, including entries named by a summary. Ranges and before/after require the active chain. For mixed IDs, active-chain entries come first in chain order, then off-chain entries in requested order; next continues a page.",
   input: expandInput, output: z.object({ entries: z.array(z.object({ uuid: z.string(), kind, text: z.string(),
     textRange: z.object({ start: z.number(), end: z.number(), total: z.number(), complete: z.boolean() }) })), next: expandInput.nullable() }),
   positional: [], run: (input, ctx) => expand(ctx.transcriptPath ?? "", input) });

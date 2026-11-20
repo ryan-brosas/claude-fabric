@@ -3,7 +3,7 @@
 export type EntryKind = "user" | "assistant" | "summary" | "tool_result" | "tool";
 export interface Entry { uuid: string; parent: string | null; kind: EntryKind; text: string; timestamp: string | null }
 export interface Boundary { uuid: string; uuids: string[]; allUuids: string[]; unresolvable: string[] }
-export interface Transcript { entries: Entry[]; boundaries: Boundary[] }
+export interface Transcript { entries: Entry[]; byId: Map<string, Entry>; boundaries: Boundary[] }
 export type TranscriptRow = Record<string, unknown>;
 type Row = TranscriptRow;
 const object = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
@@ -75,8 +75,19 @@ export function transcriptChain(text: string): { chain: TranscriptRow[]; rows: M
   return { chain, rows };
 }
 
+const conversationEntry = (row: Row): Entry | null => {
+  if (row.type !== "user" && row.type !== "assistant") return null;
+  return { uuid: string(row.uuid), parent: string(row.parentUuid ?? row.logicalParentUuid) || null,
+    ...entryText(row), timestamp: string(row.timestamp) || null };
+};
+
 export function parseTranscript(text: string): Transcript {
   const { chain, rows } = transcriptChain(text);
+  const byId = new Map<string, Entry>();
+  for (const [uuid, row] of rows) {
+    const entry = conversationEntry(row);
+    if (entry) byId.set(uuid, entry);
+  }
   const entries: Entry[] = [];
   const boundaries: Boundary[] = [];
   for (const row of chain) {
@@ -88,9 +99,8 @@ export function parseTranscript(text: string): Transcript {
       const allUuids = strings(meta.allUuids ?? preserved.allUuids);
       boundaries.push({ uuid, uuids, allUuids, unresolvable: allUuids.filter((id) => !rows.has(id)) });
     }
-    if (row.type !== "user" && row.type !== "assistant") continue;
-    entries.push({ uuid, parent: string(row.parentUuid ?? row.logicalParentUuid) || null,
-      ...entryText(row), timestamp: string(row.timestamp) || null });
+    const entry = byId.get(uuid);
+    if (entry) entries.push(entry);
   }
-  return { entries, boundaries };
+  return { entries, byId, boundaries };
 }

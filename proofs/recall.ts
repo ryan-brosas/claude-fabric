@@ -4,13 +4,19 @@
 import { bool, fun, min, nat, when } from "gdp-wired";
 import type { Kernel } from "./kernel.ts";
 
-export type RecallBug = "accept a rewrite" | "limit over cap" | "page over char cap" | "context over cap" | "range over cap";
+export type RecallBug = "accept a rewrite" | "limit over cap" | "page over char cap" | "context over cap" | "range over cap"
+  | "admit unbound entry" | "admit unnamed entry" | "admit ineligible entry" | "admit off-chain ordered entry";
 
 const recall = (bug?: RecallBug) => fun("recall binding and limits")
   .inputs({ present: bool, same: bool, limitGiven: bool, limit: nat, entriesGiven: bool, entries: nat,
-    charsGiven: bool, chars: nat, context: nat, range: nat, responseChars: nat, pageChars: nat })
-  .returns(({ present, same, limitGiven, limit, entriesGiven, entries, charsGiven, chars, context, range, responseChars, pageChars }) => ({
+    charsGiven: bool, chars: nat, context: nat, range: nat, responseChars: nat, pageChars: nat,
+    named: bool, eligible: bool, ordered: bool, onChain: bool })
+  .returns(({ present, same, limitGiven, limit, entriesGiven, entries, charsGiven, chars, context, range, responseChars, pageChars, named, eligible, ordered, onChain }) => ({
     bound: when(bug === "accept a rewrite" ? present : present.and(same), 1, 0),
+    entryOK: when((bug === "admit unbound entry" ? present : present.and(same))
+      .and(bug === "admit unnamed entry" ? present : named)
+      .and(bug === "admit ineligible entry" ? present : eligible)
+      .and(bug === "admit off-chain ordered entry" ? present : ordered.not().or(onChain)), 1, 0),
     limit: when(limitGiven, bug === "limit over cap" ? limit : min(limit, 50), 10),
     entries: when(entriesGiven, min(entries, 20), 10),
     chars: when(charsGiven, min(chars, 24000), 20000),
@@ -25,6 +31,10 @@ export const recallKernels = (bug?: RecallBug): Kernel[] => {
   return [{ id: "recall", fun: r, decisions: [
     r.law("binding_exact: expansion accepts exactly an existing matching prefix", () => [],
       (o, e) => o.bound.eq(1).iff(e.present.and(e.same))),
+    r.law("direct_entry_exact: a direct read admits exactly named eligible rows in the matching bound prefix", () => [],
+      (o, e) => e.ordered.not().implies(o.entryOK.eq(1).iff(e.present.and(e.same).and(e.named).and(e.eligible)))),
+    r.law("ordered_entry_exact: an ordered read also requires active-chain membership", () => [],
+      (o, e) => e.ordered.implies(o.entryOK.eq(1).iff(e.present.and(e.same).and(e.named).and(e.eligible).and(e.onChain)))),
     r.law("limit_capped: recall returns at most fifty hits", () => [], (o) => o.limit.atMost(50)),
     r.law("limit_default: recall defaults to ten hits", () => [], (o, e) => e.limitGiven.not().implies(o.limit.eq(10))),
     r.law("entries_capped: an expansion page holds at most twenty entries", () => [], (o) => o.entries.atMost(20)),
@@ -38,4 +48,5 @@ export const recallKernels = (bug?: RecallBug): Kernel[] => {
   ] }];
 };
 
-export const RECALL_BUGS: RecallBug[] = ["accept a rewrite", "limit over cap", "page over char cap", "context over cap", "range over cap"];
+export const RECALL_BUGS: RecallBug[] = ["accept a rewrite", "limit over cap", "page over char cap", "context over cap", "range over cap",
+  "admit unbound entry", "admit unnamed entry", "admit ineligible entry", "admit off-chain ordered entry"];
