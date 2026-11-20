@@ -3,6 +3,7 @@
 // verified/cut.ts (rule and laws in proofs/cut.ts) before anything is summarized.
 import { type ClaudeMessage, messageBytes, normalizeMessages } from "./from-claude.ts";
 import { projectWithMetadata } from "./projections.ts";
+import { exactValues } from "./literals.ts";
 import { renderSummary, SUMMARY_HEADER } from "./render.ts";
 import { acceptCut } from "./verified/cut.ts";
 import { noCutVerdict } from "./verified/no-cut.ts";
@@ -123,6 +124,7 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     lastEntryId: source(start - 1),
     lastTimestamp: "",
     requestLines,
+    literals: exactValues(messages, start, earlierSummary),
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 
