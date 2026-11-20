@@ -14,6 +14,83 @@ const make = async (): Promise<string> => {
   return path;
 };
 
+test("a rewritten off-chain copy expands its own exact text and UUID across pages", async () => {
+  const path = await make();
+  const body = "same original 🦊 and copied tool output ".repeat(8);
+  const text = `toolResult: ${body}`;
+  const result = (toolUseId: string) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: body }] });
+  const rows = [
+    { type: "user", uuid: "original-1", parentUuid: null, message: result("call-1") },
+    { type: "user", uuid: "original-2", parentUuid: "original-1", message: result("call-2") },
+    { type: "user", uuid: "copy", parentUuid: "original-1", message: result("rewritten-call") },
+    { type: "user", uuid: "active", parentUuid: "original-2", isCompactSummary: true,
+      message: { role: "user", content: "[Fabric summary]\n[entry copy] copied tool output" } },
+  ];
+  await writeFile(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const { binding } = await recall(path, { query: "summary" });
+  const identical = await expand(path, { binding, entryIds: ["original-2", "copy", "original-1"] });
+  expect(identical.entries.map((entry) => entry.uuid)).toEqual(["original-1", "original-2", "copy"]);
+  expect(identical.entries.map((entry) => entry.text)).toEqual([text, text, text]);
+  expect(identical.entries.map((entry) => entry.kind)).toEqual(["tool_result", "tool_result", "tool_result"]);
+  let args = { binding, entryIds: ["copy"], maxChars: 17 };
+  let rebuilt = "";
+  for (;;) {
+    const page = await expand(path, args);
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]!.uuid).toBe("copy");
+    rebuilt += page.entries[0]!.text;
+    if (!page.next) break;
+    args = page.next as typeof args;
+  }
+  expect(rebuilt).toBe(text);
+});
+
+test("mixed direct IDs retain chain order then request order for off-chain rows", async () => {
+  const path = await make();
+  const fixture = await readFile(path, "utf8");
+  const second = JSON.stringify({ type: "user", uuid: "off-2", parentUuid: "u1", message: { content: "other off-chain" } });
+  await writeFile(path, fixture.replace('{"type":"user","uuid":"u2"', `${second}\n{"type":"user","uuid":"u2"`));
+  const { binding } = await recall(path, { query: "Continue" });
+  expect((await recall(path, { query: "OFF-CHAIN-ONLY" })).hits).toEqual([]);
+  const page = await expand(path, { binding, entryIds: ["off-2", "u2", "off", "u1", "off-2", "a1"] });
+  expect(page.entries.map((entry) => entry.uuid)).toEqual(["u1", "a1", "u2", "off-2", "off"]);
+  expect(page.entries.slice(-2).map((entry) => entry.text)).toEqual(["other off-chain", "OFF-CHAIN-ONLY"]);
+  const chainOnly = await expand(path, { binding, entryIds: ["u2", "u1", "a1"] });
+  expect(chainOnly.entries.map((entry) => entry.uuid)).toEqual(["u1", "a1", "u2"]);
+});
+
+test("off-chain range and context anchors are refused, but active-chain ordering still works", async () => {
+  const path = await make();
+  const { binding } = await recall(path, { query: "Continue" });
+  for (const range of [{ first: "off", last: "u2" }, { first: "u1", last: "off" }]) {
+    await expect(expand(path, { binding, range })).rejects.toThrow("use plain entryIds");
+  }
+  for (const context of [{ before: 1 }, { after: 1 }, { before: 0 }, { after: 0 }]) {
+    await expect(expand(path, { binding, entryIds: ["off"], ...context })).rejects.toThrow("use plain entryIds");
+  }
+  const range = await expand(path, { binding, range: { first: "a1", last: "s1" } });
+  expect(range.entries.map((entry) => entry.uuid)).toEqual(["a1", "r1", "s1"]);
+  const context = await expand(path, { binding, entryIds: ["r1"], before: 1, after: 1 });
+  expect(context.entries.map((entry) => entry.uuid)).toEqual(["a1", "r1", "s1"]);
+});
+
+test("direct IDs cannot cross sidechain, missing, post-binding or mutated-prefix boundaries", async () => {
+  const path = await make();
+  const { binding } = await recall(path, { query: "Continue" });
+  await appendFile(path, JSON.stringify({ type: "user", uuid: "later", parentUuid: "u2", message: { content: "LATER-SECRET" } }) + "\n");
+  for (const id of ["side", "missing", "later", "b1"]) {
+    await expect(expand(path, { binding, entryIds: [id] })).rejects.toThrow("not found in the bound transcript");
+  }
+  expect((await expand(path, { binding, entryIds: ["off"] })).entries[0]!.text).toBe("OFF-CHAIN-ONLY");
+  const current = await readFile(path, "utf8");
+  await writeFile(path, current.replace("OFF-CHAIN-ONLY", "CHANGED-SECRET"));
+  let error = "";
+  try { await expand(path, { binding, entryIds: ["off"] }); } catch (cause) { error = String(cause); }
+  expect(error).toContain("transcript prefix changed");
+  expect(error).not.toContain("OFF-CHAIN-ONLY");
+  expect(error).not.toContain("CHANGED-SECRET");
+});
+
 test("a tool-result hit expands from the bound prefix after the transcript grows", async () => {
   const path = await make();
   const result = await recall(path, { query: "ALMANAC-493" });

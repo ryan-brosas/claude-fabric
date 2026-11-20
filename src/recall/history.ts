@@ -71,36 +71,45 @@ export async function expand(path: string, args: ExpandArgs): Promise<ExpandResu
   const bytes = await transcript(path);
   const prefix = bytes.subarray(0, binding.bytes);
   const actual = hash(prefix);
-  if (!decide({ present: bytes.length >= binding.bytes, same: actual === binding.sha256 }).bound) {
+  const present = bytes.length >= binding.bytes, same = actual === binding.sha256;
+  if (!decide({ present, same }).bound) {
     throw new Error(`history.expand: transcript prefix changed; expected ${binding.sha256}, actual ${actual}`);
   }
-  const entries = parseTranscript(prefix.toString("utf8")).entries;
+  const parsed = parseTranscript(prefix.toString("utf8"));
+  const entries = parsed.entries;
   const index = new Map(entries.map((entry, i) => [entry.uuid, i]));
   const ids = args.entryIds ?? [];
   if ((ids.length > 0) === Boolean(args.range)) throw new Error("history.expand: choose entryIds or one inclusive range");
-  const locate = (uuid: string): number => {
-    const found = index.get(uuid);
-    if (found === undefined) throw new Error(`history.expand: uuid ${JSON.stringify(uuid)} was not found on the active chain`);
-    return found;
+  const ordered = Boolean(args.range) || args.before !== undefined || args.after !== undefined;
+  const locate = (uuid: string): Entry => {
+    const entry = parsed.byId.get(uuid);
+    const onChain = index.has(uuid);
+    if (!decide({ present, same, named: entry?.uuid === uuid, eligible: entry !== undefined, ordered, onChain }).entryOK) {
+      if (entry && ordered && !onChain) throw new Error(`history.expand: uuid ${JSON.stringify(uuid)} is not on the active chain; use plain entryIds without range or before/after`);
+      throw new Error(`history.expand: uuid ${JSON.stringify(uuid)} was not found in the bound transcript`);
+    }
+    return entry!;
   };
-  let positions: number[];
+  let selected: Entry[];
   if (args.range) {
-    const first = locate(args.range.first), last = locate(args.range.last);
+    const first = index.get(locate(args.range.first).uuid)!, last = index.get(locate(args.range.last).uuid)!;
     if (first > last) throw new Error("history.expand: range must follow transcript order");
     const count = last - first + 1;
     if (!decide({ range: count }).rangeOK) throw new Error("history.expand: range exceeds the 20-entry cap");
-    positions = Array.from({ length: count }, (_, i) => first + i);
+    selected = entries.slice(first, last + 1);
   } else {
     if (!decide({ range: ids.length }).rangeOK) throw new Error("history.expand: entryIds exceeds the 20-entry cap");
-    positions = [...new Set(ids.map(locate))].sort((a, b) => a - b);
+    const requested = [...new Set(ids)].map(locate);
+    // Chain order is meaningful; unrelated rows retain request order, not file order.
+    selected = requested.filter((entry) => index.has(entry.uuid)).sort((a, b) => index.get(a.uuid)! - index.get(b.uuid)!)
+      .concat(requested.filter((entry) => !index.has(entry.uuid)));
   }
   if (before || after) {
-    if (positions.length !== 1) throw new Error("history.expand: before/after needs exactly one anchor");
-    const anchor = positions[0]!;
+    if (selected.length !== 1) throw new Error("history.expand: before/after needs exactly one anchor");
+    const anchor = index.get(selected[0]!.uuid)!;
     const start = Math.max(0, anchor - before), end = Math.min(entries.length - 1, anchor + after);
-    positions = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+    selected = entries.slice(start, end + 1);
   }
-  const selected = positions.map((position) => entries[position]!);
   if (entryOffset > selected.length || (entryOffset === selected.length && textOffset !== 0) ||
       (entryOffset < selected.length && textOffset > selected[entryOffset]!.text.length)) {
     throw new Error("history.expand: continuation is outside the selected text");
