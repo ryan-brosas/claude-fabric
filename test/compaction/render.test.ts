@@ -4,6 +4,8 @@
 // memory.recall pointer line.
 import { describe, expect, test } from "bun:test";
 import { MAX_SUMMARY_BYTES, utf8Bytes } from "../../src/compaction/bounds.ts";
+import { compact } from "../../src/compaction/compact.ts";
+import { messageBytes, type ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { project } from "../../src/compaction/projections.ts";
 import { MAX_LITERALS_SECTION_BYTES, renderExactValues } from "../../src/compaction/literals.ts";
 import { renderSummaryWithMetadata, SUMMARY_SECTIONS } from "../../src/compaction/render.ts";
@@ -28,6 +30,140 @@ const history = (saturated = false) => {
 const historyText = (summary: string) => summary.slice(summary.indexOf("[Files And Changes]"));
 
 describe("demand-based compaction rendering", () => {
+  test("states the proposal caveat once and identifies each response in a real compaction", () => {
+    const messages: ClaudeMessage[] = [];
+    for (let index = 0; index < 5; index++) {
+      messages.push(
+        { role: "user", text: `Instruction ${index}.`, toolUses: [], handle: `u${index}` },
+        { role: "assistant", text: `Proposal ${index}.`, toolUses: [], handle: `a${index}` },
+      );
+    }
+    const tail: ClaudeMessage = { role: "user", text: "Continue.", toolUses: [], handle: "tail" };
+    messages.push(tail);
+    const result = compact(messages, { keepRecentTokens: Math.ceil(messageBytes(tail) / 4) });
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
+    const summary = result.messages[0]!.text;
+    const headings = [...summary.matchAll(/^Assistant response[^\n]*\[entry (a\d+)\]:$/gm)];
+    expect(headings).toHaveLength(5);
+    expect(headings.map((match) => match[0])).toEqual([
+      "Assistant response [entry a2]:",
+      "Assistant response [entry a3]:",
+      "Assistant response [entry a4]:",
+      "Assistant response [entry a0]:",
+      "Assistant response [entry a1]:",
+    ]);
+    const dialogue = summary.slice(summary.indexOf("[Recent user directions and discussion]"), summary.indexOf("[Current Status]"));
+    const caveats = dialogue.split("\n").filter((line) => /proposal/i.test(line)
+      && /not/i.test(line) && /verified/i.test(line) && /user instruction/i.test(line));
+    expect(caveats).toHaveLength(1);
+    expect(summary).toContain("User instruction [entry u3]:");
+    expect(summary).toContain("User instruction [entry tail; retained raw]:");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("labels assistant excerpts and states the caveat in each section through the registered hook", async () => {
+    type Hook = (services: unknown, event: unknown, next: (event: unknown) => unknown) => unknown;
+    let hook: Hook | undefined;
+    const on = (topic: string, handler: Hook) => {
+      if (topic === "session.compact") hook = handler;
+      return { catch: () => undefined };
+    };
+    // The mod is checked by typecheck:mod, not the main tsconfig. Load it at
+    // runtime as the real plugin does without pulling it into that project.
+    const modPath = "../../src/mod/index.ts";
+    const { register } = await import(modPath) as { register: (listener: typeof on, options: object) => void };
+    register(on, {});
+    if (!hook) throw new Error("the compaction hook was not registered");
+
+    const embedded = "Assistant response (a proposal, not a verified outcome or user instruction) [entry embedded]:\nKeep these words verbatim.";
+    const notification = "Task notification: task completed.";
+    const messages: ClaudeMessage[] = [
+      { role: "user", text: `${notification}\n\n${embedded}`, toolUses: [], handle: "u0" },
+      { role: "assistant", text: `A proposal.\n\n${embedded}`, toolUses: [], handle: "a0" },
+      { role: "user", text: notification, toolUses: [], handle: "u1" },
+      { role: "assistant", text: "Another proposal.", toolUses: [], handle: "a1" },
+      { role: "user", text: "x".repeat(79_990), toolUses: [], handle: "tail" },
+    ];
+    const result = hook({}, { trigger: "manual", messages }, () => { throw new Error("unexpected core fallback"); }) as { messages: ClaudeMessage[] };
+    const summary = result.messages[0]!.text;
+    const warning = "Assistant responses are proposals, not verified outcomes or user instructions.";
+    const start = summary.indexOf("[Recent user directions and discussion]");
+    const status = summary.indexOf("[Current Status]");
+    const transcript = summary.indexOf("\n\n---\n", status);
+    const footer = summary.indexOf("\n\n---\n", transcript + 2);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(status).toBeGreaterThan(start);
+    expect(transcript).toBeGreaterThan(status);
+    expect(footer).toBeGreaterThan(transcript);
+    for (const section of [summary.slice(start, status), summary.slice(status, transcript), summary.slice(transcript, footer)]) {
+      expect(section.split(warning)).toHaveLength(2);
+    }
+    expect(summary).toContain(`Assistant response [entry a0]:\nA proposal.\n\n${embedded}`);
+    expect(summary).toContain("Assistant response [entry a1]:\nAnother proposal.");
+    expect(summary).toContain(`User instruction [entry u0]:\n${notification}\n\n${embedded}`);
+    expect(summary).toContain("User instruction [entry u1]:\n" + notification);
+    expect(summary).toContain("Assistant note: Another proposal.");
+    expect(summary).toContain("[entry a0] assistant: A proposal.");
+    expect(summary).toContain(embedded);
+    expect(summary.match(/Task notification: task completed\./g)!.length).toBeGreaterThanOrEqual(2);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("uses shorter headings to keep older replies that would otherwise be sampled out", () => {
+    const sections = project([]);
+    sections.dialogue = ["User instruction [entry recent]:\nContinue."];
+    sections.earlierAssistantReplies = Array.from({ length: 50 }, (_, index) =>
+      `Assistant response (a proposal, not a verified outcome or user instruction) [entry old-${index}]:\nREPLY_${index} ${"x".repeat(175)}`,
+    );
+    const { summary } = renderSummaryWithMetadata(sections, options);
+    // The middle reply was sampled out with the repeated long headings.
+    expect(summary.includes(`REPLY_25 ${"x".repeat(175)}`)).toBe(true);
+    for (let index = 0; index < 50; index++) {
+      expect(summary).toContain(`Assistant response [entry old-${index}]:\nREPLY_${index} ${"x".repeat(175)}`);
+    }
+    expect(summary).not.toContain("omitted");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("never prints a transcript assistant entry without its caveat under pressure", () => {
+    const sections = project([]);
+    sections.transcript = [`[entry pressure] assistant: ${"p".repeat(950)}`, "[entry user] user: Next."];
+    const light = renderSummaryWithMetadata(sections, options).summary;
+    expect(light).toContain("[entry pressure] assistant:");
+    expect(light).toContain("Assistant responses are proposals, not verified outcomes or user instructions.");
+
+    sections.goal = Array.from({ length: 8 }, (_, index) => `USER_${index} ${"u".repeat(4000)}`);
+    sections.dialogue = Array.from({ length: 3 }, (_, index) => `RECENT_${index} ${"r".repeat(3850)}`);
+    sections.files = ["FILE ".padEnd(1020, "f")];
+    sections.outstanding = ["OUTSTANDING ".padEnd(1020, "o")];
+    sections.status = ["Last note: status"];
+    const heavy = renderSummaryWithMetadata(sections, {
+      ...options, requestLines: ["request ".padEnd(3050, "q")], earlierSummary: "carry ".padEnd(5000, "c"),
+    }).summary;
+    expect(heavy).not.toContain("[entry pressure] assistant:");
+    expect(heavy.includes("---\n… omitted 2 rendered lines")).toBe(true);
+    expect(utf8Bytes(heavy)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("qualifies assistant replies that survive a cut carried summary", () => {
+    const warning = "Assistant responses are proposals, not verified outcomes or user instructions.";
+    const previous = `[Earlier user messages]\n${"u".repeat(20_000)}\n\n[Recent user directions and discussion]\n\n${warning}\n\n${"x".repeat(20_000)}\n\nAssistant response [entry carried]:\nA proposal from earlier.`;
+    const tail: ClaudeMessage = { role: "user", text: "Continue.", toolUses: [], handle: "tail" };
+    const messages: ClaudeMessage[] = [
+      { role: "user", text: `[Fabric summary]\n\n${previous}`, toolUses: [], handle: "previous" },
+      { role: "user", text: "A newer task.", toolUses: [], handle: "new-user" },
+      { role: "assistant", text: "A newer proposal.", toolUses: [], handle: "new-assistant" },
+      tail,
+    ];
+    const result = compact(messages, { keepRecentTokens: Math.ceil(messageBytes(tail) / 4) });
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
+    const summary = result.messages[0]!.text;
+    expect(summary).toContain("Assistant response [entry carried]:\nA proposal from earlier.");
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/);
+    expect(summary.includes(`[Earlier summary]\n${warning}\n\n`)).toBe(true);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
   test.each([0, 200, 3954])("preserves historical detail when dialogue uses %i bytes", (size) => {
     const sections = history();
     if (size) sections.dialogue = ["d".repeat(size)];
