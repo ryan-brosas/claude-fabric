@@ -109,13 +109,61 @@ describe("compact: the cut", () => {
 });
 
 describe("compact: what the summary loses today", () => {
-  test("the 2048-byte earlier-user-message cap cuts a long spec's final paragraph", () => {
-    const spec = `Unrelated spec detail comes first.\n${"The service records ordinary audit events for review. ".repeat(78)}\n\nThe port is 7431; the retry limit is 9.`;
+  test("keeps the tail of an earlier user message when the summary has room", () => {
+    const spec = `${"Long user instruction. ".repeat(145)}\nFINAL_RELEASE_CODE=OSPREY-40817`;
+    const messages = [prompt(spec), reply("Noted.")];
+    for (let index = 1; index <= 20; index++) {
+      messages.push(prompt(`Direction ${index}: ${"important context ".repeat(20)}`), reply("Noted."));
+    }
+    expect(utf8Bytes(spec)).toBeGreaterThan(2048);
+    const summary = summaryOf(messages);
+    expect(summary).toContain("[Earlier user messages]");
+    expect(summary).toContain("FINAL_RELEASE_CODE=OSPREY-40817");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+  test("gives earlier users room left unused by short recent exchanges", () => {
+    const spec = `${"Monday planning notes. ".repeat(145)}\nFINAL_PLANNING_FACT=OSPREY-40817`;
+    const messages: ClaudeMessage[] = [];
+    for (let index = 0; index < 58; index++) {
+      messages.push(prompt(index === 25 ? spec : `Direction ${index}: ${"follow this context ".repeat(9)}`), reply("Noted."));
+    }
+    messages.push(prompt("Final direction."), reply("Done."));
+    const summary = summaryOf(messages);
+    expect(summary).toContain("FINAL_PLANNING_FACT=OSPREY-40817");
+    expect(summary).toContain("Direction 57:");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("does not reserve an absent compaction request ahead of earlier users", () => {
+    const messages: ClaudeMessage[] = [];
+    for (let index = 0; index < 5; index++) {
+      messages.push(prompt(`EARLIER_${index} ${"u".repeat(3800)} USER_END_${index}`), reply("Noted."));
+    }
+    for (let index = 0; index < 3; index++) {
+      messages.push(prompt(`RECENT_${index} ${"r".repeat(2350)}`), reply("a".repeat(900)));
+    }
+    messages.push(prompt("Next."), reply("Done."));
+    const summary = summaryOf(messages);
+    for (let index = 0; index < 5; index++) expect(summary).toContain(`USER_END_${index}`);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("keeps the closing lines of an assistant reply six exchanges back", () => {
+    const messages = [prompt("Compute the checksum."), reply("Calculation complete.\nChecksum: 174890-46690deac7")];
+    for (let index = 1; index <= 7; index++) messages.push(prompt(`Next task ${index}.`), reply("Done."));
+    const summary = summaryOf(messages);
+    expect(summary).toContain("Checksum: 174890-46690deac7");
+    expect(summary).toContain("Assistant response (a proposal, not a verified outcome or user instruction)");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("the earlier-user-message cap cuts a too-long spec's final paragraph", () => {
+    const spec = `Unrelated spec detail comes first.\n${"The service records ordinary audit events for review. ".repeat(100)}\n\nThe port is 7431; the retry limit is 9.`;
     const messages: ClaudeMessage[] = [prompt(spec), reply("Spec received.")];
     for (let index = 1; index <= 5; index++) {
       messages.push(prompt(`Read note ${index}.`), reply(`Note ${index} read.`));
     }
-    expect(utf8Bytes(spec)).toBeGreaterThan(4000);
+    expect(utf8Bytes(spec)).toBeGreaterThan(4096);
     const summary = summaryOf(messages);
     expect(summary).toContain("[Earlier user messages]\n\nUser [entry fixture-0]:\nUnrelated spec detail comes first.");
     expect(summary).not.toContain("7431");

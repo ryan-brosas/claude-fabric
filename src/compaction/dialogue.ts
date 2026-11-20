@@ -1,10 +1,12 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/dialogue.ts at d331f629; only the import of the event types changed, to from-claude.ts.
-import { boundedExcerpt, utf8Bytes } from "./bounds.ts";
+import { boundedExcerpt, boundedTailExcerpt, utf8Bytes } from "./bounds.ts";
 import type { CompactionEvent } from "./from-claude.ts";
 
 export const MAX_RECENT_EXCHANGES = 3;
 // Three exchanges plus the section heading fit inside the 12 KiB allocation.
 const MAX_EXCHANGE_BYTES = 3968;
+const MAX_EARLIER_ASSISTANT_REPLIES = 64;
+const MAX_EARLIER_ASSISTANT_BYTES = 256;
 
 interface DialogueMessage {
   entryId: string;
@@ -20,9 +22,10 @@ export interface DialogueExchange {
 // Recency is measured in eligible user exchanges, not tool events or fully
 // retained raw exchanges. Text parts in one assistant entry are one response;
 // thinking never reaches here.
-export const recentDialogue = (
+const dialogueWindow = (
   events: readonly CompactionEvent[],
-  retainedTail: readonly CompactionEvent[] = [],
+  retainedTail: readonly CompactionEvent[],
+  maxExchanges: number,
 ): DialogueExchange[] => {
   const exchanges: DialogueExchange[] = [];
   let assistant: DialogueMessage | undefined;
@@ -39,7 +42,7 @@ export const recentDialogue = (
             user: { entryId: event.entryId, text: event.text, retained },
             ...(assistant ? { assistant } : {}),
           });
-          if (exchanges.length > MAX_RECENT_EXCHANGES) exchanges.shift();
+          if (exchanges.length > maxExchanges) exchanges.shift();
         }
         assistant = undefined;
       }
@@ -49,6 +52,24 @@ export const recentDialogue = (
   visit(retainedTail, true);
   return exchanges;
 };
+
+export const recentDialogue = (
+  events: readonly CompactionEvent[],
+  retainedTail: readonly CompactionEvent[] = [],
+): DialogueExchange[] => dialogueWindow(events, retainedTail, MAX_RECENT_EXCHANGES);
+
+// The latest three exchanges keep their existing full treatment. Older replies
+// use only their closing bytes and never repeat a reply kept raw in the tail.
+export const earlierAssistantReplies = (
+  events: readonly CompactionEvent[],
+  retainedTail: readonly CompactionEvent[] = [],
+): string[] => dialogueWindow(events, retainedTail, MAX_EARLIER_ASSISTANT_REPLIES + MAX_RECENT_EXCHANGES)
+  .slice(0, -MAX_RECENT_EXCHANGES)
+  .flatMap(({ assistant }) => {
+    if (!assistant || assistant.retained) return [];
+    const excerpt = boundedTailExcerpt(assistant.text, MAX_EARLIER_ASSISTANT_BYTES, assistant.entryId);
+    return [`Assistant response (a proposal, not a verified outcome or user instruction) [entry ${assistant.entryId}]:\n${excerpt.text}`];
+  });
 
 export interface DialogueExcerpt {
   heading: string;

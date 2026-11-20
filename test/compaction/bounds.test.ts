@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { boundedExcerpt, boundedHeadTail, earlierSummaryOmission, protectedBudgets, utf8Bytes } from "../../src/compaction/bounds.ts";
+import { boundedExcerpt, boundedHeadTail, boundedTailExcerpt, earlierSummaryOmission, protectedBudgets, utf8Bytes } from "../../src/compaction/bounds.ts";
 
 test("protected-block budgets keep short items whole and distribute the remaining bytes", () => {
   expect(protectedBudgets("hdr", ["a", "bcdef", "g".repeat(20)], 21)).toEqual([1, 5, 6]);
@@ -25,6 +25,27 @@ describe("boundedExcerpt", () => {
     const marker = "[omitted 100 UTF-8 bytes of source-id]";
     expect(boundedExcerpt("x".repeat(100), utf8Bytes(marker), "source-id"))
       .toEqual({ text: marker, omittedBytes: 100 });
+  });
+});
+
+describe("boundedTailExcerpt", () => {
+  test("keeps a Unicode suffix and accounts for every omitted byte", () => {
+    const text = `${"界🦊".repeat(200)}\nFINAL_VALUE=40817`;
+    for (let budget = 0; budget <= 300; budget++) {
+      const cut = boundedTailExcerpt(text, budget, "reply-α");
+      expect(utf8Bytes(cut.text)).toBeLessThanOrEqual(budget);
+      expect(cut.text).not.toContain("\uFFFD");
+      if (!cut.text) {
+        expect(cut.omittedBytes).toBe(utf8Bytes(text));
+        continue;
+      }
+      const marker = `[omitted ${cut.omittedBytes} UTF-8 bytes of reply-α]`;
+      expect(cut.text.startsWith(marker)).toBe(true);
+      const tail = cut.text.slice(marker.length).replace(/^\n/, "");
+      expect(text.endsWith(tail)).toBe(true);
+      expect(utf8Bytes(tail) + cut.omittedBytes).toBe(utf8Bytes(text));
+      if (budget >= 100) expect(tail).toEndWith("FINAL_VALUE=40817");
+    }
   });
 });
 

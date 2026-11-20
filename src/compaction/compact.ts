@@ -115,13 +115,14 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     return handle;
   };
   const addressed = (event: typeof events[number]) => ({ ...event, entryId: source(Number(event.entryId)) });
-  const { sections } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed));
   const instructions = options.instructions?.trim();
+  const requestLines = instructions ? [instructions] : [];
+  const { sections } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed), requestLines);
   const summary = renderSummary(sections, {
     firstEntryId: source(0),
     lastEntryId: source(start - 1),
     lastTimestamp: "",
-    ...(instructions ? { requestLines: [instructions] } : {}),
+    requestLines,
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 

@@ -1,6 +1,8 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/render.ts at d331f629; dropped carry-forward, user-activity and branch summaries (Pi-only), and adapts the recall pointer to Claude Code. Adds the header compact.ts recognizes its own summary by, and the [Earlier summary] block a second compaction carries the first one in, allocated inside the same ceiling as every other block.
-import { boundedExcerpt, boundedHeadTail, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES,
-  MAX_RENDERED_LINE_BYTES, MAX_SUMMARY_BYTES, protectedBudgets, utf8Bytes } from "./bounds.ts";
+import { allocateProtectedRoom, boundedExcerpt, boundedHeadTail, clipUtf8, DIALOGUE_HEADER, EARLIER_USERS_HEADER,
+  MAX_DIALOGUE_SECTION_BYTES, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, MAX_REQUEST_SECTION_BYTES,
+  MAX_SUMMARY_BYTES, MAX_SUMMARY_FOOTER_BYTES, MAX_SUMMARY_FRAMING_BYTES, protectedBudgets, recentDialogueBytes,
+  REQUEST_HEADER, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
@@ -9,7 +11,6 @@ import { allocateSummaryCarry } from "./verified/context.ts";
 // user prompt. Keep the two in step.
 export const SUMMARY_HEADER = "[Fabric summary]";
 export const EARLIER_SUMMARY_HEADER = "[Earlier summary]";
-const REQUEST_HEADER = "[Compaction Request]";
 
 // These are per-block ceilings, not reservations. Historical blocks share
 // the space left by actual protected content inside the global ceiling.
@@ -17,16 +18,14 @@ const REQUEST_HEADER = "[Compaction Request]";
 // Both are protected blocks that take bytes before any operational section.
 export const SUMMARY_SECTIONS: { key: keyof Sections; header: string; maxBytes: number }[] = [
   { key: "goal", header: EARLIER_USERS_HEADER, maxBytes: MAX_EARLIER_USERS_SECTION_BYTES },
-  { key: "dialogue", header: "[Recent user directions and discussion]", maxBytes: 12288 },
+  { key: "dialogue", header: DIALOGUE_HEADER, maxBytes: MAX_DIALOGUE_SECTION_BYTES },
   { key: "files", header: "[Files And Changes]", maxBytes: 4608 },
   { key: "outstanding", header: "[Outstanding Context]", maxBytes: 4608 },
   { key: "earlierTurns", header: "[Earlier Turns]", maxBytes: 3072 },
   { key: "status", header: "[Current Status]", maxBytes: 2048 },
 ];
 
-const REQUEST_MAX_BYTES = 3072;
 const TRANSCRIPT_MAX_BYTES = 5120;
-const FOOTER_MAX_BYTES = 1536;
 const MAX_INPUT_LINES_PER_SECTION = 128;
 
 export interface RenderOptions {
@@ -78,17 +77,25 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
   const total = candidates.reduce((sum, block) => sum + block.bytes, 0);
   if (total <= maxBytes) return candidates.map(({ text }) => text);
 
-  // Reserve headers/omission markers (or complete single-line blocks), then divide
-  // remaining space proportionally to capped demand. Sampling slack goes to
-  // later blocks rather than being reserved for content we did not render.
+  // Reserve headers/omission markers (or complete single-line blocks). If those
+  // minima do not fit, share the available room between them proportionally.
+  // Sampling slack goes to later blocks, not content we did not render.
   const minimum = candidates.reduce((sum, block) => sum + block.minimum, 0);
-  let remaining = maxBytes - minimum;
+  let reserved = minimum;
+  let available = maxBytes;
+  let remaining = Math.max(0, maxBytes - minimum);
   let demand = total - minimum;
   return candidates.map((block) => {
+    const base = reserved > available ? Math.floor(available * block.minimum / reserved) : block.minimum;
     const wanted = block.bytes - block.minimum;
     const extra = demand === 0 ? 0 : Math.min(wanted, Math.floor(remaining * wanted / demand));
-    const text = boundedBlock(block.header, block.lines, block.minimum + extra);
-    remaining -= utf8Bytes(text) - block.minimum;
+    // The same verified allocator caps each block at the room left for history.
+    const budget = allocateSummaryCarry(available, 0, base + extra, 0, 0).newestBytes;
+    const text = boundedBlock(block.header, block.lines, budget);
+    const used = utf8Bytes(text);
+    available -= used;
+    remaining -= used - base;
+    reserved -= block.minimum;
     demand -= wanted;
     return text;
   });
@@ -99,6 +106,13 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
 const protectedBlock = (header: string, items: readonly string[], maxBytes: number, source?: string): { text: string; omittedBytes: number } => {
   const text = [header, ...items].join("\n\n");
   if (utf8Bytes(text) <= maxBytes) return { text, omittedBytes: 0 };
+  // An unusually large item list can exhaust the budget on separators alone.
+  // In that case bound the joined body, including those separators, as one excerpt.
+  const headerBytes = utf8Bytes(header);
+  if (headerBytes + 2 * items.length > maxBytes) {
+    const excerpt = boundedExcerpt(items.join("\n\n"), maxBytes - headerBytes - 2, source);
+    return { text: excerpt.text ? `${header}\n\n${excerpt.text}` : header, omittedBytes: excerpt.omittedBytes };
+  }
   const budgets = protectedBudgets(header, items, maxBytes);
   let omittedBytes = 0;
   const excerpts = items.map((item, index) => {
@@ -107,6 +121,16 @@ const protectedBlock = (header: string, items: readonly string[], maxBytes: numb
     return excerpt.text;
   });
   return { text: [header, ...excerpts].join("\n\n"), omittedBytes };
+};
+
+// Recent exchanges keep their allocation; older replies use only the room left.
+const dialogueBlock = (recentItems: readonly string[], olderItems: readonly string[], replyRoom: number) => {
+  const recent = protectedBlock(DIALOGUE_HEADER, recentItems, MAX_DIALOGUE_SECTION_BYTES);
+  const room = Math.min(MAX_DIALOGUE_SECTION_BYTES - utf8Bytes(recent.text), replyRoom) - 2;
+  const olderHeader = "Earlier assistant replies (unverified):";
+  if (olderItems.length === 0 || room < utf8Bytes(olderHeader) + 2) return recent;
+  const older = boundedBlock(olderHeader, olderItems, room);
+  return { text: `${recent.text}\n\n${older}`, omittedBytes: recent.omittedBytes };
 };
 
 /** The earlier summary a second compaction carries: whole while the allocation
@@ -133,6 +157,10 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const newest: string[] = [];
   let requestOmittedBytes = 0;
   let dialogueOmittedBytes = 0;
+  let goalBytes = 0;
+  const recentBytes = recentDialogueBytes(sections.dialogue);
+  const requestBytes = requestSectionBytes(options.requestLines ?? []);
+  const goalBudget = allocateProtectedRoom(recentBytes, requestBytes, MAX_EARLIER_USERS_SECTION_BYTES, 0).newestBytes;
   const protect = (header: string, items: readonly string[], maxBytes: number, source?: string): number => {
     const rendered = protectedBlock(header, items, maxBytes, source);
     newest.push(rendered.text);
@@ -142,10 +170,18 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   for (const { key, header, maxBytes } of SUMMARY_SECTIONS) {
     const lines = sections[key];
     if (key === "goal") {
-      if (lines.length > 0) dialogueOmittedBytes += protect(header, lines, maxBytes);
+      if (lines.length > 0) {
+        dialogueOmittedBytes += protect(header, lines, goalBudget);
+        goalBytes = utf8Bytes(newest[newest.length - 1]!);
+      }
     } else if (key === "dialogue") {
-      if (lines.length > 0) dialogueOmittedBytes += protect(header, lines, maxBytes);
-      if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, REQUEST_MAX_BYTES, "compaction request, not a transcript row");
+      if (lines.length > 0) {
+        const replyRoom = allocateProtectedRoom(recentBytes, requestBytes, goalBytes, maxBytes).carryBytes;
+        const dialogue = dialogueBlock(lines, sections.earlierAssistantReplies, replyRoom);
+        newest.push(dialogue.text);
+        dialogueOmittedBytes += dialogue.omittedBytes;
+      }
+      if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row");
     } else if (lines.length > 0) {
       history.push({ header, lines, maxBytes });
     }
@@ -160,11 +196,14 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
     ? `${options.firstEntryId || "(start)"} → ${options.lastEntryId || "(end)"}`
     : "(no entries)";
   const footer = `[compacted ${timestamp}; cumulative source entries ${range}]`;
-  const footerBlock = boundedBlock("---", ["Recover full context in fabric_exec with history.recall and history.expand.", footer], FOOTER_MAX_BYTES);
+  const footerBlock = boundedBlock("---", ["Recover full context in fabric_exec with history.recall and history.expand.", footer], MAX_SUMMARY_FOOTER_BYTES);
   // Every block, its separator and the final newline are counted before the
   // allocation, so no section can push the footer past the ceiling.
   const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + history.length + 1;
   const framingBytes = utf8Bytes(SUMMARY_HEADER) + utf8Bytes(footerBlock) + 2 * (blockCount - 1) + 1;
+  if (framingBytes > MAX_SUMMARY_FRAMING_BYTES) {
+    throw new Error("fabric: the summary framing exceeded its reserved byte ceiling");
+  }
   const newestBytes = newest.reduce((sum, block) => sum + utf8Bytes(block), 0);
   const carryDemand = options.earlierSummary
     ? utf8Bytes(EARLIER_SUMMARY_HEADER) + 2 + utf8Bytes(options.earlierSummary)
@@ -172,9 +211,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const historyDemand = history.reduce((sum, block) => sum + utf8Bytes(boundedBlock(block.header, block.lines, block.maxBytes)), 0);
   const allocation = allocateSummaryCarry(MAX_SUMMARY_BYTES, framingBytes, newestBytes, carryDemand, historyDemand);
   if (allocation.newestBytes < newestBytes) {
-    // Unreachable while the newest ceilings (about 23 KiB) stay below the room a
-    // 32 KiB summary leaves them. Refuse rather than print a summary that breaks
-    // the allocation's law.
+    // Refuse rather than print a summary that breaks the allocation's law.
     throw new Error("fabric: the newest summary blocks do not fit the summary ceiling");
   }
 

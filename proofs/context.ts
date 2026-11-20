@@ -20,6 +20,7 @@ export type ContextBug =
   | "the carry crowds out the newest blocks"
   | "the carry starves history"
   | "history is allocated before the carry"
+  | "a history block exceeds its remaining room"
   | "aged failures vanish"
   | "aged failures crowd out fresh ones"
   | "itemized failures ignore the limit"
@@ -45,7 +46,7 @@ const carry = (bug?: ContextBug) => fun("summary carry")
       const newestBytes = min(newest, room.minus(carryBytes));
       return { footerBytes, newestBytes, carryBytes, historyBytes: min(history, room.minus(newestBytes).minus(carryBytes)) };
     }
-    const newestBytes = min(newest, room);
+    const newestBytes = bug === "a history block exceeds its remaining room" ? newest : min(newest, room);
     const older = room.minus(newestBytes);
     if (bug === "the carry starves history") {
       const carryBytes = min(earlier, older);
@@ -92,6 +93,18 @@ export const contextKernels = (bug?: ContextBug): Kernel[] => {
       c.law("newest_kept: the newest directions, the compaction request and the footer keep their bytes while the ceiling holds them",
         ({ footer, newest, limit }) => all(footer.atMost(limit), newest.atMost(limit.minus(footer))),
         ({ footerBytes, newestBytes }, { footer, newest }) => all(footerBytes.eq(footer), newestBytes.eq(newest))),
+      // The protected-room caller treats newest as user demand and carry as
+      // earlier-reply demand, with history zero. These decisions wire that use
+      // to the same compiled allocation as the whole summary.
+      // boundedHistory calls this machine with its remaining room as limit and
+      // the next block's desired bytes as newest, with no footer or carry.
+      c.law("history_block_within_room: a history block receives at most the room left", () => [],
+        ({ footerBytes, newestBytes }, { limit }) => newestBytes.atMost(limit.minus(footerBytes))),
+      c.law("users_first: newest demand receives the available room before carry", () => [],
+        ({ footerBytes, newestBytes }, { limit, newest }) => newestBytes.eq(min(newest, limit.minus(footerBytes)))),
+      c.law("replies_take_user_slack: with no history demand, carry takes the room newest demand leaves", ({ history }) => [history.eq(0)],
+        ({ footerBytes, newestBytes, carryBytes }, { limit, earlier }) =>
+          carryBytes.eq(min(earlier, limit.minus(footerBytes).minus(newestBytes)))),
       c.law("carry_takes_the_rest: the carried summary takes the older room history's reserve leaves, up to its own demand", () => [],
         ({ carryBytes, footerBytes, newestBytes }, { limit, earlier, history, reserve }) => {
           const older = limit.minus(footerBytes).minus(newestBytes);
@@ -137,6 +150,7 @@ export const CONTEXT_BUGS: ContextBug[] = [
   "the carry crowds out the newest blocks",
   "the carry starves history",
   "history is allocated before the carry",
+  "a history block exceeds its remaining room",
   "aged failures vanish",
   "aged failures crowd out fresh ones",
   "itemized failures ignore the limit",

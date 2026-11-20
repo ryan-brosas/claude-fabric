@@ -21,8 +21,11 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   marks the earlier summary. The mod walks the transcript's active chain and joins its raw prefix
   to the first current message whose handle is on that chain. The chain shape was observed on
   Claude Code 2.1.329. If the transcript or join fails, the mod logs why and carries the earlier
-  summary instead. That fallback shares the 32 KiB ceiling (`summaryCarry`): when it must shrink,
-  it keeps its start and end and names the middle cut.
+  summary instead. The summary shares a 32 KiB ceiling. The request and recent exchanges have room
+  first. Earlier user messages take the room they leave, up to 22 KiB for the section and 4 KiB
+  per message. After them, the dialogue section keeps the closing bytes of up to 64 earlier assistant
+  replies, up to 256 bytes each. The Carry and operational history share the remaining room
+  (`summaryCarry`). When the Carry must shrink, it keeps its start and end and names the middle cut.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
 - **One system prompt section, added by `prompt.compose`.** It teaches when to reach for

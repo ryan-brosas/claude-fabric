@@ -1,10 +1,29 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/bounds.ts at d331f629; dropped canonicalizeText, which only the typed compaction requests used.
 import { acceptSampleAccounting } from "./verified/policy.ts";
+import { allocateSummaryCarry } from "./verified/context.ts";
 
 export const MAX_SUMMARY_BYTES = 32 * 1024;
 export const MAX_RENDERED_LINE_BYTES = 1024;
 export const EARLIER_USERS_HEADER = "[Earlier user messages]";
-export const MAX_EARLIER_USERS_SECTION_BYTES = 8192;
+export const MAX_EARLIER_USERS_SECTION_BYTES = 22528;
+export const DIALOGUE_HEADER = "[Recent user directions and discussion]";
+export const MAX_DIALOGUE_SECTION_BYTES = 12288;
+export const REQUEST_HEADER = "[Compaction Request]";
+export const MAX_REQUEST_SECTION_BYTES = 3072;
+export const MAX_SUMMARY_FOOTER_BYTES = 1536;
+// The extra 256 bytes hold the summary header, separators and final newline.
+export const MAX_SUMMARY_FRAMING_BYTES = MAX_SUMMARY_FOOTER_BYTES + 256;
+
+/** Reserve framing, the request and recent dialogue, then give users room before old replies.
+ * This is the same checked allocation as the summary, with no history demand. */
+export const allocateProtectedRoom = (recentBytes: number, requestBytes: number, userDemand: number, replyDemand: number) =>
+  allocateSummaryCarry(MAX_SUMMARY_BYTES, MAX_SUMMARY_FRAMING_BYTES + requestBytes + recentBytes, userDemand, replyDemand, 0);
+
+export const recentDialogueBytes = (items: readonly string[]): number => items.length === 0 ? 0
+  : Math.min(MAX_DIALOGUE_SECTION_BYTES, utf8Bytes([DIALOGUE_HEADER, ...items].join("\n\n")));
+
+export const requestSectionBytes = (items: readonly string[]): number => items.length === 0 ? 0
+  : Math.min(MAX_REQUEST_SECTION_BYTES, utf8Bytes([REQUEST_HEADER, ...items].join("\n\n")));
 
 const encoder = new TextEncoder();
 
@@ -98,6 +117,20 @@ export const boundedExcerpt = (text: string, maxBytes: number, source?: string):
   const prefix = clipUtf8(text, room - 1, "");
   const omittedBytes = sourceBytes - utf8Bytes(prefix);
   return { text: `${prefix}\n${note(omittedBytes)}`, omittedBytes };
+};
+
+/** Keep the ending of an earlier reply and mark the source bytes cut from its start. */
+export const boundedTailExcerpt = (text: string, maxBytes: number, source: string): { text: string; omittedBytes: number } => {
+  const sourceBytes = utf8Bytes(text);
+  if (sourceBytes <= maxBytes) return { text, omittedBytes: 0 };
+  const note = (omitted: number) => `[omitted ${omitted} UTF-8 bytes of ${source}]`;
+  const marker = note(sourceBytes);
+  if (utf8Bytes(marker) > maxBytes) return { text: "", omittedBytes: sourceBytes };
+  const room = maxBytes - utf8Bytes(marker) - 1;
+  if (room <= 0) return { text: marker, omittedBytes: sourceBytes };
+  const tail = tailUtf8(text, room);
+  const omittedBytes = sourceBytes - utf8Bytes(tail);
+  return { text: `${note(omittedBytes)}\n${tail}`, omittedBytes };
 };
 
 export interface AddressedValue {

@@ -62,6 +62,22 @@ _Avoid_: state, cache
 What reaches the model: `print()` lines, then the returned value, cut at a fixed size.
 _Avoid_: output (for Bash, `output` is the command's text)
 
+**Fabric summary**:
+The summary our `session.compact` hook writes, headed `[Fabric summary]`.
+
+**Rebuild**:
+A later compaction that summarizes raw transcript history instead of the earlier Fabric summary.
+
+**Carry**:
+The fallback that keeps an earlier Fabric summary in an `[Earlier summary]` block.
+
+**Kept tail**:
+The messages a compaction keeps word for word after the summary.
+_Avoid_: recent turns
+
+**Recall**:
+`history.recall` and `history.expand`, which read the raw transcript after compaction.
+
 **Upstream**:
 pi-fabric, the reference implementation by Tom X Nguyen (MIT), cloned at `upstream/pi-fabric`.
 _Avoid_: Fabric (alone, when you mean the upstream code)
