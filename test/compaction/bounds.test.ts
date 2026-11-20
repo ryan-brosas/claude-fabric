@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { boundedExcerpt, boundedSuffix, earlierSummaryOmission, protectedBudgets, utf8Bytes } from "../../src/compaction/bounds.ts";
+import { boundedExcerpt, boundedHeadTail, earlierSummaryOmission, protectedBudgets, utf8Bytes } from "../../src/compaction/bounds.ts";
 
 test("protected-block budgets keep short items whole and distribute the remaining bytes", () => {
   expect(protectedBudgets("hdr", ["a", "bcdef", "g".repeat(20)], 21)).toEqual([1, 5, 6]);
@@ -28,36 +28,43 @@ describe("boundedExcerpt", () => {
   });
 });
 
-describe("boundedSuffix", () => {
+describe("boundedHeadTail", () => {
   test("keeps a text whole when it fits", () => {
-    expect(boundedSuffix("short text", 100)).toEqual({ text: "short text", omittedBytes: 0 });
+    expect(boundedHeadTail("short text", 100)).toEqual({ text: "short text", omittedBytes: 0 });
   });
 
-  test("keeps the newest bytes, states the loss at the start, and accounts for both", () => {
+  test("keeps the start and the end, states the loss in the middle, and accounts for it exactly", () => {
     const text = "OLDEST-" + "m".repeat(2000) + "-NEWEST";
-    const cut = boundedSuffix(text, 256);
+    const cut = boundedHeadTail(text, 256);
     const note = earlierSummaryOmission(cut.omittedBytes);
     expect(utf8Bytes(cut.text)).toBeLessThanOrEqual(256);
-    expect(cut.text.startsWith(note)).toBe(true);
+    expect(cut.text.startsWith("OLDEST-")).toBe(true);
     expect(cut.text.endsWith("-NEWEST")).toBe(true);
-    expect(cut.text).not.toContain("OLDEST-");
+    expect(cut.text).toContain(note);
+    expect(note).toContain("from the middle of the earlier summary");
     expect(cut.omittedBytes + utf8Bytes(cut.text) - utf8Bytes(note)).toBe(utf8Bytes(text));
   });
 
-  test("never splits a multi-byte character", () => {
+  test("never splits a multi-byte character, and head and tail are a prefix and a suffix", () => {
     const text = "界🦊".repeat(1000);
-    for (const maxBytes of [64, 65, 66, 67, 128, 129, 200, 1000]) {
-      const cut = boundedSuffix(text, maxBytes);
+    for (let maxBytes = 60; maxBytes <= 400; maxBytes++) {
+      const cut = boundedHeadTail(text, maxBytes);
       expect(utf8Bytes(cut.text)).toBeLessThanOrEqual(maxBytes);
       expect(cut.text).not.toContain("\uFFFD");
-      // Whatever tail fits after the note is the last whole characters of the text.
-      const body = cut.text.slice(earlierSummaryOmission(cut.omittedBytes).length);
-      if (body) expect(body.endsWith("🦊")).toBe(true);
+      if (!cut.text) continue;
+      const note = earlierSummaryOmission(cut.omittedBytes);
+      const at = cut.text.indexOf(note);
+      expect(at).toBeGreaterThanOrEqual(0);
+      const head = cut.text.slice(0, at);
+      const tail = cut.text.slice(at + note.length);
+      expect(text.startsWith(head)).toBe(true);
+      expect(text.endsWith(tail)).toBe(true);
+      expect(cut.omittedBytes).toBe(utf8Bytes(text) - utf8Bytes(head) - utf8Bytes(tail));
     }
   });
 
   test("returns nothing when the note alone does not fit", () => {
-    expect(boundedSuffix("x".repeat(100), 0)).toEqual({ text: "", omittedBytes: 100 });
-    expect(boundedSuffix("x".repeat(100), 8)).toEqual({ text: "", omittedBytes: 100 });
+    expect(boundedHeadTail("x".repeat(100), 0)).toEqual({ text: "", omittedBytes: 100 });
+    expect(boundedHeadTail("x".repeat(100), 8)).toEqual({ text: "", omittedBytes: 100 });
   });
 });

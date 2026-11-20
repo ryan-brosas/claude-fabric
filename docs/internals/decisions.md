@@ -25,7 +25,9 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   allocated inside the same 32 KiB as every other block (proved `summaryCarry`): the newest
   directions, the compaction request and the footer keep their bytes, the room left is split
   evenly between the carry and the operational history, and a carry that does not fit keeps its
-  newest bytes with the loss stated on its first line.
+  start and its end, cuts the middle and states the loss where the cut was. The start holds the
+  user's oldest instructions: a live double-compaction run lost the release version when only the
+  end was kept.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
 - **One system prompt section, added by `prompt.compose`.** It teaches when to reach for

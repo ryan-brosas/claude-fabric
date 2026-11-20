@@ -71,20 +71,21 @@ describe("demand-based compaction rendering", () => {
     expect(utf8Bytes(large.summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
-  test("allocates the carried earlier summary inside the ceiling, keeping its newest bytes", () => {
+  test("allocates the carried earlier summary inside the ceiling, keeping its start and its newest bytes", () => {
     const sections = history(true);
     sections.dialogue = Array.from({ length: 3 }, (_, i) => `EXCHANGE_${i}\n${"界🦊".repeat(2000)}`);
     // 36 KiB before its newest lines: far past any room the ceiling can leave it.
-    const earlierSummary = `[Fabric summary]\n\n[Earlier user messages]\nDROP_ME_OLDEST ${"m".repeat(36000)}\nNEWEST_REGION_LINE\nLATEST_CARRY_LINE`;
+    const earlierSummary = `[Fabric summary]\n\n[Earlier user messages]\nOLDEST_CARRY_LINE ${"m".repeat(36000)}\nNEWEST_REGION_LINE\nLATEST_CARRY_LINE`;
     const renderOptions = { ...options, requestLines: ["PIN the request"], earlierSummary };
     const result = renderSummaryWithMetadata(sections, renderOptions);
     expect(utf8Bytes(result.summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(result.summary).toContain("[Earlier summary]");
-    expect(result.summary).toMatch(/\[omitted \d+ UTF-8 bytes from the start of the earlier summary\]/);
-    // The carry keeps its newest bytes and says what it lost.
+    expect(result.summary).toMatch(/\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/);
+    // The carry keeps its start and its newest bytes, cuts the middle and says so.
     expect(result.summary).toContain("LATEST_CARRY_LINE");
     expect(result.summary).toContain("NEWEST_REGION_LINE");
-    expect(result.summary).not.toContain("DROP_ME_OLDEST");
+    expect(result.summary).toContain("OLDEST_CARRY_LINE");
+    expect(result.summary).not.toContain("m".repeat(36000));
     // Every section header, the request and the footer still print.
     for (const { header } of SUMMARY_SECTIONS) expect(result.summary).toContain(header);
     expect(result.summary).toContain("PIN the request");

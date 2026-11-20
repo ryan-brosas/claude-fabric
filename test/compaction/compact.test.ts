@@ -405,8 +405,8 @@ describe("compact: the summary", () => {
     expect(utf8Bytes(secondSummary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(secondSummary).not.toContain("\uFFFD");
     expect(secondSummary).toMatch(/\[compacted \(unknown time\); cumulative source entries fixture-0 → fixture-122\]\n$/);
-    // The earlier summary shrank, says so, and kept its newest bytes: its own footer.
-    expect(secondSummary).toMatch(/\[omitted \d+ UTF-8 bytes from the start of the earlier summary\]/);
+    // The earlier summary shrank, says so where the middle was cut, and kept its start and its newest bytes, its own footer.
+    expect(secondSummary).toMatch(/\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/);
     expect(secondSummary).toContain("[Earlier summary]");
     expect(secondSummary).toContain(firstFooter);
     // The newest content survives: the last directions, the request, the operational sections.
@@ -415,6 +415,65 @@ describe("compact: the summary", () => {
     expect(secondSummary).toContain("KEEP_THIS_REQUEST finish the parser rewrite.");
     expect(secondSummary).toContain("[Files And Changes]");
     expect(secondSummary).toContain("[Current Status]");
+  });
+
+  test("a carried earlier summary that must shrink keeps its start, where the first user message lives, and its footer", () => {
+    const before: ClaudeMessage[] = [prompt("Please remember the release facts in the next paragraph.\n\nPINNED_FACT Project HARBOR-MOSS. Version 8.4.2.")];
+    for (let index = 0; index < 200; index++) {
+      before.push(prompt(`Request ${index}: ${"the parser boundary and its 界🦊 details ".repeat(60)}`));
+      before.push({
+        role: "assistant",
+        text: `Reply ${index}: ${"long prose about the rewrite. ".repeat(120)}`,
+        toolUses: [
+          toolCall("Read", { file_path: `src/file-${index}.ts` }, `t${index}`),
+          toolCall("Edit", { file_path: `src/edit-${index}.ts`, old_string: "a", new_string: "b" }, `e${index}`),
+          toolCall("Write", { file_path: `src/write-${index}.ts`, content: "x" }, `w${index}`),
+          toolCall("Grep", { pattern: `pattern-${index}` }, `g${index}`),
+        ],
+      });
+      before.push(results(
+        { tool_use_id: `t${index}`, text: "content. ".repeat(400), isError: false },
+        { tool_use_id: `e${index}`, text: index % 3 === 0 ? `old_string not found in src/edit-${index}.ts after the rewrite` : "updated 12 lines", isError: index % 3 === 0 },
+        { tool_use_id: `w${index}`, text: "wrote 12 lines", isError: false },
+        { tool_use_id: `g${index}`, text: "match. ".repeat(120), isError: false },
+      ));
+      before.push({ role: "assistant", text: "", toolUses: [toolCall("Bash", { command: `bun test src/parser-${index}.test.ts --filter "a long filter name that keeps going"` }, `b${index}`)] });
+      before.push(results({ tool_use_id: `b${index}`, text: `1 failing test in parser-${index}.test.ts: expected the rewrite to keep the public API stable`, isError: true }));
+    }
+    before.push(prompt("Latest request."), reply("Latest reply."));
+    const first = compact(before, { keepRecentTokens: tailBudget(before.at(-2)!, before.at(-1)!) });
+    if (!("messages" in first)) throw new Error(JSON.stringify(first));
+    const firstSummary = first.messages[0]!.text;
+    expect(utf8Bytes(firstSummary)).toBeGreaterThan(MAX_SUMMARY_BYTES - 4096);
+    expect(firstSummary).toContain("PINNED_FACT");
+    // Only the first line of a prompt reaches [Earlier Turns], so the fact lives in [Earlier user messages] alone.
+    expect(firstSummary.split("PINNED_FACT").length).toBe(2);
+    const firstFooter = firstSummary.trimEnd().split("\n").at(-1)!;
+
+    const after: ClaudeMessage[] = [...first.messages];
+    for (let index = 0; index < 40; index++) {
+      after.push(prompt(`DIRECTION_${index}: ${"fresh 界🦊 detail ".repeat(200)}`));
+      after.push({
+        role: "assistant",
+        text: `Fresh reply ${index}: ${"more prose. ".repeat(80)}`,
+        toolUses: [toolCall("Edit", { file_path: `src/fresh-${index}.ts`, old_string: "a", new_string: "b" }, `f${index}`)],
+      });
+      after.push(results({ tool_use_id: `f${index}`, text: "updated 3 lines", isError: false }));
+    }
+    after.push(prompt("DIRECTION_FINAL: finish the parser rewrite."), reply("On it."));
+    const second = compact(after, {
+      keepRecentTokens: tailBudget(after.at(-2)!, after.at(-1)!),
+      instructions: "KEEP_THIS_REQUEST finish the parser rewrite.",
+    });
+    if (!("messages" in second)) throw new Error(JSON.stringify(second));
+    const secondSummary = second.messages[0]!.text;
+    expect(utf8Bytes(secondSummary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+    expect(secondSummary).not.toContain("\uFFFD");
+    // The user's oldest instruction and the footer both survive; the middle is what goes.
+    expect(secondSummary).toContain("PINNED_FACT");
+    expect(secondSummary).toContain("8.4.2");
+    expect(secondSummary).toMatch(/\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/);
+    expect(secondSummary).toContain(firstFooter);
   });
 
   test("a failed change is an attempt, never the last change", () => {
