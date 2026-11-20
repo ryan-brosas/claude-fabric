@@ -429,24 +429,31 @@ describe("compact: what the summary loses today", () => {
     expect(section).not.toContain("BATCH-deadbeef");
   });
 
-  test("prioritizes missing user excerpts newest first before echoed errors within the literal budget", () => {
+  test("prioritizes unseen errors, then diverse newest user excerpts, then shown values", () => {
     const messages = [
       prompt("Release is elder-bridge.", "old-user"),
-      prompt("Release is cedar-harbor.", "new-user"),
+      prompt("First is alpha-one.\nSecond is beta-two.\nThird is gamma-three.", "new-user"),
       prompt("Release is shown-value.", "whole-user"),
+      reply("tools/project.ts", "assistant-source"),
       { ...results({ tool_use_id: "error", text: "E4471 line 58: timeout waiting for lock", isError: true }), handle: "error-result" },
-      reply("E4471 line 58: timeout waiting for lock", "tail"),
+      reply("E4471 line 58: timeout waiting for lock\ntools/project.ts", "tail"),
     ];
-    const values = exactValuesSource(messages, 4, "", new Set(), new Set(["whole-user"]));
-    expect(values.slice(0, 2)).toEqual([
-      { entryId: "new-user", value: "Release is cedar-harbor." },
-      { entryId: "old-user", value: "Release is elder-bridge." },
+    const values = exactValuesSource(messages, 5, "", new Set(), new Set(["whole-user"]), "tools/project.ts\nRelease is shown-value.");
+    expect(values.map(({ entryId, value }) => `${entryId}: ${value}`)).toEqual([
+      "error-result: E4471 line 58: timeout waiting for lock",
+      "error-result: E4471 line 58",
+      "error-result: E4471",
+      "new-user: Third is gamma-three.",
+      "old-user: Release is elder-bridge.",
+      "new-user: Second is beta-two.",
+      "new-user: First is alpha-one.",
+      "assistant-source: tools/project.ts",
+      "whole-user: Release is shown-value.",
     ]);
-    const section = renderExactValues(values, 180);
-    expect(section).toContain("[entry new-user] Release is cedar-harbor.");
+    const section = renderExactValues(values, 2048);
+    expect(section).toContain("[entry error-result] E4471 line 58: timeout waiting for lock");
     expect(section).toContain("[entry old-user] Release is elder-bridge.");
-    expect(section).not.toContain("error-result");
-    expect(utf8Bytes(section)).toBeLessThanOrEqual(180);
+    expect(utf8Bytes(section)).toBeLessThanOrEqual(2048);
   });
 
   test("prefers unseen user excerpts from different sources over echoed values already shown", () => {
@@ -695,8 +702,11 @@ describe("compact: what the summary loses today", () => {
     expect(utf8Bytes(spec)).toBeGreaterThan(4096);
     const summary = summaryOf(messages);
     expect(summary).toContain("[Earlier user messages]\n\nUser [entry fixture-0]:\nUnrelated spec detail comes first.");
-    expect(summary).not.toContain("7431");
-    expect(summary).not.toContain("retry limit is 9");
+    const earlierUsers = summary.split("[Earlier user messages]\n")[1]?.split("[Recent user directions and discussion]")[0] ?? "";
+    expect(earlierUsers).not.toContain("7431");
+    expect(earlierUsers).not.toContain("retry limit is 9");
+    const exact = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(exact).toContain("[entry fixture-0] The port is 7431; the retry limit is 9.");
     expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of fixture-0\]/);
   });
 
