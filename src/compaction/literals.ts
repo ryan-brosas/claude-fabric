@@ -1,6 +1,6 @@
 // Short exact excerpts are unverified. Source ids may allow best-effort Recall expansion.
 import { hasOutcome, inlineOutcome, type ClaudeMessage } from "./from-claude.ts";
-import { utf8Bytes } from "./bounds.ts";
+import { clipUtf8, utf8Bytes } from "./bounds.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
 export const LITERALS_HEADER = "[Exact values]";
@@ -18,6 +18,9 @@ interface Candidate extends ExactValue {
   position: number;
   order: number;
   error: boolean;
+  missingUser: boolean;
+  userOrder: number;
+  shown: boolean;
 }
 
 // Match the whole whitespace-delimited token; unsupported characters invalidate it.
@@ -88,6 +91,75 @@ const valuesIn = (text: string): string[] => {
   return [...values];
 };
 
+// These patterns operate only on bounded whitespace-delimited tokens. Their work is
+// linear in the input even for an arbitrarily long line or token.
+const USER_HOST = /^(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*|[a-z0-9][a-z0-9.-]*):?\d*$/i;
+const USER_NAME = /^[a-z][a-z0-9_-]*$/i;
+const USER_VALUE = /^[a-z0-9][a-z0-9_-]*$/i;
+const meaningfulValue = (value: string): boolean => USER_VALUE.test(value) && /[\d_-]/.test(value);
+const cleanUserToken = (token: string): string => token.replace(/^["'`([{]+|["'`)\]},;.!?]+$/g, "");
+
+// Keep complete words around the match. Both sides inspect at most 160 code units;
+// the complete excerpt shares the existing exact-value byte bound.
+const userWindow = (line: string, start: number, end: number, shortLine: boolean): string => {
+  if (shortLine) return line.trim();
+  const match = line.slice(start, end);
+  const matchBytes = utf8Bytes(match);
+  if (matchBytes > MAX_VALUE_BYTES) return "";
+  const before = line.slice(Math.max(0, start - MAX_VALUE_BYTES), start);
+  let prefix = "";
+  const prefixRoom = Math.floor((MAX_VALUE_BYTES - matchBytes) / 2);
+  for (const char of [...before].reverse()) {
+    if (utf8Bytes(prefix) + utf8Bytes(char) > prefixRoom) break;
+    prefix = char + prefix;
+  }
+  if (prefix.length < start && prefix && !/\s/.test(line[start - prefix.length - 1] ?? "")) prefix = prefix.replace(/^\S*\s*/, "");
+  const suffixRoom = MAX_VALUE_BYTES - matchBytes - utf8Bytes(prefix);
+  const rest = line.slice(end, end + MAX_VALUE_BYTES + 1);
+  let suffix = clipUtf8(rest, suffixRoom, "");
+  if (suffix.length < line.length - end && suffix && !/\s/.test(line[end + suffix.length] ?? "")) suffix = suffix.replace(/\S+$/, "");
+  return `${prefix}${match}${suffix}`.trim();
+};
+
+const userExcerpts = (text: string): string[] => {
+  const values = new Set<string>();
+  for (const line of safeLines(text)) {
+    const shortLine = utf8Bytes(line) <= MAX_VALUE_BYTES;
+    let previous = "", beforePrevious = "", previousStart = 0, beforePreviousStart = 0;
+    let first = -1, last = -1;
+    const flush = (): void => {
+      if (first < 0) return;
+      const excerpt = userWindow(line, first, last, shortLine);
+      if (excerpt && fits(utf8Bytes(excerpt), MAX_VALUE_BYTES)) values.add(excerpt);
+    };
+    for (const match of line.matchAll(TOKEN)) {
+      const raw = match[0];
+      const token = raw.length <= MAX_VALUE_BYTES ? cleanUserToken(raw) : "";
+      const host = token && USER_HOST.test(token) && (token.includes(".") || /:\d+$/.test(token));
+      const binding = /^([a-z][a-z0-9_-]*)[:=]([a-z0-9][a-z0-9_-]*)$/i.exec(token);
+      const adjacentName = /[:=]$/.test(previous) && USER_NAME.test(previous.slice(0, -1));
+      const separateName = (/^(?:is|are|=|:)$/i.test(previous) && USER_NAME.test(beforePrevious));
+      const namedValue = meaningfulValue(token) && (adjacentName || separateName);
+      if (host || (binding && meaningfulValue(binding[2]!)) || namedValue) {
+        const start = namedValue ? (adjacentName ? previousStart : beforePreviousStart) : match.index!;
+        const end = match.index! + raw.length;
+        if (first >= 0 && (end - first > MAX_VALUE_BYTES || utf8Bytes(line.slice(first, end)) > MAX_VALUE_BYTES)) {
+          flush();
+          first = -1;
+        }
+        if (first < 0) first = start;
+        last = end;
+      }
+      beforePrevious = previous;
+      beforePreviousStart = previousStart;
+      previous = token;
+      previousStart = match.index!;
+    }
+    flush();
+  }
+  return [...values];
+};
+
 const carriedValues = (summary: string): ExactValue[] => {
   const values: ExactValue[] = [];
   // Only the first outer block is ours. Later headings can be verbatim user text
@@ -96,16 +168,20 @@ const carriedValues = (summary: string): ExactValue[] => {
   for (const line of summary.slice(LITERALS_HEADER.length + 1).split("\n")) {
     if (!line || line === "---" || /^\[[^\]]+\]$/.test(line)) break;
     const match = /^- \[entry ([^;\]\r\n]+)\] (.+)$/.exec(line);
-    if (match && valuesIn(match[2]!).includes(match[2]!)) values.push({ entryId: match[1]!, value: match[2]! });
+    if (match && (valuesIn(match[2]!).includes(match[2]!) || userExcerpts(match[2]!).includes(match[2]!))) {
+      values.push({ entryId: match[1]!, value: match[2]! });
+    }
   }
   return values;
 };
 
-/** Collect only from summarized replies and tool results, never tool inputs or user text.
- * Dialogue after a source may rank it, including dialogue in the kept tail. */
-export const exactValues = (messages: readonly ClaudeMessage[], start: number, earlierSummary = ""): ExactValue[] => {
+/** Collect summarized replies, tool results and user-stated values, never inputs or the kept tail.
+ * Dialogue after a source may rank it, including dialogue in the kept tail.
+ * summaryIndexes is the same Carry classification the compactor uses. */
+export const exactValues = (messages: readonly ClaudeMessage[], start: number, earlierSummary = "", summaryIndexes: ReadonlySet<number>, wholeUsers: ReadonlySet<string> = new Set(), protectedText = ""): ExactValue[] => {
   const candidates: Candidate[] = carriedValues(earlierSummary).map((value, order) => ({
     ...value, position: -1, order, error: /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value.value),
+    missingUser: !valuesIn(value.value).includes(value.value), userOrder: order, shown: protectedText.includes(value.value),
   }));
   const resultTexts = new Map<string, Set<string>>();
   for (const message of messages.slice(0, start)) for (const result of message.toolResults ?? []) {
@@ -115,8 +191,9 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
   }
   const inlineOutcomes = new Map(messages.slice(0, start).flatMap((message) =>
     (message.toolUses ?? []).filter(hasOutcome).map((use) => [use.tool_use_id, inlineOutcome(use)] as const)));
-  const add = (values: readonly string[], entryId: string, position: number, error: boolean) => {
-    for (const value of values) candidates.push({ entryId, value, position, order: candidates.length, error: error || /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value) });
+  const add = (values: readonly string[], entryId: string, position: number, error: boolean, missingUser = false) => {
+    values.forEach((value, index) => candidates.push({ entryId, value, position, order: candidates.length,
+      error: error || /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value), missingUser, userOrder: values.length - index - 1, shown: protectedText.includes(value) }));
   };
   const addToolResults = (message: ClaudeMessage, entryId: string, position: number) => {
     for (const use of message.toolUses ?? []) {
@@ -129,18 +206,31 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
   };
   const lastDialogue = new Map<string, number>();
   messages.forEach((message, index) => {
-    const isSummary = message.text.trimStart().startsWith("[Fabric summary]");
+    const isSummary = summaryIndexes.has(index);
     const dialogueValues = message.text && !isSummary ? valuesIn(message.text) : [];
     for (const value of dialogueValues) lastDialogue.set(value, index);
     if (index >= start || isSummary) return;
     const id = message.handle ?? message.uuid;
     if (!id) throw new Error("fabric: a message has no source handle for recall");
     if (message.role === "assistant") add(dialogueValues, id, index, false);
+    else if (message.text) add(userExcerpts(message.text), id, index, false, !wholeUsers.has(id));
     addToolResults(message, id, index);
   });
+  const echoed = (candidate: Candidate): boolean => (lastDialogue.get(candidate.value) ?? -1) > candidate.position;
+  const priority = (candidate: Candidate): number => {
+    const salient = echoed(candidate) || candidate.error;
+    if (!candidate.shown && (candidate.missingUser || salient)) return 0;
+    if (salient) return 1;
+    return candidate.missingUser ? 2 : 3;
+  };
   candidates.sort((a, b) => {
-    const echoed = Number((lastDialogue.get(b.value) ?? -1) > b.position) - Number((lastDialogue.get(a.value) ?? -1) > a.position);
-    return echoed || Number(b.error) - Number(a.error) || b.position - a.position || b.order - a.order;
+    const rank = priority(a) - priority(b) || Number(echoed(b)) - Number(echoed(a))
+      || Number(b.error) - Number(a.error) || Number(b.missingUser) - Number(a.missingUser);
+    if (rank) return rank;
+    // One excerpt per source before a second: one long clipped message must not
+    // crowd out every other missing user message. Newest wins each round.
+    if (a.missingUser) return a.userOrder - b.userOrder || b.position - a.position || b.order - a.order;
+    return b.position - a.position || b.order - a.order;
   });
   const seen = new Set<string>();
   return candidates.filter(({ value }) => !seen.has(value) && !!seen.add(value))
