@@ -24,7 +24,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **A later Fabric compaction rebuilds from the transcript.** The `[Fabric summary]` header
   marks the earlier summary. The mod walks the transcript's active chain and joins its raw prefix
   to the first current message whose handle is on that chain. The chain shape was observed on
-  Claude Code 2.1.329. If the transcript or join fails, the mod logs why and carries the earlier
+  Claude Code 2.1.329. The mod accepts a rebuild only if it preserves every effective tool outcome
+  in the current messages, including its multiplicity; a missing or conflicting outcome falls back
+  to Carry with a debug reason. This check cannot recover an off-chain outcome lost before an
+  earlier compaction. If the transcript or join fails, the mod also logs why and carries the earlier
   summary instead. The summary shares a 32 KiB ceiling. The request and recent exchanges have room
   first. Earlier user messages take the room they leave, up to 22 KiB for the section and 4 KiB
   per message. After them, the dialogue section keeps the closing bytes of up to 64 earlier assistant

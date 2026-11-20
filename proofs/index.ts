@@ -14,6 +14,7 @@ import type { Kernel } from "./kernel.ts";
 import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
 import { NO_CUT_BUGS, noCutKernels } from "./no-cut.ts";
 import { OFFER_MEMO_BUGS, offerMemoKernels } from "./offer-memo.ts";
+import { OUTCOME_CONSERVATION_BUGS, outcomeConservationKernels } from "./outcome-conservation.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { RECALL_BUGS, recallKernels } from "./recall.ts";
@@ -44,6 +45,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "context", source: "proofs/context.ts", out: compaction, kernels: contextKernels as any, bugs: CONTEXT_BUGS },
   { stem: "cut", source: "proofs/cut.ts", out: compaction, kernels: cutKernels as any, bugs: CUT_BUGS },
   { stem: "no-cut", source: "proofs/no-cut.ts", out: compaction, kernels: noCutKernels as any, bugs: NO_CUT_BUGS },
+  { stem: "outcome-conservation", source: "proofs/outcome-conservation.ts", out: compaction, kernels: outcomeConservationKernels as any, bugs: OUTCOME_CONSERVATION_BUGS },
   { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
