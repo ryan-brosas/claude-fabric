@@ -31,11 +31,10 @@ const isPromptBoundary = (message: ClaudeMessage): boolean =>
   message.role === "user" && (message.toolResults?.length ?? 0) === 0;
 
 /**
- * A summary this compactor wrote earlier. It is cumulative source, not a user
- * prompt: read as prose it would be cut to one 2,048-byte excerpt and lose the
- * sections, so compact() carries it forward whole instead.
+ * A summary this compactor wrote earlier. When transcript rebuilding is not
+ * available, carry it as cumulative source rather than clipping it as user prose.
  */
-const isFabricSummary = (message: ClaudeMessage): boolean =>
+export const isFabricSummary = (message: ClaudeMessage): boolean =>
   message.role === "user"
   && (message.toolUses?.length ?? 0) === 0
   && message.text.trimStart().startsWith(SUMMARY_HEADER);

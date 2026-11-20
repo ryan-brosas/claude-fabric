@@ -17,17 +17,12 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   summary), the hook hands the event back to core with `next(e)` instead of vetoing it, so auto
   compaction still runs (`proofs/no-cut.ts` decides core or skip on that path). `precompute`
   answers `{ skip }`: the summary is deterministic, so there is nothing to compute ahead of time.
-- **A summary names itself, and a later compaction carries it.** The rendered summary opens
-  with `[Fabric summary]`, so the next compaction recognizes its own earlier summary by that
-  header instead of reading it as a user prompt. Pi re-derives a second summary from the raw
-  branch, which a Claude transcript no longer holds; here the earlier summary is kept as the
-  `[Earlier summary]` block, because a 2,048-byte prose excerpt would lose its sections. It is
-  allocated inside the same 32 KiB as every other block (proved `summaryCarry`): the newest
-  directions, the compaction request and the footer keep their bytes, the room left is split
-  evenly between the carry and the operational history, and a carry that does not fit keeps its
-  start and its end, cuts the middle and states the loss where the cut was. The start holds the
-  user's oldest instructions: a live double-compaction run lost the release version when only the
-  end was kept.
+- **A later Fabric compaction rebuilds from the transcript.** The `[Fabric summary]` header
+  marks the earlier summary. The mod walks the transcript's active chain and joins its raw prefix
+  to the first current message whose handle is on that chain. The chain shape was observed on
+  Claude Code 2.1.329. If the transcript or join fails, the mod logs why and carries the earlier
+  summary instead. That fallback shares the 32 KiB ceiling (`summaryCarry`): when it must shrink,
+  it keeps its start and end and names the middle cut.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
 - **One system prompt section, added by `prompt.compose`.** It teaches when to reach for

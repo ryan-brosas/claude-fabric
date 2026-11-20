@@ -34,9 +34,8 @@ export interface RenderOptions {
   lastEntryId: string;
   lastTimestamp: string;
   requestLines?: string[];
-  /** The previous summary: the source a second compaction cannot re-derive, carried
-   * whole while the allocation holds it; when it does not, it keeps its start and its end,
-   * cuts the middle and states the loss where the cut was. */
+  /** The previous summary, used when transcript rebuilding fails. Carry it whole while
+   * the allocation holds it; otherwise keep its start and end and state the middle cut. */
   earlierSummary?: string;
 }
 

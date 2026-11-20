@@ -4,7 +4,8 @@ export type EntryKind = "user" | "assistant" | "summary" | "tool_result" | "tool
 export interface Entry { uuid: string; parent: string | null; kind: EntryKind; text: string; timestamp: string | null }
 export interface Boundary { uuid: string; uuids: string[]; allUuids: string[]; unresolvable: string[] }
 export interface Transcript { entries: Entry[]; boundaries: Boundary[] }
-type Row = Record<string, unknown>;
+export type TranscriptRow = Record<string, unknown>;
+type Row = TranscriptRow;
 const object = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 const string = (value: unknown): string => typeof value === "string" ? value : "";
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -44,7 +45,7 @@ export function entryText(row: Row): { text: string; kind: EntryKind } {
 }
 
 /** Physical file order need not be chain order. Follow the last conversation row by UUID. */
-export function parseTranscript(text: string): Transcript {
+export function transcriptChain(text: string): { chain: TranscriptRow[]; rows: Map<string, TranscriptRow> } {
   const rows = new Map<string, Row>();
   let leaf = "";
   for (const [index, line] of text.split("\n").entries()) {
@@ -66,9 +67,16 @@ export function parseTranscript(text: string): Transcript {
     if (!row) throw new Error(`history: transcript parent uuid ${leaf} is missing`);
     visited.add(leaf);
     chain.push(row);
-    leaf = string(row.parentUuid ?? row.logicalParentUuid);
+    const parent = row.parentUuid ?? row.logicalParentUuid;
+    if (parent != null && typeof parent !== "string") throw new Error(`history: transcript parent of ${leaf} is invalid`);
+    leaf = parent ?? "";
   }
   chain.reverse();
+  return { chain, rows };
+}
+
+export function parseTranscript(text: string): Transcript {
+  const { chain, rows } = transcriptChain(text);
   const entries: Entry[] = [];
   const boundaries: Boundary[] = [];
   for (const row of chain) {
