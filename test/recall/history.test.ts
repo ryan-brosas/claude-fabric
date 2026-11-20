@@ -115,7 +115,7 @@ test("quoted Read and Bash failures resolve to result rows without changing call
   expect(byId.get("bash-call")).toContain("Tool: Bash(");
 });
 
-test("an outcome without a result row is not quoted under its call id", async () => {
+test("an inline failure without a result row is quoted under its call id", async () => {
   const path = await make();
   const rows = [
     { type: "user", uuid: "prompt", parentUuid: null, message: { content: "Read it." } },
@@ -132,8 +132,9 @@ test("an outcome without a result row is not quoted under its call id", async ()
   if (!("messages" in answer)) throw new Error(`no summary: ${JSON.stringify(answer)}`);
   const summary = answer.messages[0]!.text;
   expect(summary).toContain("[entry call] Read(record.txt)");
-  expect(summary).toContain("[entry call] → error");
-  expect(summary).not.toContain("E4471");
+  expect(summary).toContain("[entry call] → error: E4471: unavailable source");
+  expect(summary).toContain("Read record.txt: E4471: unavailable source [entry call]");
+  expect(summary).toContain("- [entry call] E4471: unavailable source");
   const { binding } = await recall(path, { query: "Continue" });
   expect((await expand(path, { binding, entryIds: ["call"] })).entries[0]!.text).toContain("Tool: Read(");
 });

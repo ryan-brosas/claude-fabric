@@ -96,12 +96,12 @@ const collectOperations = (events: CompactionEvent[]): StructuralOperation[] => 
       operations.push({
         index: event.index,
         entryId: call.entryId,
-        address: event.isError && event.text && event.sourceAvailable ? event.entryId : call.entryId,
+        address: event.isError && event.text ? event.entryId : call.entryId,
         tool: call.name,
         ref: call.name,
         args: call.args,
         outcome: event.isError ? "failed" : "succeeded",
-        ...(event.isError && event.text && event.sourceAvailable ? { error: event.text } : {}),
+        ...(event.isError && event.text ? { error: event.text } : {}),
       });
       continue;
     }
@@ -114,7 +114,7 @@ const collectOperations = (events: CompactionEvent[]): StructuralOperation[] => 
         ref: "Bash",
         args: { command: event.command },
         outcome: event.isError ? "failed" : "succeeded",
-        ...(event.error && event.sourceAvailable ? { error: event.error } : {}),
+        ...(event.error ? { error: event.error } : {}),
       });
     }
   }
@@ -515,7 +515,7 @@ const projectTranscript = (events: CompactionEvent[]): ProjectedSection => {
       lines.push(`${ref} ${e.name}(${summarizeArgs(e.name, e.args)})`);
     } else if (e.kind === "toolResult") {
       const status = e.isError ? "error" : "ok";
-      lines.push(e.sourceAvailable ? transcriptLine(`${ref} → ${status}: `, e.text, true) : `${ref} → ${status}`);
+      lines.push(transcriptLine(`${ref} → ${status}: `, e.text, true));
     } else if (e.kind === "bash") {
       const status = e.isError ? "error" : "ok";
       lines.push(`${ref} Bash(${truncate(firstLine(e.command), MAX_TRANSCRIPT_CMD)}) → ${status}`);

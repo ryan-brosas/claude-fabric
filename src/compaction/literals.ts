@@ -1,5 +1,5 @@
 // Short exact excerpts are unverified. Source ids may allow best-effort Recall expansion.
-import type { ClaudeMessage } from "./from-claude.ts";
+import { hasOutcome, inlineOutcome, type ClaudeMessage } from "./from-claude.ts";
 import { utf8Bytes } from "./bounds.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
@@ -107,12 +107,25 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
   const candidates: Candidate[] = carriedValues(earlierSummary).map((value, order) => ({
     ...value, position: -1, order, error: /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value.value),
   }));
+  const resultTexts = new Map<string, Set<string>>();
+  for (const message of messages.slice(0, start)) for (const result of message.toolResults ?? []) {
+    const texts = resultTexts.get(result.tool_use_id) ?? new Set<string>();
+    texts.add(result.text);
+    resultTexts.set(result.tool_use_id, texts);
+  }
+  const inlineOutcomes = new Map(messages.slice(0, start).flatMap((message) =>
+    (message.toolUses ?? []).filter(hasOutcome).map((use) => [use.tool_use_id, inlineOutcome(use)] as const)));
   const add = (values: readonly string[], entryId: string, position: number, error: boolean) => {
     for (const value of values) candidates.push({ entryId, value, position, order: candidates.length, error: error || /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value) });
   };
   const addToolResults = (message: ClaudeMessage, entryId: string, position: number) => {
-    // A stored outcome on a call is not present in that call’s transcript row.
-    for (const result of message.toolResults ?? []) add(valuesIn(result.text), entryId, position, result.isError);
+    for (const use of message.toolUses ?? []) {
+      if (use.text && !resultTexts.get(use.tool_use_id)?.has(use.text)) add(valuesIn(use.text), entryId, position, use.isError === true);
+    }
+    for (const result of message.toolResults ?? []) {
+      const inline = inlineOutcomes.get(result.tool_use_id);
+      if (!inline || inline.text === result.text) add(valuesIn(result.text), entryId, position, inline?.isError ?? result.isError);
+    }
   };
   const lastDialogue = new Map<string, number>();
   messages.forEach((message, index) => {
