@@ -1,5 +1,6 @@
-// Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/render.ts at d331f629; dropped carry-forward, user-activity and branch summaries (Pi-only), and the memory.recall pointer line (Claude Code has no memory tool yet). Adds the header compact.ts recognizes its own summary by, and the [Earlier summary] block a second compaction carries the first one in, allocated inside the same ceiling as every other block.
-import { boundedExcerpt, boundedSuffix, clipUtf8, MAX_SUMMARY_BYTES, utf8Bytes } from "./bounds.ts";
+// Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/render.ts at d331f629; dropped carry-forward, user-activity and branch summaries (Pi-only), and adapts the recall pointer to Claude Code. Adds the header compact.ts recognizes its own summary by, and the [Earlier summary] block a second compaction carries the first one in, allocated inside the same ceiling as every other block.
+import { boundedExcerpt, boundedSuffix, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES,
+  MAX_RENDERED_LINE_BYTES, MAX_SUMMARY_BYTES, protectedBudgets, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
@@ -15,7 +16,7 @@ const REQUEST_HEADER = "[Compaction Request]";
 // The user's words lead, oldest first: earlier messages, then recent exchanges.
 // Both are protected blocks that take bytes before any operational section.
 export const SUMMARY_SECTIONS: { key: keyof Sections; header: string; maxBytes: number }[] = [
-  { key: "goal", header: "[Earlier user messages]", maxBytes: 8192 },
+  { key: "goal", header: EARLIER_USERS_HEADER, maxBytes: MAX_EARLIER_USERS_SECTION_BYTES },
   { key: "dialogue", header: "[Recent user directions and discussion]", maxBytes: 12288 },
   { key: "files", header: "[Files And Changes]", maxBytes: 4608 },
   { key: "outstanding", header: "[Outstanding Context]", maxBytes: 4608 },
@@ -27,7 +28,6 @@ const REQUEST_MAX_BYTES = 3072;
 const TRANSCRIPT_MAX_BYTES = 5120;
 const FOOTER_MAX_BYTES = 1536;
 const MAX_INPUT_LINES_PER_SECTION = 128;
-const MAX_RENDERED_LINE_BYTES = 1024;
 
 export interface RenderOptions {
   firstEntryId: string;
@@ -96,18 +96,13 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
 
 // Dialogue and explicit requests are not historical line samples. Keep every
 // item; only shorten text when the entire block exceeds its byte allocation.
-const protectedBlock = (header: string, items: readonly string[], maxBytes: number): { text: string; omittedBytes: number } => {
+const protectedBlock = (header: string, items: readonly string[], maxBytes: number, source?: string): { text: string; omittedBytes: number } => {
   const text = [header, ...items].join("\n\n");
   if (utf8Bytes(text) <= maxBytes) return { text, omittedBytes: 0 };
-  let remaining = Math.max(0, maxBytes - utf8Bytes(header) - 2 * items.length);
-  const share = Math.floor(remaining / items.length);
-  const budgets = items.map((item) => Math.min(utf8Bytes(item), share));
-  remaining -= budgets.reduce((sum, bytes) => sum + bytes, 0);
+  const budgets = protectedBudgets(header, items, maxBytes);
   let omittedBytes = 0;
   const excerpts = items.map((item, index) => {
-    const extra = Math.min(remaining, utf8Bytes(item) - budgets[index]!);
-    remaining -= extra;
-    const excerpt = boundedExcerpt(item, budgets[index]! + extra);
+    const excerpt = boundedExcerpt(item, budgets[index]!, source);
     omittedBytes += excerpt.omittedBytes;
     return excerpt.text;
   });
@@ -137,8 +132,8 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const newest: string[] = [];
   let requestOmittedBytes = 0;
   let dialogueOmittedBytes = 0;
-  const protect = (header: string, items: readonly string[], maxBytes: number): number => {
-    const rendered = protectedBlock(header, items, maxBytes);
+  const protect = (header: string, items: readonly string[], maxBytes: number, source?: string): number => {
+    const rendered = protectedBlock(header, items, maxBytes, source);
     newest.push(rendered.text);
     return rendered.omittedBytes;
   };
@@ -149,7 +144,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
       if (lines.length > 0) dialogueOmittedBytes += protect(header, lines, maxBytes);
     } else if (key === "dialogue") {
       if (lines.length > 0) dialogueOmittedBytes += protect(header, lines, maxBytes);
-      if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, REQUEST_MAX_BYTES);
+      if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, REQUEST_MAX_BYTES, "compaction request, not a transcript row");
     } else if (lines.length > 0) {
       history.push({ header, lines, maxBytes });
     }
@@ -164,7 +159,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
     ? `${options.firstEntryId || "(start)"} → ${options.lastEntryId || "(end)"}`
     : "(no entries)";
   const footer = `[compacted ${timestamp}; cumulative source entries ${range}]`;
-  const footerBlock = boundedBlock("---", [footer], FOOTER_MAX_BYTES);
+  const footerBlock = boundedBlock("---", ["Recover full context in fabric_exec with history.recall and history.expand.", footer], FOOTER_MAX_BYTES);
   // Every block, its separator and the final newline are counted before the
   // allocation, so no section can push the footer past the ceiling.
   const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + history.length + 1;

@@ -94,8 +94,9 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       // The host names the tools, so this thread stays light: no providers, no schemas.
       const names = msg.names;
       const toolFns = names.map((name) => (...args: unknown[]) => call(name, args));
-      const run = new Function(...names, "print", "π", "store", "load", "mcp", "return " + msg.js);
-      const value = await run(...toolFns, print, π, store, load, mcp);
+      const history = Object.fromEntries(msg.historyNames.map((name) => [name, (...args: unknown[]) => call("history." + name, args)]));
+      const run = new Function(...names, "print", "π", "store", "load", "mcp", "history", "return " + msg.js);
+      const value = await run(...toolFns, print, π, store, load, mcp, history);
       send({ kind: "done", ok: true, value, logs, writes });
     } catch (error) {
       send({ kind: "done", ok: false, error: error instanceof Error ? error.message : String(error), logs, writes });

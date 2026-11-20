@@ -1,5 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { boundedSuffix, earlierSummaryOmission, utf8Bytes } from "../../src/compaction/bounds.ts";
+import { boundedExcerpt, boundedSuffix, earlierSummaryOmission, protectedBudgets, utf8Bytes } from "../../src/compaction/bounds.ts";
+
+test("protected-block budgets keep short items whole and distribute the remaining bytes", () => {
+  expect(protectedBudgets("hdr", ["a", "bcdef", "g".repeat(20)], 21)).toEqual([1, 5, 6]);
+});
+
+describe("boundedExcerpt", () => {
+  test("names the source and accounts for retained UTF-8 text", () => {
+    const text = "🦊界".repeat(100);
+    const cut = boundedExcerpt(text, 80, "row-α");
+    const marker = `\n[omitted ${cut.omittedBytes} UTF-8 bytes of row-α]`;
+    expect(cut.text.endsWith(marker)).toBe(true);
+    expect(utf8Bytes(cut.text.slice(0, -marker.length)) + cut.omittedBytes).toBe(utf8Bytes(text));
+    expect(utf8Bytes(cut.text)).toBeLessThanOrEqual(80);
+    expect(cut.text).not.toContain("\uFFFD");
+  });
+
+  test("reports all bytes omitted when the marker cannot fit", () => {
+    expect(boundedExcerpt("x".repeat(100), 0, "source-id")).toEqual({ text: "", omittedBytes: 100 });
+    expect(boundedExcerpt("x".repeat(100), 8, "source-id")).toEqual({ text: "", omittedBytes: 100 });
+  });
+
+  test("retains the source marker when only the marker fits", () => {
+    const marker = "[omitted 100 UTF-8 bytes of source-id]";
+    expect(boundedExcerpt("x".repeat(100), utf8Bytes(marker), "source-id"))
+      .toEqual({ text: marker, omittedBytes: 100 });
+  });
+});
 
 describe("boundedSuffix", () => {
   test("keeps a text whole when it fits", () => {

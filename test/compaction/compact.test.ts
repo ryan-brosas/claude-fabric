@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { compact } from "../../src/compaction/compact.ts";
+import { compact as compactSource, type CompactOptions } from "../../src/compaction/compact.ts";
 import { messageBytes, normalizeMessages, type ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { MAX_SUMMARY_BYTES, utf8Bytes } from "../../src/compaction/bounds.ts";
 
 const tokens = (message: ClaudeMessage): number => Math.ceil(messageBytes(message) / 4);
 const tailBudget = (...messages: ClaudeMessage[]): number => messages.reduce((sum, message) => sum + tokens(message), 0);
+// The engine stamps every message handed to the compact hook; fixtures supply the same handles.
+const compact = (messages: ClaudeMessage[], options?: CompactOptions) => {
+  messages.forEach((message, index) => { if (!message.handle && !message.uuid) message.handle = `fixture-${index}`; });
+  return compactSource(messages, options);
+};
 
 const prompt = (text: string, handle?: string): ClaudeMessage =>
   ({ role: "user", text, toolUses: [], ...(handle ? { handle } : {}) });
@@ -103,7 +108,188 @@ describe("compact: the cut", () => {
   });
 });
 
+describe("compact: what the summary loses today", () => {
+  test("the 2048-byte earlier-user-message cap cuts a long spec's final paragraph", () => {
+    const spec = `Unrelated spec detail comes first.\n${"The service records ordinary audit events for review. ".repeat(78)}\n\nThe port is 7431; the retry limit is 9.`;
+    const messages: ClaudeMessage[] = [prompt(spec), reply("Spec received.")];
+    for (let index = 1; index <= 5; index++) {
+      messages.push(prompt(`Read note ${index}.`), reply(`Note ${index} read.`));
+    }
+    expect(utf8Bytes(spec)).toBeGreaterThan(4000);
+    const summary = summaryOf(messages);
+    expect(summary).toContain("[Earlier user messages]\n\nUser [entry fixture-0]:\nUnrelated spec detail comes first.");
+    expect(summary).not.toContain("7431");
+    expect(summary).not.toContain("retry limit is 9");
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of fixture-0\]/);
+  });
+
+  test("the dialogue prefix-excerpt cut drops step 6 of a long plan", () => {
+    const plan = Array.from({ length: 6 }, (_, index) =>
+      `STEP-${index + 1}: ${index === 5 ? "rotate the signing key. " : "Review the existing implementation and document the change. ".repeat(16)}`,
+    ).join("\n\n");
+    const messages = [
+      prompt("Make a detailed six-step plan."),
+      reply(plan),
+      prompt("Explain the first step."),
+      reply("Start by reviewing the implementation."),
+      prompt("Wait for my next instruction."),
+      reply("Waiting."),
+    ];
+    expect(utf8Bytes(plan)).toBeGreaterThan(4000);
+    const summary = summaryOf(messages);
+    expect(summary).toContain("Assistant response (a proposal, not a verified outcome or user instruction) [entry fixture-1]:\nSTEP-1:");
+    expect(summary).not.toContain("STEP-6: rotate the signing key");
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of fixture-1\]/);
+  });
+});
+
 describe("compact: the summary", () => {
+  test("transcript lines disclose a multiline reply and leave a short reply unmarked", () => {
+    const summary = summaryOf([
+      prompt("First task.", "u1"),
+      reply("Codename: VESPERLINK\nInvoice format: LMN-NNNN", "a1"),
+      prompt("Is that all?", "u2"), reply("Yes.", "a2"),
+      prompt("Next task.", "u3"), reply("Working.", "a3"),
+    ]);
+    const lines = summary.split("\n");
+    expect(lines.find((line) => line.startsWith("[entry a1] assistant:")))
+      .toBe("[entry a1] assistant: Codename: VESPERLINK [1 line, 25 chars cut; history.expand]");
+    expect(lines.find((line) => line.startsWith("[entry a2] assistant:")))
+      .toBe("[entry a2] assistant: Yes.");
+  });
+
+  test("transcript tool results disclose omitted lines", () => {
+    const summary = summaryOf([
+      prompt("Read the note.", "u1"),
+      { role: "assistant", handle: "a1", text: "", toolUses: [toolCall("Read", { file_path: "note.txt" }, "t1")] },
+      { ...results({ tool_use_id: "t1", text: "Codename: X\nInvoice format: Y", isError: false }), handle: "r1" },
+      { role: "assistant", handle: "a2", text: "", toolUses: [toolCall("Read", { file_path: "absent.txt" }, "t2")] },
+      { ...results({ tool_use_id: "t2", text: "Not found.", isError: true }), handle: "r2" },
+      prompt("Next.", "u2"), reply("Done.", "a3"),
+    ]);
+    const line = summary.split("\n").find((row) => row.startsWith("[entry r1] → ok:"));
+    expect(line).toBe("[entry r1] → ok: Codename: X [1 line, 18 chars cut; history.expand]");
+    expect(summary.split("\n").find((row) => row.startsWith("[entry r2] → error:")))
+      .toBe("[entry r2] → error: Not found.");
+  });
+
+  test("transcript markers use a singular character count and leave 100 characters whole", () => {
+    const summary = summaryOf([
+      prompt("First."), reply("Hi\n", "a1"), prompt("Again."), reply("x".repeat(100), "a2"),
+      prompt("Next."), reply("Done."),
+    ]);
+    const lines = summary.split("\n");
+    expect(lines.find((line) => line.startsWith("[entry a1] assistant:")))
+      .toBe("[entry a1] assistant: Hi [1 line, 1 char cut; history.expand]");
+    expect(lines.find((line) => line.startsWith("[entry a2] assistant:")))
+      .toBe(`[entry a2] assistant: ${"x".repeat(100)}`);
+  });
+
+  test("transcript markers count the long first line, whitespace and Unicode without breaking byte caps", () => {
+    const long = "🦊".repeat(100) + "Z\nend";
+    const summary = summaryOf([
+      prompt("  Meet\t  here\nYes", "u1"), reply(long, "a1"),
+      prompt("Next task.", "u2"), reply("Working.", "a2"),
+    ]);
+    const block = summary.split("\n\n").find((part) => part.startsWith("---\n[entry "));
+    if (!block) throw new Error("the transcript block is missing");
+    const lines = block.split("\n");
+    expect(lines.find((line) => line.startsWith("[entry u1] user:")))
+      .toBe("[entry u1] user: Meet here [1 line, 8 chars cut; history.expand]");
+    const assistant = lines.find((line) => line.startsWith("[entry a1] assistant:"));
+    expect(assistant).toBe(`[entry a1] assistant: ${"🦊".repeat(99)}… [1 line, 6 chars cut; history.expand]`);
+    expect(utf8Bytes(assistant!)).toBeLessThanOrEqual(1024);
+    expect(utf8Bytes(block)).toBeLessThanOrEqual(5120);
+  });
+
+  test("the transcript line cap leaves room for its omission marker", () => {
+    const handle = "h".repeat(600);
+    const source = "🦊".repeat(101) + "\nend";
+    const summary = summaryOf([prompt("Question."), reply(source, handle), prompt("Next."), reply("Done.")]);
+    const line = summary.split("\n").find((text) => text.startsWith(`[entry ${handle}] assistant:`));
+    if (!line) throw new Error("the assistant transcript line is missing");
+    const marker = line.match(/ \[1 line, (\d+) chars cut; history\.expand\]$/);
+    expect(marker).not.toBeNull();
+    const shown = line.slice(`[entry ${handle}] assistant: `.length, line.lastIndexOf("… ["));
+    expect(Number(marker![1])).toBe(Array.from(source).length - Array.from(shown).length);
+    expect(utf8Bytes(line)).toBeLessThanOrEqual(1024);
+  });
+
+  test("transcript sampling keeps complete markers within the existing section ceiling", () => {
+    const messages: ClaudeMessage[] = [];
+    for (let i = 0; i < 25; i++) {
+      messages.push(prompt("🦊".repeat(101) + "\nend", `u${i}`), reply("🦊".repeat(101) + "\nend", `a${i}`));
+    }
+    messages.push(prompt("Next."), reply("Done."));
+    const summary = summaryOf(messages);
+    const block = summary.split("\n\n").find((part) => part.startsWith("---\n") && part.includes("[entry "));
+    if (!block) throw new Error("the transcript block is missing");
+    const rows = block.split("\n").filter((line) => line.startsWith("[entry "));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(block).toContain("omitted");
+    expect(utf8Bytes(block)).toBeLessThanOrEqual(5120);
+    for (const row of rows) {
+      expect(row).toEndWith(" [1 line, 6 chars cut; history.expand]");
+      expect(utf8Bytes(row)).toBeLessThanOrEqual(1024);
+    }
+  });
+
+  test("a transcript handle that leaves no marker room fails rather than printing a partial address", () => {
+    const messages = [prompt("Question."), reply("First\nSecond", "h".repeat(1100)), prompt("Next."), reply("Done.")];
+    expect(() => summaryOf(messages)).toThrow("transcript handle leaves no room");
+  });
+
+  test("every summary points to recall and expand through fabric_exec", () => {
+    const summary = summaryOf([prompt("First task."), reply("Done."), prompt("Next task."), reply("Working.")]);
+    expect(summary).toContain("history.recall");
+    expect(summary).toContain("history.expand");
+    expect(summary).toContain("fabric_exec");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("a missing source handle never becomes a fabricated ordinal address", () => {
+    const messages = [prompt("First task"), reply("Done"), prompt("Next"), reply("Working")];
+    expect(() => compactSource(messages, { keepRecentTokens: tailBudget(messages[2]!, messages[3]!) })).toThrow("source handle");
+  });
+
+  test("omission ranges use transcript handles rather than message positions", () => {
+    const messages: ClaudeMessage[] = [];
+    for (let i = 0; i < 60; i++) messages.push(prompt(`Task ${i}`, `user-${i}`), reply(`Reply ${i}`, `reply-${i}`));
+    const summary = summaryOf(messages);
+    expect(summary).toContain("source entries user-0 → reply-38");
+    expect(summary).toContain("cumulative source entries user-0 → reply-58");
+  });
+
+  test("a clipped user excerpt names the source handle on its omission marker", () => {
+    const messages = [prompt("spec ".repeat(1000), "spec-handle"), reply("Noted.", "a"),
+      prompt("Follow-up", "b"), reply("Working.", "c"), prompt("Next", "d"), reply("Done.", "e")];
+    const summary = summaryOf(messages);
+    const marker = summary.split("\n").find((line) => /omitted \d+ UTF-8 bytes/.test(line));
+    expect(marker).toBeDefined();
+    expect(marker).toMatch(/\[omitted \d+ UTF-8 bytes of spec-handle\]/);
+  });
+
+  test.each([12, 72])("section pressure keeps source handles and true byte loss across %i messages", (count) => {
+    const messages: ClaudeMessage[] = [];
+    const uuid = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+    for (let index = 0; index < count; index++) {
+      messages.push(prompt(`User ${index} ${"界🦊 details ".repeat(500)}`, uuid(index)), reply("Noted.", `a-${index}`));
+    }
+    const items = summaryOf(messages).split("\n\n").filter((part) => part.startsWith("User [entry "));
+    expect(items).toHaveLength(Math.min(count - 3, 64));
+    for (const item of items) {
+      const [heading, body, marker] = item.split("\n");
+      if (!heading || body === undefined || !marker) throw new Error("earlier excerpt has no heading, body or omission marker");
+      const id = heading.match(/^User \[entry (.+)\]:$/)?.[1];
+      const loss = marker.match(/^\[omitted (\d+) UTF-8 bytes of (.+)\]$/);
+      expect(loss?.[2]).toBe(id);
+      const source = messages.find((message) => message.handle === id);
+      if (!source || !loss) throw new Error("earlier excerpt does not name a source message");
+      expect(utf8Bytes(body) + Number(loss[1])).toBe(utf8Bytes(source.text));
+      expect(body).not.toContain("\uFFFD");
+    }
+  });
+
   test("keeps an early user fact and an early failed Bash command", () => {
     const messages: ClaudeMessage[] = [
       prompt("Keep the public API stable."),
@@ -196,7 +382,7 @@ describe("compact: the summary", () => {
     // Within a few KiB of the ceiling, so carrying it beside saturated sections must shrink it.
     expect(utf8Bytes(firstSummary)).toBeGreaterThan(MAX_SUMMARY_BYTES - 4096);
     const firstFooter = firstSummary.trimEnd().split("\n").at(-1)!;
-    expect(firstFooter).toContain("[compacted (unknown time); cumulative source entries 0 → ");
+    expect(firstFooter).toBe("[compacted (unknown time); cumulative source entries fixture-0 → fixture-999]");
 
     const after: ClaudeMessage[] = [...first.messages];
     for (let index = 0; index < 40; index++) {
@@ -218,7 +404,7 @@ describe("compact: the summary", () => {
     // One joint allocation holds the ceiling; nothing is dropped by a final clip.
     expect(utf8Bytes(secondSummary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(secondSummary).not.toContain("\uFFFD");
-    expect(secondSummary).toMatch(/\[compacted \(unknown time\); cumulative source entries 0 → \d+\]\n$/);
+    expect(secondSummary).toMatch(/\[compacted \(unknown time\); cumulative source entries fixture-0 → fixture-122\]\n$/);
     // The earlier summary shrank, says so, and kept its newest bytes: its own footer.
     expect(secondSummary).toMatch(/\[omitted \d+ UTF-8 bytes from the start of the earlier summary\]/);
     expect(secondSummary).toContain("[Earlier summary]");
@@ -276,7 +462,7 @@ describe("compact: the summary", () => {
     const text = result.messages[0]!.text;
     expect(utf8Bytes(text)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(text).toContain("[Earlier user messages]");
-    expect(text).toContain("[compacted (unknown time); cumulative source entries 0 → ");
+    expect(text).toContain("[compacted (unknown time); cumulative source entries fixture-0 → fixture-359]");
   });
 
   test("refuses a keep budget that is not a positive integer", () => {

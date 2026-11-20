@@ -2,7 +2,12 @@
 // hand around, and the loop that publishes it and answers a job with Claude Code's own MCP call.
 // The engine is played here by plain objects, so no MCP server and no Claude Code are involved.
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BRIDGE_HEADER, bridgePaths } from "../../src/bridge/contract.ts";
+import { startBridge } from "../../src/kernel/bridge/server.ts";
+import { expand, recall } from "../../src/recall/history.ts";
 import {
   answerOf,
   receiptAccepted,
@@ -225,6 +230,126 @@ describe("the plain data the hook bodies hand around", () => {
 });
 
 describe("the mod's socket loop", () => {
+  test("retries the transcript path without blocking a bridge job", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    let attempts = 0;
+    let release: ((info: { transcriptPath: string }) => void) | undefined;
+    harness.$.session = {
+      id: async () => "session-1",
+      info: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error("session not ready");
+        return await new Promise<{ transcriptPath: string }>((resolve) => { release = resolve; });
+      },
+    };
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({ cwd: "/work" }));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    expect(harness.requests.filter((request) => request.path === "/session")).toEqual([]);
+
+    harness.deliver({ kind: "mcp", id: 17, server: "context7", tool: "resolve-library-id", args: {} });
+    await waitFor(() => attempts === 2 && harness.requests.some((request) => request.path === "/answer") &&
+      harness.requests.filter((request) => request.path === "/next").length >= 2);
+    expect(harness.asked).toEqual([{ server: "context7", tool: "resolve-library-id", args: {} }]);
+    expect(harness.requests.filter((request) => request.path === "/session")).toEqual([]);
+
+    if (!release) throw new Error("second info call did not start");
+    release({ transcriptPath: "/work/session.jsonl" });
+    // Publish as soon as info returns, even while the next long poll is parked.
+    await waitFor(() => harness.requests.some((request) => request.path === "/session"));
+    expect(harness.requests.filter((request) => request.path === "/session").map((request) => request.body))
+      .toEqual([{ transcriptPath: "/work/session.jsonl" }]);
+    harness.deliver(null);
+    await waitFor(() => harness.requests.filter((request) => request.path === "/next").length >= 3);
+    expect(attempts).toBe(2);
+    expect(harness.requests.filter((request) => request.path === "/session")).toHaveLength(1);
+  });
+
+  test("an empty transcript path is retried and never published", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    let attempts = 0;
+    harness.$.session = { id: async () => "session-1", info: async () => ({ transcriptPath: ++attempts === 1 ? "" : "/work/ready.jsonl" }) };
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({}));
+    await waitFor(() => harness.requests.some((request) => request.path === "/next"));
+    expect(harness.requests.filter((request) => request.path === "/session")).toEqual([]);
+    harness.deliver(null);
+    await waitFor(() => harness.requests.some((request) => request.path === "/session"));
+    expect(harness.requests.filter((request) => request.path === "/session").map((request) => request.body))
+      .toEqual([{ transcriptPath: "/work/ready.jsonl" }]);
+    expect(attempts).toBe(2);
+  });
+
+  test("a refused path publication retries and a changed secret republishes it", async () => {
+    const handlers = hooks();
+    const harness = fake();
+    let infoCalls = 0, posts = 0;
+    harness.$.session = { id: async () => "session-1", info: async () => {
+      infoCalls++;
+      return { transcriptPath: "/work/ready.jsonl" };
+    } };
+    const original = (harness.$.http as { fetch: (url: string, init: { headers: Record<string, string>; body: string; socketPath?: string }) => Promise<unknown> }).fetch;
+    harness.$.http = { fetch: async (url: string, init: { headers: Record<string, string>; body: string; socketPath?: string }) => {
+      if (new URL(url).pathname === "/session" && ++posts === 1) return { ok: false, status: 503, text: "unavailable" };
+      return original(url, init);
+    } };
+    await hook(handlers, "session.start")(harness.$, { cwd: "/work", surface: null, isInteractive: false }, () => ({}));
+    await waitFor(() => posts === 1 && harness.requests.some((request) => request.path === "/next"));
+    expect(harness.requests.filter((request) => request.path === "/session")).toEqual([]);
+    harness.deliver(null);
+    await waitFor(() => harness.requests.filter((request) => request.path === "/session").length === 1 &&
+      harness.requests.filter((request) => request.path === "/next").length >= 2);
+    harness.$.fs = { read: async () => "session-1\na-new-secret\n" };
+    harness.deliver(null);
+    await waitFor(() => harness.requests.filter((request) => request.path === "/session").length === 2);
+    expect(harness.requests.filter((request) => request.path === "/session").map((request) => [request.secret, request.body]))
+      .toEqual([["the-secret", { transcriptPath: "/work/ready.jsonl" }], ["a-new-secret", { transcriptPath: "/work/ready.jsonl" }]]);
+    expect(posts).toBe(3);
+    expect(infoCalls).toBe(1);
+  });
+
+  test("a retried session path reaches the real socket and makes history searchable", async () => {
+    const data = await mkdtemp(join(tmpdir(), "fabric-mod-"));
+    const path = join(data, "session.jsonl");
+    const rows = ["the red fox is here", "the fox is red"].map((text, i) => JSON.stringify({
+      type: "user", uuid: `m${i}`, parentUuid: i ? "m0" : null, message: { content: text },
+    })).join("\n") + "\n";
+    await Bun.write(path, rows);
+    const started = await startBridge({ pluginData: data, sessionId: "session-1", pollMs: 20 });
+    if (!("bridge" in started)) throw new Error(started.error);
+    const { bridge } = started;
+    const harness = fake(data);
+    const abort = new AbortController();
+    let stopped = false, attempts = 0;
+    harness.$.session = { id: async () => "session-1", info: async () => {
+      if (++attempts === 1) throw new Error("session not ready");
+      return { transcriptPath: path };
+    } };
+    harness.$.fs = { read: async (file: string) => Bun.file(file).text() };
+    harness.$.http = { fetch: async (url: string, init: { method: string; headers: Record<string, string>; body: string; socketPath: string }) => {
+      const response = await fetch(url, { method: init.method, headers: init.headers, body: init.body, unix: init.socketPath, signal: abort.signal });
+      return { ok: response.ok, status: response.status, text: await response.text() };
+    } };
+    harness.$.clock = { after: (ms: number, run: () => void) => {
+      const timer = stopped ? undefined : setTimeout(run, ms);
+      return { cancel: () => { if (timer) clearTimeout(timer); } };
+    } };
+    try {
+      const handlers = hooks();
+      await hook(handlers, "session.start")(harness.$, { cwd: data, surface: null, isInteractive: false }, () => ({}));
+      await waitFor(() => bridge.transcriptPath() === path);
+      expect(attempts).toBe(2);
+      const hits = await recall(bridge.transcriptPath()!, { query: '"red fox"' });
+      expect(hits.hits.map((hit) => hit.uuid)).toEqual(["m0"]);
+      expect((await expand(path, hits.hits[0]!.follow)).entries[0]!.text).toBe("the red fox is here");
+    } finally {
+      stopped = true;
+      abort.abort();
+      bridge.close();
+      await rm(data, { recursive: true, force: true });
+    }
+  });
+
   test("session.start starts it, the tool list publishes, and a job is answered with the MCP call's result", async () => {
     const handlers = hooks();
     const harness = fake();

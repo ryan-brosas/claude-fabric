@@ -188,3 +188,57 @@ test/           mirrors src/
   `session.compact` hook, with no `compaction` row after. This matches the first probe. So
   `session.compact` stays the one place to see a compaction.
 
+- **Compaction positions and the recall index** (2026-11-20, Claude Code 2.1.329, a throwaway
+  probe plugin): in `session.compact`, every `e.messages[i]` carries a `handle`. That handle
+  equals the transcript row's `uuid` on 8 of 8 rows (user, assistant text, tool_use,
+  tool_result), while `uuid` itself is null. Their order also matches the active chain. So the
+  summary can address an omitted row by transcript uuid. Check each one by lookup, because the
+  types call `handle` opaque. On the 65.6 MB, 31,648-line transcript, a BM25 build over 18,978
+  chain rows took about 240 ms after a 140 ms parse. Only 363 of 20,147 user and assistant rows
+  hold a text block. Index tool_use inputs and tool_result text, or recall sees two percent of
+  the conversation. All 1,282 `toolUseResultStripped` rows are user rows, so those outputs are
+  not in the transcript to expand.
+
+- **Boundary shapes** (2026-11-20, Claude Code 2.1.329, a throwaway probe plugin): core's auto
+  boundaries carry `precomputed: true` at `durationMs` 18 to 43, so the boundary makes no model
+  call. They also carry a `preservedSegment` whose `headUuid` and `tailUuid` are the ends of
+  `uuids`. `uuids` is a same-order subset of `allUuids`, and the extra `allUuids` entries name
+  no row in the file. A hook-answered compaction from `$.session.compact` writes trigger
+  `manual` in 13 ms, though the hook itself saw `plugin`, and no `uuids`, `allUuids` or
+  `preservedSegment`. Core's own auto mid-session boundary writes trigger `auto` in 4,195 ms
+  with a `preservedSegment` and 5 uuids. So an adapter reads the preserved list when a boundary
+  carries one. Without it, the adapter walks the parent chain.
+
+- **A commit point and a seed** (2026-11-20, Claude Code 2.1.329, a throwaway probe plugin):
+  `$.session.compact({ instructions })` resolves from `turn.complete` on the main loop, from
+  `session.measure`, and from a deferred `$.clock.after(0)`. The session then answers the next
+  turn as usual. Trigger `plugin` takes the hook's `{ messages }` answer: 43 ms, `usage` null,
+  and the next turn quotes the hook's summary line. That compaction costs no model call. A
+  `$.prompt.submit({ text })` right after it, inside the same `turn.complete`, starts a turn the
+  model answers (`SEED-OK`). That row carries origin `{ kind: "plugin", name }`, `turnOrigin`
+  `system`, and the text wrapped: "The <plugin> plugin sent a message:" at the top, "it starts
+  this turn in the user's place" at the end. `asUser: true` keeps that turn and adds the flag to
+  the origin. So P2 and P3 have their commit point and their seed. Both still want a bench
+  scenario where main loses work that a model-asked compaction would keep.
+
+- **One `turn.complete` per turn under mid-turn compaction** (2026-11-20, Claude Code 2.1.329, a
+  throwaway probe plugin): with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=5`, core raised 4
+  `session.compact` auto events inside one turn. `turn.complete` fired once, at the end, reason
+  `error`, after core's own line "Autocompact is thrashing: the context refilled to the limit
+  within 3 turns of the previous compact, 3 times in a row". So `turn.complete` stays a
+  once-per-turn commit point when compaction continues a turn. Core's own guard stops a run
+  after the third refill in a row, and a Fabric intent kernel's chain cap of 3 matches it.
+  `session.measure` reports `tokens` null until the first response.
+
+- **Auto-compaction thresholds** (2026-11-20, Claude Code 2.1.329, a throwaway probe plugin):
+  `$.session.usage({ breakdown: "summary" })` carries `autoCompactThreshold`,
+  `isAutoCompactEnabled`, `autocompactSource` and `maxTokens` under `context.breakdown`. Unset,
+  the threshold reads 967,000, `isAutoCompactEnabled` is true, the source is `model-default` and
+  `maxTokens` is 1,000,000. With `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000` the same fields read
+  267,000, true, `env` and 300,000, while `window` and `percent` stay against 1,000,000. So a
+  mod reads the threshold it must beat, and moves it with the env var.
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=5` still works on this build: core auto-compacted at
+  `preTokens` 71,868. The breakdown still read 967,000, so it ignores the override. The bench
+  can force auto compaction cheaply, and pressure computed from the breakdown disagrees with
+  core under that override.
+

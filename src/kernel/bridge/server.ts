@@ -7,6 +7,7 @@ import {
   bridgePaths,
   secretFileText,
   isBridgeCatalog,
+  isBridgeSession,
   type BridgeCatalog,
   type BridgeJob,
   type BridgePaths,
@@ -54,6 +55,8 @@ export interface Bridge {
   readonly paths: BridgePaths;
   /** The session's catalog, as the mod last sent it; empty until it sends one. */
   catalog(): BridgeCatalog;
+  /** The path published for this session, absent until the mod knows it. */
+  transcriptPath(): string | undefined;
   /** Asks the mod to run one tool call and resolves its raw MCP result. */
   call(server: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
   /** Asks the mod to run one built-in tool and resolves what `$.tool.call` gave it. */
@@ -161,6 +164,7 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
   writeFileSync(paths.secret, secretFileText(options.sessionId, secret), { mode: 0o600 });
 
   let catalog: BridgeCatalog = emptyCatalog;
+  let transcriptPath: string | undefined;
   const jobs: BridgeJob[] = [];
   const waiters: ((job: BridgeJob | null) => void)[] = [];
   const answers = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -276,6 +280,12 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
     if (req.method !== "POST") return new Response("POST only", { status: 405 });
     seenAt = Date.now();
     const path = new URL(req.url).pathname;
+    if (path === "/session") {
+      const body: unknown = await req.json().catch(() => undefined);
+      if (!isBridgeSession(body)) return json({ ok: false }, 400);
+      transcriptPath = body.transcriptPath || undefined;
+      return json({ ok: true });
+    }
     if (path === "/catalog") {
       const body: unknown = await req.json().catch(() => undefined);
       if (!isBridgeCatalog(body)) return json({ ok: false }, 400);
@@ -378,6 +388,7 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeStart> 
   const bridge: Bridge = {
     paths,
     catalog: () => catalog,
+    transcriptPath: () => transcriptPath,
     call: (serverName, tool, args) =>
       ask("Claude Code's MCP connections", { kind: "mcp", server: serverName, tool, args }),
     tool: (name, input) =>

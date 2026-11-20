@@ -6,8 +6,9 @@ import { MAX_RESULT_CHARS, bound, format } from "./result.ts";
 import type { Done } from "./protocol.ts";
 import { commitPlan, type Store } from "./store.ts";
 import { STORE } from "../providers/store/index.ts";
+import { HISTORY } from "../providers/tools/history.ts";
 import { TOOLS } from "../providers/tools/index.ts";
-import { guestTypes, inputFields } from "../registry/generate.ts";
+import { guestTypes, inputFields, namespaceTypes } from "../registry/generate.ts";
 import { mcpTypes } from "../registry/mcp.ts";
 import { repairCode } from "../stages/code-repair.ts";
 import { outputBudget } from "../stages/output-budget.ts";
@@ -30,6 +31,8 @@ export interface RunOptions {
   mcp?: McpLink;
   /** The session's bridge to Claude Code's built-in tools: the socket a WebSearch crosses. */
   builtin?: BuiltinLink;
+  /** The mod-published path, read when a history call reaches the host. */
+  transcriptPath?: () => string | undefined;
 }
 
 export interface RunResult { ok: boolean; text: string; ms: { check: number; run: number }; calls: number }
@@ -41,7 +44,7 @@ export async function run(code: string, cwd: string, options: RunOptions = {}): 
   const t0 = performance.now();
   // The tool declarations are constant, but the mcp surface is not: it is printed from the
   // session's catalog, which the mod may send again while the server runs.
-  const declarations = guestTypes(TOOLS, STORE, [mcpTypes(options.mcp?.catalog() ?? { servers: [] })]);
+  const declarations = guestTypes(TOOLS, STORE, [mcpTypes(options.mcp?.catalog() ?? { servers: [] }), namespaceTypes("history", HISTORY)]);
   // The program the model sent is graded first: repair is for a program the check rejected. Some
   // valid programs look exactly like an unquoted path (Read(/a.txt/.source) reads a regex's source
   // string), so rewriting them unasked would change what the program does. The repaired text is

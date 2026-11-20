@@ -40,6 +40,21 @@ describe("demand-based compaction rendering", () => {
     expect(renderSummaryWithMetadata(sections, { ...options, requestLines: ["Keep the agreed boundary."] })).toEqual(result);
   });
 
+  test("sampling reports the omitted count without a source range", () => {
+    const sections = project([]);
+    sections.files = Array.from({ length: 16 }, (_, i) => `${"x".repeat(650)} [entry source-${i}]`);
+    const { summary } = renderSummaryWithMetadata(sections, options);
+    expect(summary).toContain("… omitted 10 rendered lines\n");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("a clipped compaction request says it is not a transcript row", () => {
+    const { summary, requestOmittedBytes } = renderSummaryWithMetadata(project([]), { ...options, requestLines: ["界".repeat(3000)] });
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of compaction request, not a transcript row\]/);
+    expect(requestOmittedBytes).toBeGreaterThan(0);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
   test("only reduces historical blocks when actual protected content causes pressure", () => {
     const sections = { ...history(true), goal: history().goal };
     const without = renderSummaryWithMetadata(sections, options);
