@@ -49,8 +49,9 @@ export const register: Register = (on, options) => {
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
     const carried = compact(e.messages, { instructions: e.instructions });
-    // One long turn over the budget has no prompt to cut at; core's compactor can cut inside it.
-    if ("core" in carried) return next(e);
+    // One long turn has no prompt to cut at; core can cut inside it. An automatic
+    // skip also goes to core: our text projection does not count media blocks.
+    if ("core" in carried || (e.trigger === "auto" && "skip" in carried)) return next(e);
     if (!e.messages.some(isFabricSummary)) return carried;
     return (async () => {
       try {
@@ -85,7 +86,11 @@ export const register: Register = (on, options) => {
         return carried;
       }
     })();
-  }).catch(($, e, next) => next(e));
+  }).catch(($, e, next) => {
+    try { $.ui.log(`fabric: compaction ${next.error.kind}: ${next.error.message ?? "no error message"}; delegating`, { to: "debug" }); }
+    catch { /* Logging must not stop the fallback. */ }
+    return next(e);
+  });
 
   // Started and not awaited: the loop runs outside this hook's 10 s budget and keeps polling
   // between hooks. It reads the plugin's data folder and the session's socket once, then
