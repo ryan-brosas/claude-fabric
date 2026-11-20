@@ -14,9 +14,13 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **Fabric's compactor replaces Claude Code's.** A `session.compact` hook that returns
   `{ messages }` answers in core's place, with no model call (proven 2026-11-18). When a transcript
   over the budget has no older history to summarize (one long turn, or one long turn after a
-  summary), the hook hands the event back to core with `next(e)` instead of vetoing it, so auto
-  compaction still runs (`proofs/no-cut.ts` decides core or skip on that path). `precompute`
-  answers `{ skip }`: the summary is deterministic, so there is nothing to compute ahead of time.
+  summary), the hook hands the event back to core with `next(e)` instead of vetoing it
+  (`proofs/no-cut.ts` decides core or skip on that path). It also delegates an automatic skip:
+  the text projection cannot count images, so core may need to compact even when Fabric finds
+  nothing to summarize. A manual or plugin skip stays with Fabric, subject to the transcript
+  rebuild below. `precompute` answers `{ skip }`: there is nothing to compute ahead of time.
+  If the hook throws or times out, it logs the failure kind and reason to debug and delegates;
+  a failed log cannot block the fallback.
 - **A later Fabric compaction rebuilds from the transcript.** The `[Fabric summary]` header
   marks the earlier summary. The mod walks the transcript's active chain and joins its raw prefix
   to the first current message whose handle is on that chain. The chain shape was observed on
