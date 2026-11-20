@@ -119,12 +119,20 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
   const instructions = options.instructions?.trim();
   const requestLines = instructions ? [instructions] : [];
   const { sections } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed), requestLines);
+  // Prefer excerpts from messages absent or clipped in the protected user sections.
+  const wholeUsers = new Set<string>();
+  messages.slice(0, start).forEach((message, index) => {
+    if (message.role !== "user" || !message.text || summaryIndexes.has(index)) return;
+    const id = source(index);
+    if (sections.goal.includes(`User [entry ${id}]:\n${message.text}`)
+      || sections.dialogue.some((line) => line.includes(`User instruction [entry ${id}]:\n${message.text}`))) wholeUsers.add(id);
+  });
   const summary = renderSummary(sections, {
     firstEntryId: source(0),
     lastEntryId: source(start - 1),
     lastTimestamp: "",
     requestLines,
-    literals: exactValues(messages, start, earlierSummary),
+    literals: exactValues(messages, start, earlierSummary, summaryIndexes, wholeUsers, [...sections.goal, ...sections.dialogue].join("\n\n")),
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 

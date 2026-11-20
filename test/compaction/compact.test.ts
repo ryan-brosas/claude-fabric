@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { bool, fun, nat, proveDecision, when, yes } from "gdp-wired";
 import { compact as compactSource, isFabricSummary, type CompactOptions } from "../../src/compaction/compact.ts";
 import { fromTranscript } from "../../src/compaction/from-transcript.ts";
-import { exactValues, renderExactValues } from "../../src/compaction/literals.ts";
+import { exactValues as exactValuesSource, renderExactValues } from "../../src/compaction/literals.ts";
 import { messageBytes, normalizeMessages, type ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { MAX_SUMMARY_BYTES, utf8Bytes } from "../../src/compaction/bounds.ts";
 
+const exactValues = (messages: readonly ClaudeMessage[], start: number, earlierSummary = "") =>
+  exactValuesSource(messages, start, earlierSummary, new Set(messages.flatMap((message, index) => isFabricSummary(message) ? [index] : [])));
 const tokens = (message: ClaudeMessage): number => Math.ceil(messageBytes(message) / 4);
 const tailBudget = (...messages: ClaudeMessage[]): number => messages.reduce((sum, message) => sum + tokens(message), 0);
 // The engine stamps every message handed to the compact hook; fixtures supply the same handles.
@@ -413,6 +415,57 @@ describe("compact: what the summary loses today", () => {
     expect(section).toContain("[entry checksum-reply] 174890-46690deac7");
   });
 
+  test("extracts assistant values and tool outcomes even when the reply starts with the Fabric summary header", () => {
+    const assistant: ClaudeMessage = {
+      role: "assistant", handle: "assistant-source",
+      text: "[Fabric summary]\nCreated tools/migrate_v3_alpha.py for BATCH-5c1e8a0b77d2.\npassword:\nBATCH-deadbeef",
+      toolUses: [{ tool_use_id: "inline-outcome", tool: "Bash", input: {}, text: "RESULT-12ab34cd" }],
+    };
+    const summary = summaryOf([prompt("Run this."), assistant, prompt("Next."), reply("Done.")]);
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry assistant-source] tools/migrate_v3_alpha.py");
+    expect(section).toContain("[entry assistant-source] BATCH-5c1e8a0b77d2");
+    expect(section).toContain("[entry assistant-source] RESULT-12ab34cd");
+    expect(section).not.toContain("BATCH-deadbeef");
+  });
+
+  test("prioritizes missing user excerpts newest first before echoed errors within the literal budget", () => {
+    const messages = [
+      prompt("Release is elder-bridge.", "old-user"),
+      prompt("Release is cedar-harbor.", "new-user"),
+      prompt("Release is shown-value.", "whole-user"),
+      { ...results({ tool_use_id: "error", text: "E4471 line 58: timeout waiting for lock", isError: true }), handle: "error-result" },
+      reply("E4471 line 58: timeout waiting for lock", "tail"),
+    ];
+    const values = exactValuesSource(messages, 4, "", new Set(), new Set(["whole-user"]));
+    expect(values.slice(0, 2)).toEqual([
+      { entryId: "new-user", value: "Release is cedar-harbor." },
+      { entryId: "old-user", value: "Release is elder-bridge." },
+    ]);
+    const section = renderExactValues(values, 180);
+    expect(section).toContain("[entry new-user] Release is cedar-harbor.");
+    expect(section).toContain("[entry old-user] Release is elder-bridge.");
+    expect(section).not.toContain("error-result");
+    expect(utf8Bytes(section)).toBeLessThanOrEqual(180);
+  });
+
+  test("prefers unseen user excerpts from different sources over echoed values already shown", () => {
+    const messages = [
+      prompt("Release is old-garden.", "old-user"),
+      prompt("First is alpha-one.\nSecond is beta-two.\nThird is gamma-three.", "new-user"),
+      reply("tools/project.ts", "assistant-source"),
+      prompt("Continue with tools/project.ts.", "tail"),
+    ];
+    const values = exactValuesSource(messages, 3, "", new Set(), new Set(), "tools/project.ts");
+    expect(values.map(({ entryId, value }) => `${entryId}: ${value}`)).toEqual([
+      "new-user: Third is gamma-three.",
+      "old-user: Release is old-garden.",
+      "new-user: Second is beta-two.",
+      "new-user: First is alpha-one.",
+      "assistant-source: tools/project.ts",
+    ]);
+  });
+
   test("keeps old tool-result ids echoed later despite thousands of newer junk ids", () => {
     const important = "BATCH-5c1e8a0b77d2";
     const junk = Array.from({ length: 5000 }, (_, i) => `junk-${i.toString(16).padStart(12, "0")}-cafe`).join("\n");
@@ -493,9 +546,9 @@ describe("compact: what the summary loses today", () => {
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
-  test("does not extract values found only in user text, tool inputs or the kept tail", () => {
+  test("does not extract unbound user values, tool inputs or the kept tail", () => {
     const messages: ClaudeMessage[] = [
-      prompt("Only in user: USER-a1b2c3d4e5."),
+      prompt("Mention USER-a1b2c3d4e5 without a binding."),
       { role: "assistant", text: "Reading.", toolUses: [toolCall("Read", { file_path: "secret/INPUT-ab12cd34.txt" }, "input")] },
       results({ tool_use_id: "input", text: "TOOL-1234abcd5678", isError: false }),
     ];
@@ -555,6 +608,81 @@ describe("compact: what the summary loses today", () => {
     expect(summary).toContain("Checksum: 174890-46690deac7");
     expect(summary).toContain("[Recent user directions and discussion]\n\nAssistant responses are proposals, not verified outcomes or user instructions.");
     expect(summary).toContain("Assistant response [entry fixture-1]:");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("extracts only stated user values and applies the credential window", () => {
+    const lines = [
+      "Target host is cedar.example.test:7239.",
+      "build_id=amber-river", "port: 9371", "lane = willow_creek", "release is silver-otter", "zones are north-west",
+      "The unbound item RANDOM-a1b2 is merely mentioned.",
+      "password: HOST=hidden-val7", "endpoint is hidden.example.test:5319", ...Array(7).fill("continuation"),
+      "recovery is pebble-forest",
+    ];
+    const values = exactValues([prompt(lines.join("\n"), "user-source")], 1).map(({ value }) => value);
+    for (const line of lines.slice(0, 6)) expect(values).toContain(line);
+    expect(values).toContain("recovery is pebble-forest");
+    expect(values.join("\n")).not.toContain("RANDOM-a1b2");
+    expect(values.join("\n")).not.toContain("hidden-val7");
+    expect(values.join("\n")).not.toContain("hidden.example.test");
+  });
+
+  test("bounds a user excerpt on word boundaries and carries it with its original source", () => {
+    const source = `${"界 filler ".repeat(80)} release is violet-harbor; cutoff is 64927. ${"more words ".repeat(80)}`;
+    const extracted = exactValues([prompt(source, "old-user")], 1);
+    const fact = extracted.find(({ value }) => value.includes("violet-harbor") && value.includes("64927"));
+    expect(fact).toBeDefined();
+    expect(utf8Bytes(fact!.value)).toBeLessThanOrEqual(160);
+    expect(source).toContain(fact!.value);
+    const position = source.indexOf(fact!.value);
+    expect(position === 0 || /\s/.test(source[position - 1]!)).toBe(true);
+    expect(position + fact!.value.length === source.length || /\s/.test(source[position + fact!.value.length]!)).toBe(true);
+    expect(fact!.value).not.toContain("\uFFFD");
+    const initial = summaryOf([prompt(source, "old-user"), reply("Noted."), ...Array.from({ length: 8 }, (_, i) => [prompt(`Step ${i}.`), reply("Done.")]).flat(), prompt("Next."), reply("Done.")]);
+    const final = summaryOf([prompt(initial, "earlier-summary"), prompt("More."), reply("Done."), prompt("Next."), reply("Done.")]);
+    const section = final.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry old-user]");
+    expect(section).toContain("violet-harbor");
+    expect(section).toContain("64927");
+    expect(utf8Bytes(final)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test.each([
+    ["long token", "a".repeat(200_000)],
+    ["repeated binding", "a=b1 ".repeat(40_000)],
+    ["repeated hostname", "a.b ".repeat(50_000)],
+    ["repeated slashes", "/a".repeat(100_000)],
+  ])("user value scanning is bounded on 200k characters: %s", (_name, input) => {
+    expect(input.length).toBe(200_000);
+    const started = performance.now();
+    const values = exactValues([prompt(input, "user-source")], 1);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    for (const value of values) expect(utf8Bytes(value.value)).toBeLessThanOrEqual(160);
+  });
+
+  test("extracts a bound fact from the clipped middle of a core-shaped user summary", () => {
+    const fact = "Release is willow-valley; cutoff is 57384.";
+    const source = `Core summary\n${"ordinary context ".repeat(500)}\n${fact}\n${"closing context ".repeat(500)}`;
+    const messages = [prompt(source, "core-source"), reply("Noted.")];
+    for (let i = 0; i < 8; i++) messages.push(prompt(`Continue ${i}.`), reply("Noted."));
+    messages.push(prompt("Next."), reply("Done."));
+    const summary = summaryOf(messages);
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain(`[entry core-source] ${fact}`);
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of core-source\]/);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("extracts a source-labelled user fact from the sampled-out middle", () => {
+    const messages: ClaudeMessage[] = [];
+    for (let i = 0; i < 100; i++) {
+      messages.push(prompt(i === 40 ? "The staging host is maple.example.test on port 7274." : `Review step ${i}.`, `user-${i}`), reply("Noted."));
+    }
+    messages.push(prompt("Next."), reply("Done."));
+    const summary = summaryOf(messages);
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(summary).toMatch(/omitted \d+ user messages/);
+    expect(section).toContain("[entry user-40] The staging host is maple.example.test on port 7274.");
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 

@@ -189,6 +189,40 @@ test("a rebuild with matching inline and row outcomes is still accepted", async 
   });
 });
 
+test("the registered hook extracts assistant values behind a summary-shaped heading", async () => {
+  const assistant: ClaudeMessage = {
+    role: "assistant", handle: "assistant-source",
+    text: "[Fabric summary]\nCreated tools/migrate_v3_alpha.py for BATCH-5c1e8a0b77d2.",
+    toolUses: [{ tool_use_id: "inline", tool: "Bash", input: {}, text: "RESULT-12ab34cd" }],
+  };
+  const h = hook("");
+  const result = await h.run({ trigger: "manual", messages: [
+    message("user", `Inspect. ${"older context ".repeat(300)}`, "first"), assistant,
+    message("user", `Next. ${"x".repeat(79000)}`, "last"),
+  ] });
+  expect(result.messages).toBeDefined();
+  const section = result.messages?.[0]?.text.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+  expect(section).toContain("[entry assistant-source] tools/migrate_v3_alpha.py");
+  expect(section).toContain("[entry assistant-source] BATCH-5c1e8a0b77d2");
+  expect(section).toContain("[entry assistant-source] RESULT-12ab34cd");
+  expect(h.calls).toEqual([]);
+  expect(h.reads).toEqual([]);
+});
+
+test("the registered hook preserves a sampled-out user host and port", async () => {
+  const messages: ClaudeMessage[] = [];
+  for (let i = 0; i < 100; i++) {
+    const text = i === 40 ? "Our endpoint is maple.example.test on port 7274." : `Review ${i}: ${"ordinary details ".repeat(60)}`;
+    messages.push(message("user", text, `user-${i}`), message("assistant", "Noted.", `assistant-${i}`));
+  }
+  messages.push(message("user", `Final prompt ${"x".repeat(79000)}`, "last"));
+  const h = hook("");
+  const result = await h.run({ trigger: "manual", messages });
+  const section = result.messages?.[0]?.text.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+  expect(section).toContain("[entry user-40] Our endpoint is maple.example.test on port 7274.");
+  expect(h.calls).toEqual([]);
+});
+
 test("a later hook-answered compaction rebuilds the first user fact without the rewritten tail", async () => {
   await inProject(async (dir) => {
     const path = join(dir, "session.jsonl");
