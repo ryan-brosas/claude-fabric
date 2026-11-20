@@ -405,7 +405,7 @@ describe("compact: the summary", () => {
     expect(utf8Bytes(secondSummary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(secondSummary).not.toContain("\uFFFD");
     expect(secondSummary).toMatch(/\[compacted \(unknown time\); cumulative source entries fixture-0 → fixture-122\]\n$/);
-    // The earlier summary shrank, says so, and kept its newest bytes: its own footer.
+    // The earlier summary shrank, says so where the middle was cut, and kept its start and its newest bytes, its own footer.
     expect(secondSummary).toMatch(/\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/);
     expect(secondSummary).toContain("[Earlier summary]");
     expect(secondSummary).toContain(firstFooter);
