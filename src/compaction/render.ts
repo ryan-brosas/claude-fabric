@@ -1,5 +1,5 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/render.ts at d331f629; dropped carry-forward, user-activity and branch summaries (Pi-only), and adapts the recall pointer to Claude Code. Adds the header compact.ts recognizes its own summary by, and the [Earlier summary] block a second compaction carries the first one in, allocated inside the same ceiling as every other block.
-import { boundedExcerpt, boundedSuffix, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES,
+import { boundedExcerpt, boundedHeadTail, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES,
   MAX_RENDERED_LINE_BYTES, MAX_SUMMARY_BYTES, protectedBudgets, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
@@ -110,13 +110,14 @@ const protectedBlock = (header: string, items: readonly string[], maxBytes: numb
 };
 
 /** The earlier summary a second compaction carries: whole while the allocation
- * holds it, otherwise its newest bytes, with the loss stated at the start. */
+ * holds it, otherwise its first and newest bytes, with the loss stated in the
+ * middle where it was cut. The start holds the user's oldest instructions. */
 const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
   const full = `${EARLIER_SUMMARY_HEADER}\n\n${earlierSummary}`;
   if (utf8Bytes(full) <= maxBytes) return full;
   const bodyBytes = maxBytes - utf8Bytes(EARLIER_SUMMARY_HEADER) - 2;
   if (bodyBytes <= 0) return clipUtf8(EARLIER_SUMMARY_HEADER, Math.max(0, maxBytes));
-  const body = boundedSuffix(earlierSummary, bodyBytes);
+  const body = boundedHeadTail(earlierSummary, bodyBytes);
   return body.text ? `${EARLIER_SUMMARY_HEADER}\n\n${body.text}` : EARLIER_SUMMARY_HEADER;
 };
 

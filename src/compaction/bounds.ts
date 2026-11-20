@@ -62,20 +62,22 @@ const tailUtf8 = (text: string, maxBytes: number): string => {
 };
 
 export const earlierSummaryOmission = (omittedBytes: number): string =>
-  `[omitted ${omittedBytes} UTF-8 bytes from the start of the earlier summary]\n`;
+  `\n[omitted ${omittedBytes} UTF-8 bytes from the middle of the earlier summary]\n`;
 
-/** Keep the newest bytes of a text: the tail survives, and the loss is stated at
- * the start, where the reader meets it before the text it lost. */
-export const boundedSuffix = (text: string, maxBytes: number): { text: string; omittedBytes: number } => {
+/** Keep the start and the end of a text and cut the middle, stating the loss
+ * where it happened. The room left after the note splits evenly, the head taking
+ * the floor half. */
+export const boundedHeadTail = (text: string, maxBytes: number): { text: string; omittedBytes: number } => {
   const sourceBytes = utf8Bytes(text);
   if (sourceBytes <= maxBytes) return { text, omittedBytes: 0 };
   let omitted = sourceBytes - maxBytes;
   for (;;) {
     const room = maxBytes - utf8Bytes(earlierSummaryOmission(omitted));
     if (room <= 0) return { text: "", omittedBytes: sourceBytes };
-    const tail = tailUtf8(text, room);
-    const actual = sourceBytes - utf8Bytes(tail);
-    const candidate = `${earlierSummaryOmission(actual)}${tail}`;
+    const head = clipUtf8(text, Math.floor(room / 2), "");
+    const tail = tailUtf8(text, room - Math.floor(room / 2));
+    const actual = sourceBytes - utf8Bytes(head) - utf8Bytes(tail);
+    const candidate = `${head}${earlierSummaryOmission(actual)}${tail}`;
     const over = utf8Bytes(candidate) - maxBytes;
     if (over <= 0) return { text: candidate, omittedBytes: actual };
     // The note's own digits shifted the room; give the note the bytes it grew by.
