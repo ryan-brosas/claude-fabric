@@ -450,10 +450,13 @@ describe("compact: what the summary loses today", () => {
       "assistant-source: tools/project.ts",
       "whole-user: Release is shown-value.",
     ]);
-    const section = renderExactValues(values, 2048);
+    const section = renderExactValues(values, 300);
     expect(section).toContain("[entry error-result] E4471 line 58: timeout waiting for lock");
+    expect(section).toContain("[entry new-user] Third is gamma-three.");
     expect(section).toContain("[entry old-user] Release is elder-bridge.");
-    expect(utf8Bytes(section)).toBeLessThanOrEqual(2048);
+    expect(section).not.toContain("assistant-source");
+    expect(section).not.toContain("whole-user");
+    expect(utf8Bytes(section)).toBeLessThanOrEqual(300);
   });
 
   test("prefers unseen user excerpts from different sources over echoed values already shown", () => {
