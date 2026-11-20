@@ -40,6 +40,83 @@ describe("demand-based compaction rendering", () => {
     expect(renderSummaryWithMetadata(sections, { ...options, requestLines: ["Keep the agreed boundary."] })).toEqual(result);
   });
 
+  test("shrinks a single-line history minimum under saturated protected content", () => {
+    const sections = project([]);
+    sections.goal = Array.from({ length: 8 }, (_, i) => `GOAL_${i} `.padEnd(4096, "u"));
+    sections.dialogue = Array.from({ length: 3 }, (_, i) => `DIRECTION_${i} `.padEnd(3900, "d"));
+    sections.outstanding = ["OUTSTANDING ".padEnd(1024, "h")];
+    const request = "PIN_REQUEST ".padEnd(3050, "q");
+    const result = renderSummaryWithMetadata(sections, {
+      ...options,
+      requestLines: [request],
+      earlierSummary: "CARRY ".padEnd(4000, "c"),
+    });
+    expect(utf8Bytes(result.summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+    expect(result.summary).toContain(request);
+    for (const direction of sections.dialogue) expect(result.summary).toContain(direction);
+    expect(result.summary).toContain("[Outstanding Context]\n… omitted 1 rendered lines");
+    expect(result.summary).toContain("[compacted time; cumulative source entries first → last]");
+  });
+
+  test.each([
+    { count: 1, unicode: false, carrySize: 4000 },
+    { count: 1, unicode: true, carrySize: 20000 },
+    { count: 2, unicode: false, carrySize: 20000 },
+    { count: 11, unicode: true, carrySize: 4000 },
+    { count: 128, unicode: false, carrySize: 20000 },
+  ])("keeps every saturated section within the ceiling: $count lines, unicode=$unicode, carry=$carrySize", ({ count, unicode, carrySize }) => {
+    const sections = project([]);
+    sections.goal = Array.from({ length: 8 }, (_, i) => `GOAL_${i} `.padEnd(4096, "u"));
+    sections.dialogue = Array.from({ length: 3 }, (_, i) => `DIRECTION_${i} `.padEnd(3900, "d"));
+    for (const key of historyKeys) {
+      sections[key] = Array.from({ length: count }, (_, i) => `${key}_${i} ${unicode ? "界🦊".repeat(350) : "h".repeat(1100)}`);
+    }
+    const request = "PIN_REQUEST ".padEnd(3050, "q");
+    const { summary } = renderSummaryWithMetadata(sections, {
+      ...options,
+      requestLines: [request],
+      earlierSummary: "CARRY ".padEnd(carrySize, "c"),
+    });
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+    expect(summary).toContain(request);
+    for (const direction of sections.dialogue) expect(summary).toContain(direction);
+    for (const { header } of SUMMARY_SECTIONS) expect(summary).toContain(header);
+    expect(summary).toContain("[compacted time; cumulative source entries first → last]");
+    expect(summary).not.toContain("\uFFFD");
+  });
+
+  test("bounds protected blocks when their item separators alone exceed the section budget", () => {
+    const sections = project([]);
+    sections.goal = Array.from({ length: 8 }, (_, i) => `GOAL_${i} `.padEnd(4096, "u"));
+    sections.dialogue = Array.from({ length: 3 }, (_, i) => `DIRECTION_${i} `.padEnd(3900, "d"));
+    const requests = Array.from({ length: 10000 }, (_, i) => `REQUEST_${i}`);
+    const { summary, requestOmittedBytes } = renderSummaryWithMetadata(sections, { ...options, requestLines: requests });
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+    for (const direction of sections.dialogue) expect(summary).toContain(direction);
+    expect(summary).toContain("REQUEST_0");
+    expect(summary).toMatch(/\[omitted \d+ UTF-8 bytes of compaction request, not a transcript row\]/);
+    expect(requestOmittedBytes).toBeGreaterThan(0);
+    expect(summary).toContain("[compacted time; cumulative source entries first → last]");
+  });
+
+  test("bounds every protected block when all item lists exceed their separator budgets", () => {
+    const sections = project([]);
+    sections.goal = Array.from({ length: 10000 }, (_, i) => `GOAL_${i}`);
+    sections.dialogue = Array.from({ length: 10000 }, (_, i) => `DIRECTION_${i}`);
+    sections.outstanding = ["OUTSTANDING ".padEnd(1024, "h")];
+    const requests = Array.from({ length: 10000 }, (_, i) => `REQUEST_${i}`);
+    const { summary, dialogueOmittedBytes, requestOmittedBytes } = renderSummaryWithMetadata(sections, {
+      ...options, requestLines: requests, earlierSummary: "CARRY ".padEnd(4000, "c"),
+    });
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+    expect(summary).toContain("GOAL_0");
+    expect(summary).toContain("DIRECTION_0");
+    expect(summary).toContain("REQUEST_0");
+    expect(summary).toContain("[compacted time; cumulative source entries first → last]");
+    expect(dialogueOmittedBytes).toBeGreaterThan(0);
+    expect(requestOmittedBytes).toBeGreaterThan(0);
+  });
+
   test("sampling reports the omitted count without a source range", () => {
     const sections = project([]);
     sections.files = Array.from({ length: 16 }, (_, i) => `${"x".repeat(650)} [entry source-${i}]`);
@@ -69,6 +146,20 @@ describe("demand-based compaction rendering", () => {
     expect(large.dialogueOmittedBytes).toBe(0);
     expect(large.requestOmittedBytes).toBeGreaterThan(0);
     expect(utf8Bytes(large.summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("keeps a request and recent exchanges before allocating users ahead of older replies", () => {
+    const sections = project([]);
+    sections.goal = [`User [entry user-1]:\nUSER_START ${"u".repeat(22000)}`];
+    sections.dialogue = Array.from({ length: 3 }, (_, index) => `RECENT_${index} ${"r".repeat(3850)}`);
+    sections.earlierAssistantReplies = ["Assistant response [entry old]:\nOLD_ASSISTANT_END"];
+    const request = `KEEP_REQUEST ${"q".repeat(2950)}`;
+    const { summary } = renderSummaryWithMetadata(sections, { ...options, requestLines: [request] });
+    expect(summary).toContain(request);
+    for (const exchange of sections.dialogue) expect(summary).toContain(exchange);
+    expect(summary).toContain("USER_START");
+    expect(summary).not.toContain("OLD_ASSISTANT_END");
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
   test("allocates the carried earlier summary inside the ceiling, keeping its start and its newest bytes", () => {

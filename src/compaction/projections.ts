@@ -1,8 +1,8 @@
 // Copied from pi-fabric (MIT, Tom X Nguyen) src/compaction/projections.ts at d331f629; dropped custom messages, Fabric run/phase/operation events and their activity fold, Pi's pi.* ref forms and the fresh-entry option, and reads Claude Code tool names and fields.
-import { boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, omissionLine,
-  protectedBudgets, sampleAddressed, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
+import { allocateProtectedRoom, boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, omissionLine,
+  protectedBudgets, recentDialogueBytes, requestSectionBytes, sampleAddressed, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
 import { foldFailureLedger } from "./verified/context.ts";
-import { projectDialogue, recentDialogue } from "./dialogue.ts";
+import { earlierAssistantReplies, projectDialogue, recentDialogue } from "./dialogue.ts";
 import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
 
 // Section folds: each projection is a pure function of the typed event stream.
@@ -14,6 +14,7 @@ import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-clau
 
 export interface Sections {
   dialogue: string[];
+  earlierAssistantReplies: string[];
   // Retain the internal key for v2 details compatibility; these are historical.
   goal: string[];
   files: string[];
@@ -33,7 +34,7 @@ const MAX_TRANSCRIPT_CMD = 80;
 // Every earlier user message renders verbatim while it fits; the count bound
 // only matters for sessions with many messages, which then keep earliest and latest.
 export const MAX_EARLIER_USERS = 64;
-export const MAX_USER_MESSAGE_BYTES = 2048;
+export const MAX_USER_MESSAGE_BYTES = 4096;
 export const MAX_FILES_PER_KIND = 24;
 export const MAX_UNRESOLVED = 24;
 export const MAX_EARLIER_TURNS = 32;
@@ -164,7 +165,7 @@ export const earlierUserItem = (user: { entryId: string; text: string }, maxByte
 
 // Earlier user messages are the user's own words, kept verbatim and in order.
 // They are evidence of what was asked, not an inferred active mandate.
-const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>): ProjectedSection => {
+const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>, maxBytes: number): ProjectedSection => {
   const lines: string[] = [];
   const users = new Map<number, Extract<CompactionEvent, { kind: "user" }>>();
   function* historicalUsers(): Generator<Extract<CompactionEvent, { kind: "user" }>> {
@@ -187,8 +188,8 @@ const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<stri
     lines.push(earlierUserItem(user));
   }
   // Re-clip each original message, not its rendered item, if the block is full.
-  if (utf8Bytes([EARLIER_USERS_HEADER, ...lines].join("\n\n")) > MAX_EARLIER_USERS_SECTION_BYTES) {
-    const budgets = protectedBudgets(EARLIER_USERS_HEADER, lines, MAX_EARLIER_USERS_SECTION_BYTES);
+  if (utf8Bytes([EARLIER_USERS_HEADER, ...lines].join("\n\n")) > maxBytes) {
+    const budgets = protectedBudgets(EARLIER_USERS_HEADER, lines, maxBytes);
     for (const [index, user] of users) {
       if (utf8Bytes(lines[index]!) <= budgets[index]!) continue;
       const bodyBytes = Math.max(0, budgets[index]! - utf8Bytes(earlierUserHeading(user.entryId)));
@@ -526,10 +527,12 @@ const projectTranscript = (events: CompactionEvent[]): ProjectedSection => {
 export const projectWithMetadata = (
   events: CompactionEvent[],
   retainedDialogue: CompactionEvent[] = [],
+  requestLines: readonly string[] = [],
 ): ProjectionResult => {
   const exchanges = recentDialogue(events, retainedDialogue);
   const dialogue = projectDialogue(exchanges);
-  const goal = projectGoal(events, new Set(exchanges.map(({ user }) => user.entryId)));
+  const userBudget = allocateProtectedRoom(recentDialogueBytes(dialogue.lines), requestSectionBytes(requestLines), MAX_EARLIER_USERS_SECTION_BYTES, 0).newestBytes;
+  const goal = projectGoal(events, new Set(exchanges.map(({ user }) => user.entryId)), userBudget);
   const files = projectFiles(events);
   const outstanding = projectOutstandingWithMetadata(events);
   const earlierTurns = projectEarlierTurns(events);
@@ -537,6 +540,7 @@ export const projectWithMetadata = (
   return {
     sections: {
       dialogue: dialogue.lines,
+      earlierAssistantReplies: earlierAssistantReplies(events, retainedDialogue),
       goal: goal.lines,
       files: files.lines,
       outstanding: outstanding.lines,

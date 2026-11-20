@@ -1,6 +1,7 @@
 // The bridges the summary calls into copy pi-fabric's verified modules. The
 // laws are proved in proofs/; these cases check the wiring around them.
 import { describe, expect, test } from "bun:test";
+import { allocateProtectedRoom } from "../../src/compaction/bounds.ts";
 import { allocateSummaryCarry, foldFailureLedger } from "../../src/compaction/verified/context.ts";
 import { acceptSampleAccounting } from "../../src/compaction/verified/policy.ts";
 import { noCutVerdict } from "../../src/compaction/verified/no-cut.ts";
@@ -43,6 +44,18 @@ describe("summary carry allocation", () => {
   test("refuses a demand that is not a safe natural", () => {
     expect(() => allocateSummaryCarry(-1, 0, 0, 0, 0)).toThrow();
     expect(() => allocateSummaryCarry(10, 0, 1.5, 0, 0)).toThrow();
+  });
+});
+
+describe("protected summary room", () => {
+  test("reserves framing, request and recent dialogue before giving users priority over old replies", () => {
+    const roomy = allocateProtectedRoom(2000, 3072, 20000, 9000);
+    expect(roomy).toEqual({ footerBytes: 6864, newestBytes: 20000, carryBytes: 5904, historyBytes: 0 });
+    const full = allocateProtectedRoom(12288, 3072, 22528, 9000);
+    expect(full).toEqual({ footerBytes: 17152, newestBytes: 15616, carryBytes: 0, historyBytes: 0 });
+    const shortUser = allocateProtectedRoom(2000, 3072, 100, 9000);
+    expect(shortUser.newestBytes).toBe(100);
+    expect(shortUser.carryBytes).toBe(9000);
   });
 });
 
