@@ -1,17 +1,19 @@
 // Adapted from pi-fabric (MIT, Tom X Nguyen) packages/pi-recall/src/memory/{tokenize,index,search,context}.ts at d331f629;
 // this index is rebuilt from the current transcript on each call.
 import type { Entry } from "./transcript.ts";
+import { decide } from "./verified/policy.ts";
 
 export const tokenize = (text: string): string[] =>
   [...text.normalize("NFKC").matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => match[0].toLowerCase());
 const weights: Record<Entry["kind"], number> = { assistant: 2.5, user: 2.25, summary: 1.5, tool_result: 0.75, tool: 0.7 };
 
 // Map a normalized match back to its source character for a genuine source snippet.
-const sourceOffset = (text: string, normalizedOffset: number): number => {
+const sourceOffset = (text: string, normalizedOffset: number, foldCase = true): number => {
   let low = 0, high = text.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (text.slice(0, middle).normalize("NFKC").toLowerCase().length <= normalizedOffset) low = middle + 1;
+    const prefix = text.slice(0, middle).normalize("NFKC");
+    if ((foldCase ? prefix.toLowerCase() : prefix).length <= normalizedOffset) low = middle + 1;
     else high = middle;
   }
   const start = Math.max(0, low - 1);
@@ -26,7 +28,28 @@ export function search(entries: readonly Entry[], query: string): { entry: Entry
   if (phrase === "") throw new Error("history.recall: quoted phrase must not be empty");
   const terms = [...new Set(tokenize(phrase ?? query))];
   if (!terms.length && phrase === undefined) return [];
+  const wanted = new Set(terms);
   const docs = entries.map((entry) => {
+    if (phrase === undefined) {
+      // The compiled rule makes the search span the entire entry, independently
+      // of the bounded window used below to render a snippet.
+      const searchable = entry.text.slice(0, decide({ searchChars: entry.text.length }).searchEnd);
+      const normalized = searchable.normalize("NFKC");
+      const counts = new Map<string, number>();
+      let length = 0, matchOffset: number | undefined;
+      for (const token of normalized.matchAll(/[\p{L}\p{N}_]+/gu)) {
+        length++;
+        const term = token[0].toLowerCase();
+        if (!wanted.has(term)) continue;
+        counts.set(term, (counts.get(term) ?? 0) + 1);
+        matchOffset ??= token.index;
+      }
+      const position = matchOffset === undefined ? 0 : sourceOffset(entry.text, matchOffset, false);
+      let offset = Math.max(0, position - 160);
+      if (offset > 0 && /[\uDC00-\uDFFF]/.test(entry.text[offset]!)) offset--;
+      const text = entry.text.slice(offset, offset + 2000);
+      return { entry, text, offset, focus: position - offset, match: -1, counts, length: Math.max(1, length) };
+    }
     const normalized = phrase === undefined ? undefined : entry.text.normalize("NFKC").toLowerCase();
     const match = normalized === undefined || phrase === undefined ? -1 : normalized.indexOf(phrase);
     let offset = 0, focus: number | undefined;

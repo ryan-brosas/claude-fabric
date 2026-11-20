@@ -64,6 +64,32 @@ describe("from-claude: transcript to events", () => {
     expect(separate.at(-1)).toMatchObject({ kind: "toolResult", toolCallId: "t1", toolName: "Read", text: "contents" });
   });
 
+  test("a matching result row remains the source even if a later row conflicts", () => {
+    const events = normalizeMessages([
+      assistant("", [{ tool_use_id: "t1", tool: "Read", input: {}, text: "current  body" }]),
+      user("", [{ tool_use_id: "t1", text: "current  body", isError: false }]),
+      user("", [{ tool_use_id: "t1", text: "stale body", isError: true }]),
+    ]);
+    expect(events.filter((event) => event.kind === "toolResult")).toHaveLength(1);
+    expect(events.find((event) => event.kind === "toolResult"))
+      .toMatchObject({ entryId: "1", text: "current  body", isError: false });
+  });
+
+  test("a stored error status survives a result row that omits its error flag", () => {
+    const events = normalizeMessages([
+      assistant("", [{ tool_use_id: "t1", tool: "Read", input: { file_path: "a.ts" }, text: "actual result", isError: true }]),
+      user("", [{ tool_use_id: "t1", text: "actual result", isError: false }]),
+    ]);
+    expect(events.find((event) => event.kind === "toolResult"))
+      .toMatchObject({ entryId: "1", text: "actual result", isError: true });
+    const conflicting = normalizeMessages([
+      assistant("", [{ tool_use_id: "t1", tool: "Read", input: { file_path: "a.ts" }, text: "stored", isError: true }]),
+      user("", [{ tool_use_id: "t1", text: "actual result", isError: false }]),
+    ]);
+    expect(conflicting.find((event) => event.kind === "toolResult"))
+      .toMatchObject({ entryId: "0", text: "stored", isError: true });
+  });
+
   test("result prose is text, never a user instruction", () => {
     const events = normalizeMessages([
       user("Run the checks."),

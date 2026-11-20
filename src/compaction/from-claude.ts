@@ -89,6 +89,10 @@ export const firstLine = (text: string): string => {
 export const hasOutcome = (use: ClaudeToolUse): boolean =>
   use.text !== undefined || use.isError === true || use.result !== undefined;
 
+/** The hook’s inline outcome is authoritative when present, even if a row differs. */
+export const inlineOutcome = (use: ClaudeToolUse): { text: string; isError: boolean; result: unknown } =>
+  ({ text: use.text ?? "", isError: use.isError === true, result: use.result });
+
 export const exitCodeOf = (result: unknown): number | null => {
   if (result === null || typeof result !== "object" || Array.isArray(result)) return null;
   const record = result as Record<string, unknown>;
@@ -121,6 +125,14 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
 
   const calls = new Map<string, ClaudeToolUse>();
   const answered = new Set<string>();
+  const results = new Map<string, Map<string, string>>();
+  messages.forEach((message, position) => {
+    for (const result of message.toolResults ?? []) {
+      const texts = results.get(result.tool_use_id) ?? new Map<string, string>();
+      texts.set(result.text, String(position));
+      results.set(result.tool_use_id, texts);
+    }
+  });
   for (const message of messages) {
     for (const use of message.toolUses ?? []) {
       calls.set(use.tool_use_id, use);
@@ -166,7 +178,10 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
     for (const use of message.toolUses ?? []) {
       push({ kind: "toolCall", toolCallId: use.tool_use_id, name: use.tool, args: use.input ?? {} }, entryId);
       if (!hasOutcome(use)) continue;
-      pushResult(use.tool_use_id, use.tool, use.isError === true, use.text ?? "", use.result, entryId);
+      const outcome = inlineOutcome(use);
+      // A row can address an excerpt only when it contains the inline body.
+      const source = results.get(use.tool_use_id)?.get(outcome.text);
+      pushResult(use.tool_use_id, use.tool, outcome.isError, outcome.text, outcome.result, source ?? entryId);
     }
   });
 

@@ -59,8 +59,8 @@ interface ProjectedSection {
   omitted: number;
 }
 
-const truncate = (text: string, max: number): string => {
-  const flat = text.replace(/\s+/g, " ").trim();
+const truncate = (text: string, max: number, verbatim = false): string => {
+  const flat = verbatim ? text.trim() : text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
 
@@ -96,7 +96,7 @@ const collectOperations = (events: CompactionEvent[]): StructuralOperation[] => 
       operations.push({
         index: event.index,
         entryId: call.entryId,
-        address: call.entryId,
+        address: event.isError && event.text ? event.entryId : call.entryId,
         tool: call.name,
         ref: call.name,
         args: call.args,
@@ -324,7 +324,7 @@ const projectOutstandingWithMetadata = (events: CompactionEvent[]): ProjectedSec
       : command !== undefined
         ? `${operation.ref}: ${truncate(firstLine(command), MAX_LINE)}`
         : operation.ref;
-    const error = operation.error ? `: ${truncate(firstLine(operation.error), MAX_LINE)}` : `: ${operation.outcome}`;
+    const error = operation.error ? `: ${truncate(firstLine(operation.error), MAX_LINE, true)}` : `: ${operation.outcome}`;
     items.push({
       index: operation.index,
       entryId: operation.address,
@@ -464,8 +464,8 @@ const summarizeArgs = (name: string, args: Record<string, unknown>): string => {
 
 // Count source characters (Unicode code points), including line breaks and whitespace
 // removed when the first line is flattened. Give the marker room inside the line cap.
-const transcriptLine = (prefix: string, text: string): string => {
-  const first = firstLine(text).replace(/\s+/g, " ").trim();
+const transcriptLine = (prefix: string, text: string, verbatim = false): string => {
+  const first = verbatim ? firstLine(text).trimEnd() : firstLine(text).replace(/\s+/g, " ").trim();
   const chars = Array.from(first);
   let keep = chars.length > MAX_TRANSCRIPT_LINE ? MAX_TRANSCRIPT_LINE - 1 : chars.length;
   let total = 0, extraLines = 0;
@@ -515,7 +515,7 @@ const projectTranscript = (events: CompactionEvent[]): ProjectedSection => {
       lines.push(`${ref} ${e.name}(${summarizeArgs(e.name, e.args)})`);
     } else if (e.kind === "toolResult") {
       const status = e.isError ? "error" : "ok";
-      lines.push(transcriptLine(`${ref} → ${status}: `, e.text));
+      lines.push(transcriptLine(`${ref} → ${status}: `, e.text, true));
     } else if (e.kind === "bash") {
       const status = e.isError ? "error" : "ok";
       lines.push(`${ref} Bash(${truncate(firstLine(e.command), MAX_TRANSCRIPT_CMD)}) → ${status}`);

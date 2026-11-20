@@ -1,6 +1,6 @@
 // The rebuild must not discard any effective outcome the hook can see now. The compactor
 // gives an inline tool-use outcome precedence over result rows with the same id.
-import { exitCodeOf, hasOutcome, type ClaudeMessage, type ClaudeToolUse } from "./from-claude.ts";
+import { exitCodeOf, hasOutcome, inlineOutcome, type ClaudeMessage, type ClaudeToolUse } from "./from-claude.ts";
 import { outcomeConservation } from "./verified/generated/outcome-conservation.js";
 
 type Outcome = { text: string; isError: boolean; effectiveError: boolean; count: number };
@@ -35,7 +35,10 @@ function outcomes(messages: readonly ClaudeMessage[]): Outcomes {
   for (const message of messages) {
     if (message.role === "assistant") {
       for (const use of message.toolUses ?? []) {
-        if (hasOutcome(use)) add(use.tool_use_id, use.text ?? "", use.isError === true, use.tool, use.result);
+        if (hasOutcome(use)) {
+          const outcome = inlineOutcome(use);
+          add(use.tool_use_id, outcome.text, outcome.isError, use.tool, outcome.result);
+        }
       }
     } else {
       for (const result of message.toolResults ?? []) {

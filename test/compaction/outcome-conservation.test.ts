@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ClaudeMessage, ClaudeToolResult, ClaudeToolUse } from "../../src/compaction/from-claude.ts";
+import { normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 
 const assistant = (...toolUses: ClaudeToolUse[]): ClaudeMessage => ({ role: "assistant", text: "", toolUses });
@@ -13,6 +13,23 @@ test("inline outcomes suppress result rows in either input", () => {
   expect(outcomeConservationProblem(inline, separate)).toBeUndefined();
   expect(outcomeConservationProblem(separate, inline)).toBeUndefined();
   expect(outcomeConservationProblem([], [user(result("old", "history"))])).toBeUndefined();
+});
+
+test("addressing and whitespace leave the conserved inline outcome unchanged", () => {
+  const text = "failure:  a\tb";
+  const current = [{ ...assistant(use("a", text)), handle: "call" },
+    { ...user(result("a", text, true)), handle: "result" }];
+  const equal = [{ ...assistant(use("a")), handle: "other-call" },
+    { ...user(result("a", text)), handle: "other-result" }];
+  expect(normalizeMessages(current).find((event) => event.kind === "toolResult"))
+    .toMatchObject({ entryId: "1", text, isError: false });
+  expect(outcomeConservationProblem(current, equal)).toBeUndefined();
+  expect(outcomeConservationProblem(current, [assistant(use("a")), user(result("a", "failure: a b"))]))
+    .toBe("conflicting tool outcome id");
+  expect(outcomeConservationProblem(current, [assistant(use("a")), user(result("a", text, true))]))
+    .toBe("conflicting tool outcome id");
+  expect(outcomeConservationProblem(current, [assistant(use("different")), user(result("different", text))]))
+    .toBe("missing tool outcome in rebuilt input");
 });
 
 test("result-only and error-only inline outcomes count even without text", () => {

@@ -112,6 +112,49 @@ describe("compact: the cut", () => {
 });
 
 describe("compact: what the summary loses today", () => {
+  test("inline success and Bash failure keep their bodies and call addresses", () => {
+    const read: ClaudeMessage = { role: "assistant", text: "", handle: "read-call",
+      toolUses: [{ ...toolCall("Read", { file_path: "a.txt" }, "r"), text: "VALUE-ab12cd34  details" }] };
+    const bash: ClaudeMessage = { role: "assistant", text: "", handle: "bash-call",
+      toolUses: [{ ...toolCall("Bash", { command: "check" }, "b"), text: "BASH-failed99:\tmissing", isError: true }] };
+    const summary = summaryOf([prompt("Check."), read, bash, prompt("Continue."), reply("Done.")]);
+    expect(summary).toContain("[entry read-call] → ok: VALUE-ab12cd34  details");
+    expect(summary).toContain("Bash: check: BASH-failed99:\tmissing [entry bash-call]");
+    expect(summary).toContain("- [entry read-call] VALUE-ab12cd34");
+    expect(summary).toContain("- [entry bash-call] BASH-failed99");
+  });
+
+  test("exact values use a matching result row or the authoritative inline body", () => {
+    const calls: ClaudeMessage = { role: "assistant", text: "", handle: "calls", toolUses: [
+      { ...toolCall("Read", {}, "match"), text: "MATCHED-ab12cd34" },
+      { ...toolCall("Read", {}, "conflict"), text: "CURRENT-ab12cd34" },
+      { ...toolCall("Read", {}, "inline"), text: "INLINE-ab12cd34" },
+    ] };
+    const matched = { ...results({ tool_use_id: "match", text: "MATCHED-ab12cd34", isError: false }), handle: "matched-result" };
+    const stale = { ...results(
+      { tool_use_id: "conflict", text: "STALE-ab12cd34", isError: false },
+      { tool_use_id: "match", text: "STALE-ef56ab78", isError: false },
+    ), handle: "stale-result" };
+    const values = exactValues([calls, matched, stale], 3);
+    expect(values).toContainEqual({ entryId: "matched-result", value: "MATCHED-ab12cd34" });
+    expect(values).toContainEqual({ entryId: "calls", value: "CURRENT-ab12cd34" });
+    expect(values).toContainEqual({ entryId: "calls", value: "INLINE-ab12cd34" });
+    expect(values.map(({ value }) => value)).not.toContain("STALE-ab12cd34");
+    expect(values.map(({ value }) => value)).not.toContain("STALE-ef56ab78");
+  });
+
+  test("exact-value priority uses the inline error flag when a matching row differs", () => {
+    const call = (isError: boolean): ClaudeMessage => ({ role: "assistant", text: "", handle: "call", toolUses: [
+      { ...toolCall("Read", {}, "r"), text: "CURRENT-ab12cd34", ...(isError ? { isError: true as const } : {}) },
+    ] });
+    const row = (isError: boolean) => ({ ...results({ tool_use_id: "r", text: "CURRENT-ab12cd34", isError }), handle: "row" });
+    const newer = { ...results({ tool_use_id: "new", text: "NEWER-ab12cd34", isError: false }), handle: "newer" };
+    expect(exactValues([call(true), row(false), newer], 3)[0])
+      .toEqual({ entryId: "row", value: "CURRENT-ab12cd34" });
+    expect(exactValues([call(false), row(true), newer], 3)[0])
+      .toEqual({ entryId: "newer", value: "NEWER-ab12cd34" });
+  });
+
   test("does not promote credential-bearing tool output or carried values", () => {
     const hex = "a1b2c3d4".repeat(4); // Synthetic data only.
     const secrets = [
@@ -708,6 +751,7 @@ describe("compact: the summary", () => {
         isError: true,
         result: { exitCode: 1 },
       }] },
+      results({ tool_use_id: "b1", text: "1 failing test in parser.test.ts", isError: true, result: { exitCode: 1 } }),
       prompt("Continue."),
       reply("Working on it."),
       prompt("And now?"),

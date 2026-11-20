@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expand, recall } from "../../src/recall/history.ts";
 import { acceptsExpansionPage } from "../../src/recall/page.ts";
+import { compact } from "../../src/compaction/compact.ts";
+import { fromTranscript } from "../../src/compaction/from-transcript.ts";
 
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
@@ -43,6 +45,98 @@ test("a rewritten off-chain copy expands its own exact text and UUID across page
     args = page.next as typeof args;
   }
   expect(rebuilt).toBe(text);
+});
+
+test("a quoted tool result in a Fabric summary expands to its result text", async () => {
+  const path = await make();
+  const quoted = "RESULT-EXCERPT-42";
+  const rows = [
+    { type: "user", uuid: "prompt", parentUuid: null, message: { content: "Read the record." } },
+    { type: "assistant", uuid: "call", parentUuid: "prompt", message: { content: [
+      { type: "tool_use", id: "read-1", name: "Read", input: { file_path: "record.txt" } },
+    ] } },
+    { type: "user", uuid: "result", parentUuid: "call", message: { content: [
+      { type: "tool_result", tool_use_id: "read-1", content: quoted },
+    ] } },
+    { type: "user", uuid: "next", parentUuid: "result", message: { content: "Continue." } },
+  ];
+  await writeFile(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const messages = rows.map(fromTranscript);
+  messages[1]!.toolUses[0]!.text = quoted; // session.compact also carries the stored outcome on the call.
+  const answer = compact(messages, { keepRecentTokens: 1 });
+  if (!("messages" in answer)) throw new Error(`no summary: ${JSON.stringify(answer)}`);
+  const summary = answer.messages[0]!.text;
+  const line = /^\[entry ([^\]]+)\] → ok: (.+)$/m.exec(summary);
+  expect(line?.[2]).toBe(quoted);
+  const { binding } = await recall(path, { query: "Continue" });
+  const page = await expand(path, { binding, entryIds: [line![1]!] });
+  expect(page.entries[0]!.text).toContain(quoted);
+});
+
+test("quoted Read and Bash failures resolve to result rows without changing call addresses", async () => {
+  const path = await make();
+  const readError = "read failed:  file absent";
+  const bashError = "command failed:\tmissing executable";
+  const rows = [
+    { type: "user", uuid: "prompt", parentUuid: null, message: { content: "Check both." } },
+    { type: "assistant", uuid: "read-call", parentUuid: "prompt", message: { content: [
+      { type: "tool_use", id: "read", name: "Read", input: { file_path: "note.txt" } },
+    ] } },
+    { type: "user", uuid: "read-result", parentUuid: "read-call", message: { content: [
+      { type: "tool_result", tool_use_id: "read", is_error: true, content: readError },
+    ] } },
+    { type: "assistant", uuid: "bash-call", parentUuid: "read-result", message: { content: [
+      { type: "tool_use", id: "bash", name: "Bash", input: { command: "runcheck" } },
+    ] } },
+    { type: "user", uuid: "bash-result", parentUuid: "bash-call", message: { content: [
+      { type: "tool_result", tool_use_id: "bash", is_error: true, content: bashError },
+    ] } },
+    { type: "user", uuid: "next", parentUuid: "bash-result", message: { content: "Continue." } },
+  ];
+  await writeFile(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const messages = rows.map(fromTranscript);
+  for (const [index, text] of [[1, readError], [3, bashError]] as const) {
+    messages[index]!.toolUses[0]!.text = text;
+    messages[index]!.toolUses[0]!.isError = true;
+  }
+  const answer = compact(messages, { keepRecentTokens: 1 });
+  if (!("messages" in answer)) throw new Error(`no summary: ${JSON.stringify(answer)}`);
+  const summary = answer.messages[0]!.text;
+  expect(summary).toContain(`[entry read-result] → error: ${readError}`);
+  expect(summary).toContain(`Read note.txt: ${readError} [entry read-result]`);
+  expect(summary).toContain(`Bash: runcheck: ${bashError} [entry bash-result]`);
+  expect(summary).toContain("[entry read-call] Read(note.txt)");
+  const { binding } = await recall(path, { query: "Continue" });
+  const page = await expand(path, { binding, entryIds: ["read-call", "read-result", "bash-call", "bash-result"] });
+  const byId = new Map(page.entries.map((entry) => [entry.uuid, entry.text]));
+  expect(byId.get("read-result")).toContain(readError);
+  expect(byId.get("bash-result")).toContain(bashError);
+  expect(byId.get("read-call")).toContain("Tool: Read(");
+  expect(byId.get("bash-call")).toContain("Tool: Bash(");
+});
+
+test("an inline failure without a result row is quoted under its call id", async () => {
+  const path = await make();
+  const rows = [
+    { type: "user", uuid: "prompt", parentUuid: null, message: { content: "Read it." } },
+    { type: "assistant", uuid: "call", parentUuid: "prompt", message: { content: [
+      { type: "tool_use", id: "read-1", name: "Read", input: { file_path: "record.txt" } },
+    ] } },
+    { type: "user", uuid: "next", parentUuid: "call", message: { content: "Continue." } },
+  ];
+  await writeFile(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const messages = rows.map(fromTranscript);
+  messages[1]!.toolUses[0]!.text = "E4471: unavailable source";
+  messages[1]!.toolUses[0]!.isError = true;
+  const answer = compact(messages, { keepRecentTokens: 1 });
+  if (!("messages" in answer)) throw new Error(`no summary: ${JSON.stringify(answer)}`);
+  const summary = answer.messages[0]!.text;
+  expect(summary).toContain("[entry call] Read(record.txt)");
+  expect(summary).toContain("[entry call] → error: E4471: unavailable source");
+  expect(summary).toContain("Read record.txt: E4471: unavailable source [entry call]");
+  expect(summary).toContain("- [entry call] E4471: unavailable source");
+  const { binding } = await recall(path, { query: "Continue" });
+  expect((await expand(path, { binding, entryIds: ["call"] })).entries[0]!.text).toContain("Tool: Read(");
 });
 
 test("mixed direct IDs retain chain order then request order for off-chain rows", async () => {
@@ -99,6 +193,29 @@ test("a tool-result hit expands from the bound prefix after the transcript grows
   const page = await expand(path, result.hits[0]!.follow);
   expect(page.entries[0]!.text).toContain("ALMANAC-493");
 });
+
+test.each([["ASCII", "ordinary ".repeat(260)], ["NFKC-expanding", "ﬃ".repeat(2500) + " "]])(
+  "an unquoted search finds and previews late text in user and tool-result entries after a %s prefix", async (_label, prefix) => {
+    const path = await make();
+    const needle = "GARNETTARGET";
+    const text = `${prefix}${needle} tail`;
+    const rows = [
+      { type: "user", uuid: "user-late", parentUuid: null, message: { content: text } },
+      { type: "user", uuid: "result-late", parentUuid: "user-late", message: { content: [
+        { type: "tool_result", tool_use_id: "read", content: text },
+      ] } },
+    ];
+    await writeFile(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const found = await recall(path, { query: needle.toLowerCase() });
+    expect(found.hits.map((hit) => hit.uuid)).toEqual(["user-late", "result-late"]);
+    for (const hit of found.hits) {
+      expect(hit.snippet).toContain(needle);
+      expect(hit.snippet.length).toBeLessThanOrEqual(482);
+      expect((await expand(path, hit.follow)).entries[0]!.text).toContain(needle);
+    }
+    expect(JSON.stringify(found).length).toBeLessThanOrEqual(30000);
+  },
+);
 
 test("a quoted recall query matches the normalized phrase in order, then ranks its hits", async () => {
   const path = await make();
