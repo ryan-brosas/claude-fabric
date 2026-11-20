@@ -156,8 +156,9 @@ test/           mirrors src/
    the guest types the checker serves, the lines of `DESCRIPTION` and the runtime argument check
    from them, so a changed field changes one provider file.
 2. **Imports point one way:** `server -> kernel -> registry <- providers`, and
-   `mod -> compaction, stages, guidance`. Both halves of the socket also read `bridge/`, which
-   imports nothing. Only `server/` knows MCP; only `mod/` knows the mods API.
+   `mod -> compaction, stages, guidance`. Compaction reuses recall's pure transcript chain.
+   Both halves of the socket also read `bridge/`, which imports nothing. Only `server/` knows MCP;
+   only `mod/` knows the mods API.
    `providers/tools/names.ts` holds the program tools' names alone: `TOOLS` and every provider
    import zod, which the hooks worker refuses, so guidance reaches the names without it, and
    `test/guidance/guidance.test.ts` fails if the two lists drift.
@@ -174,6 +175,12 @@ test/           mirrors src/
 7. **Copied pi-fabric code keeps its MIT credit** in a header line.
 
 ## Answered probes
+
+- **The active transcript chain** (2026-11-20, Claude Code 2.1.329): from the newest user or
+  assistant row, `parentUuid ?? logicalParentUuid` reaches the first user message. For core, the
+  chain passes each boundary through `logicalParentUuid`. In hook-answered compactions
+  it skips the boundary, summary and rewritten kept tail: the next prompt points to the original
+  kept row. A handle join checks that the current messages meet this chain before rebuilding.
 
 - **A mod and Agent** (2026-11-19, Claude Code 2.1.328, a throwaway probe plugin): `$.tool.call`
   refuses Agent ("runs the Agent tool: that is $.agent.spawn"). `$.agent.spawn({ prompt,

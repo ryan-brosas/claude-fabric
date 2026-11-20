@@ -1,5 +1,6 @@
 import type { Register } from "claude-code";
-import { compact } from "../compaction/compact.ts";
+import { compact, isFabricSummary } from "../compaction/compact.ts";
+import { rebuildTranscript } from "../compaction/from-transcript.ts";
 import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
 import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
 import {
@@ -47,9 +48,43 @@ export const register: Register = (on, options) => {
   // precompute, and a compactor that throws falls back to core's own.
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
-    const result = compact(e.messages, { instructions: e.instructions });
+    const carried = compact(e.messages, { instructions: e.instructions });
     // One long turn over the budget has no prompt to cut at; core's compactor can cut inside it.
-    return "core" in result ? next(e) : result;
+    if ("core" in carried) return next(e);
+    if (!e.messages.some(isFabricSummary)) return carried;
+    return (async () => {
+      try {
+        // session.info names the main transcript, not a subagent's transcript.
+        if (e.agentId) throw new Error("the compacting agent has no transcript path");
+        const path = (await $.session.info()).transcriptPath;
+        if (!path) throw new Error("no transcript path");
+        const size = (await $.fs.stat(path)).size;
+        if (!Number.isSafeInteger(size) || size < 0) throw new Error("invalid transcript size");
+        const bytes = new Uint8Array(size);
+        // A single $.fs.read answer is capped at 4 MiB. Read bytes so a Unicode
+        // character split between ranges survives, and decode only after joining.
+        const chunkSize = 2 * 1024 * 1024;
+        for (let offset = 0; offset < size;) {
+          const length = Math.min(chunkSize, size - offset);
+          const part = await $.fs.read(path, { as: "bytes", offset, length });
+          const chunk = (Uint8Array as typeof Uint8Array & { fromBase64(value: string): Uint8Array }).fromBase64(part.base64);
+          if (chunk.length !== length) throw new Error("transcript changed during read");
+          bytes.set(chunk, offset);
+          offset += length;
+        }
+        const rebuilt = rebuildTranscript(e.messages, new TextDecoder().decode(bytes));
+        const result = compact(rebuilt, { instructions: e.instructions });
+        if (!("messages" in result)) throw new Error("rebuilt input did not produce a summary");
+        // A row converted from the transcript has no engine handle, so core would rebuild it from
+        // text and tool blocks only and lose an image. Keep such a tail out of the result.
+        if (result.messages.slice(1).some((m) => !m.handle)) throw new Error("rebuilt result would retain messages without engine handles");
+        return result;
+      } catch (error) {
+        try { $.ui.log(`fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`, { to: "debug" }); }
+        catch { /* Logging must not stop compaction. */ }
+        return carried;
+      }
+    })();
   }).catch(($, e, next) => next(e));
 
   // Started and not awaited: the loop runs outside this hook's 10 s budget and keeps polling
