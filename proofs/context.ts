@@ -21,6 +21,7 @@ export type ContextBug =
   | "the carry starves history"
   | "history is allocated before the carry"
   | "a history block exceeds its remaining room"
+  | "literals exceed their remaining room"
   | "aged failures vanish"
   | "aged failures crowd out fresh ones"
   | "itemized failures ignore the limit"
@@ -46,7 +47,7 @@ const carry = (bug?: ContextBug) => fun("summary carry")
       const newestBytes = min(newest, room.minus(carryBytes));
       return { footerBytes, newestBytes, carryBytes, historyBytes: min(history, room.minus(newestBytes).minus(carryBytes)) };
     }
-    const newestBytes = bug === "a history block exceeds its remaining room" ? newest : min(newest, room);
+    const newestBytes = bug === "a history block exceeds its remaining room" || bug === "literals exceed their remaining room" ? newest : min(newest, room);
     const older = room.minus(newestBytes);
     if (bug === "the carry starves history") {
       const carryBytes = min(earlier, older);
@@ -100,6 +101,11 @@ export const contextKernels = (bug?: ContextBug): Kernel[] => {
       // the next block's desired bytes as newest, with no footer or carry.
       c.law("history_block_within_room: a history block receives at most the room left", () => [],
         ({ footerBytes, newestBytes }, { limit }) => newestBytes.atMost(limit.minus(footerBytes))),
+      // The literals caller passes its bounded demand as newest and history's
+      // remaining allocation as limit, with no footer, carry or history demand.
+      c.law("literals_within_history: literals receive their demand up to the room left for history",
+        ({ footer, earlier, history }) => all(footer.eq(0), earlier.eq(0), history.eq(0)),
+        ({ newestBytes }, { limit, newest }) => newestBytes.eq(min(newest, limit))),
       c.law("users_first: newest demand receives the available room before carry", () => [],
         ({ footerBytes, newestBytes }, { limit, newest }) => newestBytes.eq(min(newest, limit.minus(footerBytes)))),
       c.law("replies_take_user_slack: with no history demand, carry takes the room newest demand leaves", ({ history }) => [history.eq(0)],
@@ -151,6 +157,7 @@ export const CONTEXT_BUGS: ContextBug[] = [
   "the carry starves history",
   "history is allocated before the carry",
   "a history block exceeds its remaining room",
+  "literals exceed their remaining room",
   "aged failures vanish",
   "aged failures crowd out fresh ones",
   "itemized failures ignore the limit",

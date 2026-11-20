@@ -4,6 +4,7 @@ import { allocateProtectedRoom, boundedExcerpt, boundedHeadTail, clipUtf8, DIALO
   MAX_SUMMARY_BYTES, MAX_SUMMARY_FOOTER_BYTES, MAX_SUMMARY_FRAMING_BYTES, protectedBudgets, recentDialogueBytes,
   REQUEST_HEADER, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
+import { LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
 // The first line of every summary this compactor writes, and how a later
@@ -33,6 +34,7 @@ export interface RenderOptions {
   lastEntryId: string;
   lastTimestamp: string;
   requestLines?: string[];
+  literals?: readonly ExactValue[];
   /** The previous summary, used when transcript rebuilding fails. Carry it whole while
    * the allocation holds it; otherwise keep its start and end and state the middle cut. */
   earlierSummary?: string;
@@ -66,14 +68,16 @@ interface HistoryBlock {
   maxBytes: number;
 }
 
+const historyCandidate = (block: HistoryBlock) => {
+  const text = boundedBlock(block.header, block.lines, block.maxBytes);
+  const bytes = utf8Bytes(text);
+  const minimum = block.lines.length === 1 ? bytes
+    : Math.min(bytes, utf8Bytes([block.header, ...sampledLines(block.lines, 0)].join("\n")));
+  return { ...block, text, bytes, minimum };
+};
+
 const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
-  const candidates = blocks.map((block) => {
-    const text = boundedBlock(block.header, block.lines, block.maxBytes);
-    const bytes = utf8Bytes(text);
-    const minimum = block.lines.length === 1 ? bytes
-      : Math.min(bytes, utf8Bytes([block.header, ...sampledLines(block.lines, 0)].join("\n")));
-    return { ...block, text, bytes, minimum };
-  });
+  const candidates = blocks.map(historyCandidate);
   const total = candidates.reduce((sum, block) => sum + block.bytes, 0);
   if (total <= maxBytes) return candidates.map(({ text }) => text);
 
@@ -136,6 +140,13 @@ const dialogueBlock = (recentItems: readonly string[], olderItems: readonly stri
 /** The earlier summary a second compaction carries: whole while the allocation
  * holds it, otherwise its first and newest bytes, with the loss stated in the
  * middle where it was cut. The start holds the user's oldest instructions. */
+// Values were extracted afresh; their duplicate must not crowd out older user
+// instructions or count as demand when the carried summary is allocated.
+const withoutOpeningLiterals = (summary: string): string => {
+  const firstBreak = summary.indexOf("\n\n");
+  return summary.startsWith(`${LITERALS_HEADER}\n`) && firstBreak >= 0 ? summary.slice(firstBreak + 2) : summary;
+};
+
 const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
   const full = `${EARLIER_SUMMARY_HEADER}\n\n${earlierSummary}`;
   if (utf8Bytes(full) <= maxBytes) return full;
@@ -199,25 +210,35 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const footerBlock = boundedBlock("---", ["Recover full context in fabric_exec with history.recall and history.expand.", footer], MAX_SUMMARY_FOOTER_BYTES);
   // Every block, its separator and the final newline are counted before the
   // allocation, so no section can push the footer past the ceiling.
-  const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + history.length + 1;
+  const literals = options.literals ?? [];
+  const literalDemand = utf8Bytes(renderExactValues(literals, MAX_LITERALS_SECTION_BYTES));
+  const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + (literalDemand ? 1 : 0) + history.length + 1;
   const framingBytes = utf8Bytes(SUMMARY_HEADER) + utf8Bytes(footerBlock) + 2 * (blockCount - 1) + 1;
   if (framingBytes > MAX_SUMMARY_FRAMING_BYTES) {
     throw new Error("fabric: the summary framing exceeded its reserved byte ceiling");
   }
   const newestBytes = newest.reduce((sum, block) => sum + utf8Bytes(block), 0);
-  const carryDemand = options.earlierSummary
-    ? utf8Bytes(EARLIER_SUMMARY_HEADER) + 2 + utf8Bytes(options.earlierSummary)
+  const earlierSummary = options.earlierSummary ? withoutOpeningLiterals(options.earlierSummary) : undefined;
+  const carryDemand = earlierSummary !== undefined
+    ? utf8Bytes(EARLIER_SUMMARY_HEADER) + 2 + utf8Bytes(earlierSummary)
     : 0;
-  const historyDemand = history.reduce((sum, block) => sum + utf8Bytes(boundedBlock(block.header, block.lines, block.maxBytes)), 0);
+  const historyDemand = literalDemand + history.reduce((sum, block) => sum + utf8Bytes(boundedBlock(block.header, block.lines, block.maxBytes)), 0);
   const allocation = allocateSummaryCarry(MAX_SUMMARY_BYTES, framingBytes, newestBytes, carryDemand, historyDemand);
   if (allocation.newestBytes < newestBytes) {
     // Refuse rather than print a summary that breaks the allocation's law.
     throw new Error("fabric: the newest summary blocks do not fit the summary ceiling");
   }
 
-  const blocks: string[] = [SUMMARY_HEADER];
-  if (options.earlierSummary) blocks.push(carriedBlock(options.earlierSummary, allocation.carryBytes));
-  blocks.push(...newest, ...boundedHistory(history, allocation.historyBytes), footerBlock);
+  // The allocator gives older content its shared grant after protected blocks.
+  // Keep operational minima first, then exact values, then sampled history.
+  const historyMinimum = Math.min(allocation.historyBytes, history.reduce((sum, block) => sum + historyCandidate(block).minimum, 0));
+  const literalRoom = allocateSummaryCarry(allocation.historyBytes - historyMinimum, 0, literalDemand, 0, 0).newestBytes;
+  const literalBlock = renderExactValues(literals, literalRoom);
+  const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
+  // The literal block must be first: later headings can belong to verbatim user text.
+  const blocks: string[] = [SUMMARY_HEADER, literalBlock];
+  if (earlierSummary !== undefined) blocks.push(carriedBlock(earlierSummary, allocation.carryBytes));
+  blocks.push(...newest, ...boundedHistory(history, historyRoom), footerBlock);
   // A block with no allocation prints nothing; dropping it leaves no empty separators.
   const summary = `${blocks.filter((block) => block.length > 0).join("\n\n")}\n`;
   if (utf8Bytes(summary) > MAX_SUMMARY_BYTES) {

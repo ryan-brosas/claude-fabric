@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_SUMMARY_BYTES, utf8Bytes } from "../../src/compaction/bounds.ts";
 import { project } from "../../src/compaction/projections.ts";
+import { MAX_LITERALS_SECTION_BYTES, renderExactValues } from "../../src/compaction/literals.ts";
 import { renderSummaryWithMetadata, SUMMARY_SECTIONS } from "../../src/compaction/render.ts";
 
 const options = { firstEntryId: "first", lastEntryId: "last", lastTimestamp: "time" };
@@ -72,15 +73,21 @@ describe("demand-based compaction rendering", () => {
       sections[key] = Array.from({ length: count }, (_, i) => `${key}_${i} ${unicode ? "界🦊".repeat(350) : "h".repeat(1100)}`);
     }
     const request = "PIN_REQUEST ".padEnd(3050, "q");
+    const literals = Array.from({ length: 200 }, (_, i) => ({ entryId: `source-${i}`, value: `BATCH-${i.toString(16).padStart(12, "0")}` }));
+    const fullSection = renderExactValues(literals, MAX_LITERALS_SECTION_BYTES);
+    expect(utf8Bytes(fullSection)).toBeGreaterThan(1950);
+    expect(utf8Bytes(fullSection)).toBeLessThanOrEqual(MAX_LITERALS_SECTION_BYTES);
     const { summary } = renderSummaryWithMetadata(sections, {
       ...options,
-      requestLines: [request],
+      requestLines: [request], literals,
       earlierSummary: "CARRY ".padEnd(carrySize, "c"),
     });
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
     expect(summary).toContain(request);
     for (const direction of sections.dialogue) expect(summary).toContain(direction);
     for (const { header } of SUMMARY_SECTIONS) expect(summary).toContain(header);
+    const literalSection = summary.split("[Exact values]\n")[1]?.split("\n\n")[0];
+    if (literalSection) expect(utf8Bytes(`[Exact values]\n${literalSection}`)).toBeLessThanOrEqual(MAX_LITERALS_SECTION_BYTES);
     expect(summary).toContain("[compacted time; cumulative source entries first → last]");
     expect(summary).not.toContain("\uFFFD");
   });
@@ -160,6 +167,19 @@ describe("demand-based compaction rendering", () => {
     expect(summary).toContain("USER_START");
     expect(summary).not.toContain("OLD_ASSISTANT_END");
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test("does not reserve space for removed carried literal lines", () => {
+    const sections = project([]);
+    sections.goal = Array.from({ length: 2 }, (_, i) => `User [entry u${i}]: ${"u".repeat(100)}`);
+    sections.dialogue = Array.from({ length: 3 }, (_, i) => `EXCHANGE_${i} ${"r".repeat(3000)}`);
+    for (const key of historyKeys) sections[key] = Array.from({ length: 128 }, (_, i) => `${key}-${i} ${"x".repeat(100)}`);
+    const body = `CARRY_START ${"c".repeat(2000)} CARRY_END`;
+    const literals = Array.from({ length: 100 }, (_, i) => ({ entryId: `s${i}`, value: `BATCH-${i.toString(16).padStart(12, "0")}` }));
+    const duplicate = renderExactValues(literals, MAX_LITERALS_SECTION_BYTES);
+    const plain = renderSummaryWithMetadata(sections, { ...options, earlierSummary: body });
+    const withDuplicate = renderSummaryWithMetadata(sections, { ...options, earlierSummary: `${duplicate}\n\n${body}` });
+    expect(withDuplicate.summary === plain.summary).toBe(true);
   });
 
   test("allocates the carried earlier summary inside the ceiling, keeping its start and its newest bytes", () => {

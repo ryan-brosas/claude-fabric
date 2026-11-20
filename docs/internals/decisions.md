@@ -30,6 +30,21 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   per message. After them, the dialogue section keeps the closing bytes of up to 64 earlier assistant
   replies, up to 256 bytes each. The Carry and operational history share the remaining room
   (`summaryCarry`). When the Carry must shrink, it keeps its start and end and names the middle cut.
+- **A summary keeps a bounded section of exact values.** This intentionally departs from pi-fabric's
+  compaction invariant 4, which does not apply regex to prose or tool output. We extract the measured
+  path, ID and error shapes from summarized assistant replies and tool results, not tool inputs or user
+  messages. They are unverified excerpts with source IDs, not claims of success; expansion by Recall
+  is best-effort because a source can be off the active chain. The blunt credential screen drops a line
+  naming a credential key or provider prefix and the next eight lines, and can drop innocent values. It
+  does not parse structure and is not secret redaction; values beyond the window can survive. Unsupported
+  whole tokens are dropped rather than
+  clipped. The section takes at most 2 KiB, with individual values at most 160 UTF-8 bytes; complete
+  values only. After preserving
+  protected directions and operational section minima, the existing allocator gives the section room
+  within the 32 KiB ceiling. Values echoed later in user or assistant text rank first, then values from
+  failed results or error codes, then the newest values. A fallback carries only the earlier summary's
+  first outer exact-values block, not matching headings in verbatim text. This is an exception to
+  upstream's invariant 3 against using rendered summary text as input.
 - **Claude Code names, no Pi vocabulary** (the user's call, 2026-11-18). Kept from Fabric: the
   one-string shorthand, and `Bash` rejecting on a nonzero exit (`allowFailure: true` opts out).
 - **One system prompt section, added by `prompt.compose`.** It teaches when to reach for
