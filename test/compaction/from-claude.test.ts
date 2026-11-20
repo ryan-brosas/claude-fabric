@@ -64,6 +64,15 @@ describe("from-claude: transcript to events", () => {
     expect(separate.at(-1)).toMatchObject({ kind: "toolResult", toolCallId: "t1", toolName: "Read", text: "contents" });
   });
 
+  test("a stored error status survives a result row that omits its error flag", () => {
+    const events = normalizeMessages([
+      assistant("", [{ tool_use_id: "t1", tool: "Read", input: { file_path: "a.ts" }, text: "stored", isError: true }]),
+      user("", [{ tool_use_id: "t1", text: "actual result", isError: false }]),
+    ]);
+    expect(events.find((event) => event.kind === "toolResult"))
+      .toMatchObject({ entryId: "1", text: "actual result", isError: true });
+  });
+
   test("result prose is text, never a user instruction", () => {
     const events = normalizeMessages([
       user("Run the checks."),

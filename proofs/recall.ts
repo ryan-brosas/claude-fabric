@@ -5,13 +5,14 @@ import { bool, fun, min, nat, when } from "gdp-wired";
 import type { Kernel } from "./kernel.ts";
 
 export type RecallBug = "accept a rewrite" | "limit over cap" | "page over char cap" | "context over cap" | "range over cap"
-  | "admit unbound entry" | "admit unnamed entry" | "admit ineligible entry" | "admit off-chain ordered entry";
+  | "admit unbound entry" | "admit unnamed entry" | "admit ineligible entry" | "admit off-chain ordered entry"
+  | "index only prefix";
 
 const recall = (bug?: RecallBug) => fun("recall binding and limits")
   .inputs({ present: bool, same: bool, limitGiven: bool, limit: nat, entriesGiven: bool, entries: nat,
     charsGiven: bool, chars: nat, context: nat, range: nat, responseChars: nat, pageChars: nat,
-    named: bool, eligible: bool, ordered: bool, onChain: bool })
-  .returns(({ present, same, limitGiven, limit, entriesGiven, entries, charsGiven, chars, context, range, responseChars, pageChars, named, eligible, ordered, onChain }) => ({
+    named: bool, eligible: bool, ordered: bool, onChain: bool, searchChars: nat })
+  .returns(({ present, same, limitGiven, limit, entriesGiven, entries, charsGiven, chars, context, range, responseChars, pageChars, named, eligible, ordered, onChain, searchChars }) => ({
     bound: when(bug === "accept a rewrite" ? present : present.and(same), 1, 0),
     entryOK: when((bug === "admit unbound entry" ? present : present.and(same))
       .and(bug === "admit unnamed entry" ? present : named)
@@ -24,6 +25,7 @@ const recall = (bug?: RecallBug) => fun("recall binding and limits")
     rangeOK: when(range.atMost(bug === "range over cap" ? 21 : 20), 1, 0),
     responseOK: when(responseChars.atMost(30000), 1, 0),
     pageOK: when(pageChars.atMost(bug === "page over char cap" ? 24001 : 24000), 1, 0),
+    searchEnd: bug === "index only prefix" ? min(searchChars, 2000) : searchChars,
   }));
 
 export const recallKernels = (bug?: RecallBug): Kernel[] => {
@@ -45,8 +47,9 @@ export const recallKernels = (bug?: RecallBug): Kernel[] => {
     r.law("range_refused: an exact range over twenty entries is refused", () => [], (o, e) => e.range.gt(20).implies(o.rangeOK.eq(0))),
     r.law("response_capped: an accepted recall response has at most 30000 characters", () => [], (o, e) => o.responseOK.eq(1).implies(e.responseChars.atMost(30000))),
     r.law("page_capped: an accepted expansion page has at most 24000 text characters", () => [], (o, e) => o.pageOK.eq(1).implies(e.pageChars.atMost(24000))),
+    r.law("search_all: search indexes the entire entry", () => [], (o, e) => o.searchEnd.eq(e.searchChars)),
   ] }];
 };
 
 export const RECALL_BUGS: RecallBug[] = ["accept a rewrite", "limit over cap", "page over char cap", "context over cap", "range over cap",
-  "admit unbound entry", "admit unnamed entry", "admit ineligible entry", "admit off-chain ordered entry"];
+  "admit unbound entry", "admit unnamed entry", "admit ineligible entry", "admit off-chain ordered entry", "index only prefix"];

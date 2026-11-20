@@ -107,14 +107,11 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
   const candidates: Candidate[] = carriedValues(earlierSummary).map((value, order) => ({
     ...value, position: -1, order, error: /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value.value),
   }));
-  const resultIds = new Set(messages.slice(0, start).flatMap((message) => (message.toolResults ?? []).map((result) => result.tool_use_id)));
   const add = (values: readonly string[], entryId: string, position: number, error: boolean) => {
     for (const value of values) candidates.push({ entryId, value, position, order: candidates.length, error: error || /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value) });
   };
   const addToolResults = (message: ClaudeMessage, entryId: string, position: number) => {
-    for (const use of message.toolUses ?? []) {
-      if (!resultIds.has(use.tool_use_id) && use.text) add(valuesIn(use.text), entryId, position, use.isError === true);
-    }
+    // A stored outcome on a call is not present in that call’s transcript row.
     for (const result of message.toolResults ?? []) add(valuesIn(result.text), entryId, position, result.isError);
   };
   const lastDialogue = new Map<string, number>();

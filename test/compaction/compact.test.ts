@@ -708,6 +708,7 @@ describe("compact: the summary", () => {
         isError: true,
         result: { exitCode: 1 },
       }] },
+      results({ tool_use_id: "b1", text: "1 failing test in parser.test.ts", isError: true, result: { exitCode: 1 } }),
       prompt("Continue."),
       reply("Working on it."),
       prompt("And now?"),

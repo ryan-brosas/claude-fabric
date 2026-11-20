@@ -60,6 +60,7 @@ interface ToolResultEvent extends EventBase {
   toolName: string;
   isError: boolean;
   text: string;
+  sourceAvailable: boolean;
 }
 
 interface BashEvent extends EventBase {
@@ -69,6 +70,7 @@ interface BashEvent extends EventBase {
   isError: boolean;
   exitCode: number | null;
   error?: string;
+  sourceAvailable: boolean;
 }
 
 type DistributiveOmit<T, K extends keyof any> = T extends T ? Omit<T, K> : never;
@@ -121,6 +123,10 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
 
   const calls = new Map<string, ClaudeToolUse>();
   const answered = new Set<string>();
+  const results = new Map<string, { result: ClaudeToolResult; entryId: string }>();
+  messages.forEach((message, position) => {
+    for (const result of message.toolResults ?? []) results.set(result.tool_use_id, { result, entryId: String(position) });
+  });
   for (const message of messages) {
     for (const use of message.toolUses ?? []) {
       calls.set(use.tool_use_id, use);
@@ -135,6 +141,7 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
     text: string,
     result: unknown,
     entryId: string,
+    sourceAvailable: boolean,
   ): void => {
     if (tool === "Bash") {
       const use = calls.get(toolCallId);
@@ -145,11 +152,12 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
         command: commandOf(use),
         isError: isError || (exitCode !== null && exitCode !== 0),
         exitCode,
+        sourceAvailable,
         ...(isError && text ? { error: text } : {}),
       }, entryId);
       return;
     }
-    push({ kind: "toolResult", toolCallId, toolName: tool, isError, text }, entryId);
+    push({ kind: "toolResult", toolCallId, toolName: tool, isError, text, sourceAvailable }, entryId);
   };
 
   messages.forEach((message, position) => {
@@ -158,7 +166,7 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
       if (message.text.trim()) push({ kind: "user", text: message.text }, entryId);
       for (const result of message.toolResults ?? []) {
         if (answered.has(result.tool_use_id)) continue;
-        pushResult(result.tool_use_id, calls.get(result.tool_use_id)?.tool ?? "", result.isError, result.text, result.result, entryId);
+        pushResult(result.tool_use_id, calls.get(result.tool_use_id)?.tool ?? "", result.isError, result.text, result.result, entryId, true);
       }
       return;
     }
@@ -166,7 +174,9 @@ export const normalizeMessages = (messages: readonly ClaudeMessage[]): Compactio
     for (const use of message.toolUses ?? []) {
       push({ kind: "toolCall", toolCallId: use.tool_use_id, name: use.tool, args: use.input ?? {} }, entryId);
       if (!hasOutcome(use)) continue;
-      pushResult(use.tool_use_id, use.tool, use.isError === true, use.text ?? "", use.result, entryId);
+      const source = results.get(use.tool_use_id);
+      pushResult(use.tool_use_id, use.tool, use.isError === true || source?.result.isError === true,
+        source?.result.text ?? use.text ?? "", use.result ?? source?.result.result, source?.entryId ?? entryId, !!source);
     }
   });
 
