@@ -1,6 +1,7 @@
 import type { Register } from "claude-code";
 import { compact, isFabricSummary } from "../compaction/compact.ts";
 import { rebuildTranscript } from "../compaction/from-transcript.ts";
+import { outcomeConservationProblem } from "../compaction/outcome-conservation.ts";
 import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
 import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
 import {
@@ -74,6 +75,8 @@ export const register: Register = (on, options) => {
           offset += length;
         }
         const rebuilt = rebuildTranscript(e.messages, new TextDecoder().decode(bytes));
+        const problem = outcomeConservationProblem(e.messages, rebuilt);
+        if (problem) throw new Error(problem);
         const result = compact(rebuilt, { instructions: e.instructions });
         if (!("messages" in result)) throw new Error("rebuilt input did not produce a summary");
         // A row converted from the transcript has no engine handle, so core would rebuild it from

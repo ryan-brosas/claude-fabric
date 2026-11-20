@@ -66,6 +66,129 @@ function hook(path: string) {
 const writeRows = async (path: string, rows: Row[]) =>
   writeFile(path, rows.map((item) => JSON.stringify(item)).join("\n") + "\n");
 
+test("later compaction falls back when rebuilding loses a parallel tool failure", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "sibling.jsonl");
+    const prior = message("user", `[Fabric summary]\nEarlier work. ${"p".repeat(9000)}`, "summary");
+    const first = message("user", `Original request. ${"o".repeat(9000)}`, "first");
+    const uses = [
+      { tool_use_id: "a", tool: "Read", input: { file_path: "a.txt" } },
+      { tool_use_id: "b", tool: "Read", input: { file_path: "b.txt" } },
+    ];
+    const call: ClaudeMessage = { role: "assistant", text: "", toolUses: uses, handle: "rewritten-call" };
+    const sibling: ClaudeMessage = { role: "user", text: "", toolUses: [], handle: "sibling",
+      toolResults: [{ tool_use_id: "a", text: "SIBLING-FAILURE", isError: true }] };
+    const onChain: ClaudeMessage = { role: "user", text: "", toolUses: [], handle: "chain-result",
+      toolResults: [{ tool_use_id: "b", text: "CHAIN-FAILURE", isError: true }] };
+    const last = message("user", `LAST ${"x".repeat(75000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "assistant", uuid: "original-call", parentUuid: "first", message: { content: uses.map((use) =>
+        ({ type: "tool_use", id: use.tool_use_id, name: use.tool, input: use.input })) } },
+      { type: "user", uuid: "sibling", parentUuid: "original-call", message: { content: [
+        { type: "tool_result", tool_use_id: "a", content: "SIBLING-FAILURE", is_error: true }] } },
+      { type: "user", uuid: "chain-result", parentUuid: "original-call", message: { content: [
+        { type: "tool_result", tool_use_id: "b", content: "CHAIN-FAILURE", is_error: true }] } },
+      row(last, "chain-result")]);
+    const event: Event = { trigger: "manual", messages: [prior, call, sibling, onChain, last] };
+    const carried = compact(event.messages);
+    if (!("messages" in carried)) throw new Error("expected the current messages to compact");
+    expect(carried.messages[0]!.text).toContain("SIBLING-FAILURE");
+    expect(carried.messages[0]!.text).toContain("CHAIN-FAILURE");
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(h.calls).toEqual([]);
+    expect(result.messages?.[0]?.text).toContain("CHAIN-FAILURE");
+    expect(result.messages?.[0]?.text).toContain("SIBLING-FAILURE");
+    expect(result).toEqual(carried);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("missing tool outcome");
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
+test("a conflicting rebuilt outcome falls back with one debug reason", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "conflict.jsonl");
+    const prior = message("user", `[Fabric summary]\nEarlier work. ${"p".repeat(9000)}`, "summary");
+    const first = message("user", `Original. ${"o".repeat(9000)}`, "first");
+    const use = { tool_use_id: "a", tool: "Read", input: { file_path: "a.txt" } };
+    const call: ClaudeMessage = { role: "assistant", text: "", handle: "rewritten-call",
+      toolUses: [{ ...use, text: "CURRENT-FAILURE", isError: true }] };
+    const answer: ClaudeMessage = { role: "user", text: "", toolUses: [], handle: "answer",
+      toolResults: [{ tool_use_id: "a", text: "TRANSCRIPT-FAILURE", isError: true }] };
+    const last = message("user", `LAST ${"x".repeat(75000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "assistant", uuid: "original-call", parentUuid: "first", message: { content: [
+        { type: "tool_use", id: use.tool_use_id, name: use.tool, input: use.input }] } },
+      { type: "user", uuid: "answer", parentUuid: "original-call", message: { content: [
+        { type: "tool_result", tool_use_id: "a", content: "TRANSCRIPT-FAILURE", is_error: true }] } },
+      row(last, "answer")]);
+    const event: Event = { trigger: "manual", messages: [prior, call, answer, last] };
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(result).toEqual(compact(event.messages));
+    expect(result.messages?.[0]?.text).toContain("CURRENT-FAILURE");
+    expect(result.messages?.[0]?.text).not.toContain("TRANSCRIPT-FAILURE");
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("conflicting tool outcome id");
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
+test("a matching result without its known tool use falls back", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "orphan.jsonl");
+    const prior = message("user", `[Fabric summary]\nEarlier work. ${"p".repeat(9000)}`, "summary");
+    const first = message("user", `Original. ${"o".repeat(9000)}`, "first");
+    const call: ClaudeMessage = { role: "assistant", text: "", handle: "rewritten-call",
+      toolUses: [{ tool_use_id: "a", tool: "Read", input: { file_path: "a.txt" }, text: "ORPHANED-FAILURE", isError: true }] };
+    const answer: ClaudeMessage = { role: "user", text: "", toolUses: [], handle: "answer",
+      toolResults: [{ tool_use_id: "a", text: "ORPHANED-FAILURE", isError: true }] };
+    const last = message("user", `LAST ${"x".repeat(75000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "user", uuid: "answer", parentUuid: "first", message: { content: [
+        { type: "tool_result", tool_use_id: "a", content: "ORPHANED-FAILURE", is_error: true }] } },
+      row(last, "answer")]);
+    const event: Event = { trigger: "manual", messages: [prior, call, answer, last] };
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(result).toEqual(compact(event.messages));
+    expect(result.messages?.[0]?.text).toContain("ORPHANED-FAILURE");
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("rebuilt input has no tool use");
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
+test("a rebuild with matching inline and row outcomes is still accepted", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "matched.jsonl");
+    const prior = message("user", `[Fabric summary]\nEarlier work. ${"p".repeat(9000)}`, "summary");
+    const first = message("user", `REBUILT-FIRST-FACT ${"o".repeat(9000)}`, "first");
+    const use = { tool_use_id: "a", tool: "Read", input: { file_path: "a.txt" } };
+    const call: ClaudeMessage = { role: "assistant", text: "", handle: "rewritten-call",
+      toolUses: [{ ...use, text: "MATCHED-FAILURE", isError: true }] };
+    const answer: ClaudeMessage = { role: "user", text: "", toolUses: [], handle: "answer",
+      toolResults: [{ tool_use_id: "a", text: "MATCHED-FAILURE", isError: true }] };
+    const last = message("user", `LAST ${"x".repeat(75000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "assistant", uuid: "original-call", parentUuid: "first", message: { content: [
+        { type: "tool_use", id: use.tool_use_id, name: use.tool, input: use.input }] } },
+      { type: "user", uuid: "answer", parentUuid: "original-call", message: { content: [
+        { type: "tool_result", tool_use_id: "a", content: "MATCHED-FAILURE", is_error: true }] } },
+      row(last, "answer")]);
+    const h = hook(path);
+    const result = await h.run({ trigger: "manual", messages: [prior, call, answer, last] });
+    expect(result.messages?.[0]?.text).toContain("REBUILT-FIRST-FACT");
+    expect(result.messages?.[0]?.text).toContain("MATCHED-FAILURE");
+    expect(result.messages?.[0]?.text).not.toContain("[Earlier summary]");
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toEqual([]);
+  });
+});
+
 test("a later hook-answered compaction rebuilds the first user fact without the rewritten tail", async () => {
   await inProject(async (dir) => {
     const path = join(dir, "session.jsonl");

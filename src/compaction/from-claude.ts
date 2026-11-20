@@ -86,10 +86,10 @@ export const firstLine = (text: string): string => {
   return nl < 0 ? trimmed : trimmed.slice(0, nl);
 };
 
-const hasOutcome = (use: ClaudeToolUse): boolean =>
+export const hasOutcome = (use: ClaudeToolUse): boolean =>
   use.text !== undefined || use.isError === true || use.result !== undefined;
 
-const exitCodeOf = (result: unknown): number | null => {
+export const exitCodeOf = (result: unknown): number | null => {
   if (result === null || typeof result !== "object" || Array.isArray(result)) return null;
   const record = result as Record<string, unknown>;
   const value = record.exitCode ?? record.exit_code;
