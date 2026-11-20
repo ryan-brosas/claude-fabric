@@ -1,6 +1,7 @@
 // What a program's mcp.<server>.<tool>() sees: the names it answers to, the declarations the
 // checker serves, and the lookup the host runs. One catalog feeds all three.
 import { describe, expect, test } from "bun:test";
+import ts from "typescript";
 import { STORE } from "../../src/providers/store/index.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 import { check } from "../../src/kernel/check.ts";
@@ -83,6 +84,41 @@ describe("the declarations", () => {
     // The one thing the declarations do check is the shape: one arguments object.
     expect(check('return await mcp.context7.resolve_library_id("react");', guest).ok).toBe(false);
     expect(check('return await mcp["a.b"].one({ x: 1 });', guest).ok).toBe(true);
+  });
+
+  test("a */ in a description does not close the doc comment or cost the server its members", () => {
+    const guest = declarations({
+      servers: [{ server: "sourcebot", tools: [
+        { name: "glob", description: "Find files, e.g. **/*.ts" },
+        { name: "list_repos", description: "Lists repositories" },
+      ] }],
+    });
+    expect(check("const x = await mcp.sourcebot.list_repos({}); return x.text;", guest).ok).toBe(true);
+    expect(check("return await mcp.sourcebot.glob({});", guest).ok).toBe(true);
+    expect(check("return await mcp.sourcebot.not_a_tool({});", guest).ok).toBe(true);
+    // The interface keeps its shape: a wrong argument still fails, so it is not the loose fallback alone.
+    expect(check('return await mcp.sourcebot.glob("x");', guest).ok).toBe(false);
+  });
+
+  test("a truncation cannot leave a half escape or a new */", () => {
+    for (let pad = 100; pad < 125; pad++) {
+      const text = mcpTypes({ servers: [{ server: "s", tools: [{ name: "t", description: "a".repeat(pad) + "*/ more */ end" }] }] });
+      const doc = text.split("\n").find((l) => l.startsWith("  /**")) ?? "";
+      expect(doc.trim().endsWith("*/")).toBe(true);
+      expect(doc.trim().slice(3, -2)).not.toContain("*/");
+    }
+  });
+
+  test("hostile descriptions leave declarations with no syntax errors", () => {
+    const hostile = ["*/ x", "**/*.ts", "`tick` ${a} `", "line\nbreak\r\n*/\n", "say \"q\" and 'q' \\ \\*/", "/* open", "*\\/", "*".repeat(130) + "/"];
+    const catalog: McpCatalog = {
+      servers: [{ server: "evil", tools: hostile.map((description, i) => ({ name: "t" + i, description })) }],
+    };
+    const out = ts.transpileModule(declarations(catalog), { reportDiagnostics: true, fileName: "guest.ts" });
+    expect((out.diagnostics ?? []).map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"))).toEqual([]);
+    const guest = declarations(catalog);
+    expect(check("return await mcp.evil.t0({});", guest).ok).toBe(true);
+    expect(check('return await mcp.evil.t0("x");', guest).ok).toBe(false);
   });
 
   test("say mcp.<server>.<tool> exists in one line, with no Pi name", () => {

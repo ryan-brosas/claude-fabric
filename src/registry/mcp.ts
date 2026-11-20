@@ -39,7 +39,10 @@ function docLine(description: string | undefined): string | undefined {
   if (description === undefined) return undefined;
   const one = description.replace(/\s+/g, " ").trim();
   if (one === "") return undefined;
-  return "/** " + (one.length > MAX_DESCRIPTION ? one.slice(0, MAX_DESCRIPTION - 3) + "..." : one) + " */";
+  const cut = one.length > MAX_DESCRIPTION ? one.slice(0, MAX_DESCRIPTION - 3) + "..." : one;
+  // A "*/" in the text would close the comment early. Escape it after the cut, so the cut cannot
+  // split the escape; the escape adds a character, and only the text ever grows by it.
+  return "/** " + cut.replaceAll("*/", "*\\/") + " */";
 }
 
 /**
