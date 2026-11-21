@@ -8,6 +8,11 @@ import { noCutVerdict } from "../../src/compaction/verified/no-cut.ts";
 import { acceptRestorePosition } from "../../src/compaction/verified/restore-order.ts";
 
 describe("verified restored ordering", () => {
+  test("applies an admitted restoration position", () => {
+    expect(acceptRestorePosition({ previous: 0, position: 1, expectedPosition: 1, expectedFirst: 1, actualFirst: 1,
+      expectedLength: 2, actualLength: 2, matches: true })).toBe(true);
+  });
+
   test("refuses a swapped position and an extra outcome in the suffix", () => {
     const facts = { previous: 2, position: 3, expectedPosition: 2, expectedFirst: 2, actualFirst: 3,
       expectedLength: 3, actualLength: 4, matches: true };
