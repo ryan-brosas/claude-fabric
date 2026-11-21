@@ -14,6 +14,7 @@ export type BudgetBug =
   | "the saved line may be cut"
   | "the fallback is cut even when it fits"
   | "the fallback may lose its suffix"
+  | "the fallback grows when the hint does not fit"
   | "a middle cut may exceed its cap";
 
 /** The result length on every path: untouched, middle cut with the saved line, or the fallback. */
@@ -35,8 +36,11 @@ const budget = (bug?: BudgetBug) => fun("result budget")
     const cut = body;
     const fallbackBody = bug === "the fallback is cut even when it fits" ? cut
       : when(fallback.atMost(max), fallback, cut);
+    // The extra-character variant leaves room under the cap, so only exact preservation catches it.
     const fallbackKept = bug === "the fallback may lose its suffix" ? fallbackBody
-      : fallbackBody.plus(fallbackSuffix);
+      : bug === "the fallback grows when the hint does not fit"
+        ? when(fallback.lt(max).and(fallback.plus(hint).gt(max)), fallbackBody.plus(1), fallbackBody.plus(fallbackSuffix))
+        : fallbackBody.plus(fallbackSuffix);
     const out = bug === "the result may exceed the cap" ? when(text.atMost(max), text, when(wrote, body.plus(suffix), fallbackBody.plus(fallbackSuffix)))
       : bug === "a text that fits is still cut" ? when(text.atMost(max), body, when(wrote, kept, fallbackKept))
       : when(text.atMost(max), text, when(wrote, kept, fallbackKept));
@@ -57,10 +61,8 @@ export const outputBudgetKernels = (bug?: BudgetBug): Kernel[] => {
         (o, e) => e.text.gt(e.max).and(e.wrote).implies(o.out.atLeast(min(e.suffix, e.max)))),
       b.law("fallback_kept: a fallback that fits the cap is returned whole", () => [],
         (o, e) => e.text.gt(e.max).and(e.wrote.not()).and(e.fallback.atMost(e.max))
-          .implies(o.fallbackBody.eq(e.fallback).and(o.out.atLeast(e.fallback)))),
-      b.law("fallback_hint_kept: when the fallback and hint fit, both are returned", () => [],
-        (o, e) => e.text.gt(e.max).and(e.wrote.not()).and(e.fallback.plus(e.hint).atMost(e.max))
-          .implies(o.out.eq(e.fallback.plus(e.hint)))),
+          .implies(o.fallbackBody.eq(e.fallback).and(o.out.eq(
+            when(e.fallback.plus(e.hint).atMost(e.max), e.fallback.plus(e.hint), e.fallback))))),
       b.law("fallback_suffix_kept: the fallback keeps the suffix or its tail", () => [],
         (o, e) => e.text.gt(e.max).and(e.wrote.not()).implies(o.out.atLeast(min(o.fallbackSuffix, e.max)))),
       b.law("cuts_capped: a middle cut never exceeds the cap it was given", () => [],
@@ -75,5 +77,6 @@ export const BUDGET_BUGS: BudgetBug[] = [
   "the saved line may be cut",
   "the fallback is cut even when it fits",
   "the fallback may lose its suffix",
+  "the fallback grows when the hint does not fit",
   "a middle cut may exceed its cap",
 ];
