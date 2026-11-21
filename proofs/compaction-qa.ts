@@ -3,7 +3,8 @@
 import { bool, fun, nat, rule, when } from "gdp-wired";
 import type { Kernel } from "./kernel.ts";
 
-type QaBug = "admit one missing" | "call order" | "count a failed probe";
+type QaBug = "admit one missing" | "call order" | "count a failed probe" | "accept a short grant"
+  | "refuse an accounted tally" | "admit an unaccounted tally" | "admit excess shown";
 
 const admission = (bug?: QaBug) => fun("compaction QA admission")
   .inputs({ required: nat, satisfied: nat, footer: nat })
@@ -11,6 +12,19 @@ const admission = (bug?: QaBug) => fun("compaction QA admission")
     admitted: when(required.gt(0).and(footer.eq(1)).and(
       bug === "admit one missing" ? satisfied.plus(1).atLeast(required) : satisfied.eq(required),
     ), 1, 0),
+  }));
+
+const grant = (bug?: QaBug) => fun("compaction QA grant")
+  .inputs({ owed: nat, offered: nat })
+  .returns(({ owed, offered }) => ({ adequate: when(bug === "accept a short grant" ? offered.plus(1).atLeast(owed) : offered.atLeast(owed), 1, 0) }));
+
+const historyAccounting = (bug?: QaBug) => fun("compaction QA history accounting")
+  .inputs({ shown: nat, omitted: nat, total: nat })
+  .returns(({ shown, omitted, total }) => ({
+    admitted: when(bug === "refuse an accounted tally" ? shown.plus(omitted).eq(total).and(shown.lt(total))
+      : bug === "admit an unaccounted tally" ? shown.plus(omitted).plus(1).atLeast(total)
+      : bug === "admit excess shown" ? shown.plus(omitted).eq(total).or(shown.gt(total))
+      : shown.plus(omitted).eq(total), 1, 0),
   }));
 
 const tally = (bug?: QaBug) => rule("compaction QA tally")
@@ -39,12 +53,24 @@ const modifications = (bug?: QaBug) => rule("latest successful modification")
   }));
 
 export const compactionQaKernels = (bug?: QaBug): Kernel[] => {
-  const admit = admission(bug), count = tally(bug), last = modifications(bug);
+  const admit = admission(bug), count = tally(bug), last = modifications(bug), allocation = grant(bug), history = historyAccounting(bug);
   return [
     { id: "compactionQa", fun: admit, decisions: [
       admit.law("complete_with_footer: admit exactly when a footer probe exists and every required probe is satisfied", () => [],
         (out, input) => out.admitted.eq(when(input.required.gt(0).and(input.footer.eq(1))
           .and(input.satisfied.eq(input.required)), 1, 0))),
+    ] },
+    { id: "qaGrant", fun: allocation, decisions: [
+      allocation.law("owed_grant: accept exactly when the supplied offered bytes cover the supplied owed bytes", () => [],
+        ({ adequate }, { offered, owed }) => adequate.eq(when(offered.atLeast(owed), 1, 0))),
+    ] },
+    { id: "qaHistoryAccounting", fun: history, decisions: [
+      history.law("accounted_admitted: shown plus omitted equalling total admits", ({ shown, omitted, total }) => [shown.plus(omitted).eq(total)],
+        ({ admitted }) => admitted.eq(1)),
+      history.law("unaccounted_refused: any other sum refuses", ({ shown, omitted, total }) => [shown.plus(omitted).eq(total).not()],
+        ({ admitted }) => admitted.eq(0)),
+      history.law("shown_within_total: admission never shows more than total", () => [],
+        ({ admitted }, { shown, total }) => admitted.eq(0).or(shown.atMost(total))),
     ] },
     { id: "qaTally", rule: count, laws: [
       count.law("satisfied_bounded: satisfied probes never exceed required probes", ({ satisfied, required }) => satisfied.atMost(required)),
@@ -62,4 +88,5 @@ export const compactionQaKernels = (bug?: QaBug): Kernel[] => {
   ];
 };
 
-export const COMPACTION_QA_BUGS: QaBug[] = ["admit one missing", "call order", "count a failed probe"];
+export const COMPACTION_QA_BUGS: QaBug[] = ["admit one missing", "call order", "count a failed probe", "accept a short grant",
+  "refuse an accounted tally", "admit an unaccounted tally", "admit excess shown"];

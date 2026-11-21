@@ -1,22 +1,22 @@
-// Source-based reconstruction checks. The byte grants are calculated from the
-// same source and allocation rules as rendering, never from the candidate text.
+// Source-based reconstruction checks. History records are checked without
+// trusting their renderer grants; literal demand has a narrower partial check.
 import { DIALOGUE_HEADER, EARLIER_USERS_HEADER, MAX_DIALOGUE_SECTION_BYTES, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, MAX_REQUEST_SECTION_BYTES, REQUEST_HEADER, allocateProtectedRoom, clipUtf8, protectedBudgets, boundedExcerpt, boundedHeadTail, boundedTailExcerpt, omissionLine, recentDialogueBytes, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import { MAX_RECENT_EXCHANGES, type DialogueExchange } from "./dialogue.ts";
 import type { CompactionEvent } from "./from-claude.ts";
-import { LITERALS_HEADER } from "./literals.ts";
+import { LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES } from "./literals.ts";
+import { allocateSummaryCarry } from "./verified/context.ts";
+import { MAX_SUMMARY_BYTES } from "./bounds.ts";
 import { sourceLiterals, type LiteralSource } from "./qa-literals.ts";
 import { MAX_EARLIER_USERS, MAX_USER_MESSAGE_BYTES } from "./projections.ts";
-import { sourceEarlierTurns, sourceFailures, sourceFiles, sourceHistoryBlock, sourceStatus } from "./qa-history.ts";
+import { sourceFailures, sourceHistoryBlock, sourceStatus } from "./qa-history.ts";
 import { ASSISTANT_CAVEAT, shortAssistantHeading, SUMMARY_HEADER, type RenderedSummary } from "./render.ts";
-import { compactionQa, qaLatestModification, qaTally } from "./verified/generated/compaction-qa.js";
+import { compactionQa, qaGrant, qaHistoryAccounting, qaLatestModification, qaTally } from "./verified/generated/compaction-qa.js";
 
 export type QaReason = "original request" | "dialogue" | "exact values" | "open failures" | "last modification" | "recall footer";
-interface Probe { reason: QaReason; section: string; expected: string; exact?: boolean; lastChange?: boolean; }
-export interface QaPlan { probes: Probe[]; outerStart: number; historyStart: number; outstandingStart: number; statusStart: number; literalLength: number; goalBlock: string; }
+interface Probe { reason: QaReason; section: string; expected: string; exact?: boolean; assertion?: boolean; }
+interface HistoryProbe { reason: QaReason; header: string; lines: string[]; }
+export interface QaPlan { probes: Probe[]; histories: HistoryProbe[]; literals: string[]; spans: RenderedSummary["qaBudgets"]["spans"]; }
 type Budgets = RenderedSummary["qaBudgets"];
-
-const HEADERS = [LITERALS_HEADER, "[Earlier summary]", EARLIER_USERS_HEADER, DIALOGUE_HEADER, "[Compaction Request]",
-  "[Files And Changes]", "[Outstanding Context]", "[Earlier Turns]", "[Current Status]", "---"];
 
 // Reconstruct source exchange order, including a response crossing the cut.
 const sourceExchanges = (events: readonly CompactionEvent[], retained: readonly CompactionEvent[]): DialogueExchange[] => {
@@ -46,19 +46,6 @@ const sourceOlderReplies = (window: readonly DialogueExchange[]): string[] => wi
   const excerpt = boundedTailExcerpt(assistant.text, 256, assistant.entryId).text;
   return [`Assistant response [entry ${assistant.entryId}]:\n${excerpt}`];
 });
-
-const sourceCarry = (summary: string, grant: number): string => {
-  if (!summary) return "";
-  const firstBreak = summary.indexOf("\n\n");
-  const body = summary.startsWith(`${LITERALS_HEADER}\n`) && firstBreak >= 0 ? summary.slice(firstBreak + 2) : summary;
-  const heading = `[Earlier summary]\n${ASSISTANT_CAVEAT}`;
-  const full = `${heading}\n\n${body}`;
-  if (utf8Bytes(full) <= grant) return full;
-  const room = grant - utf8Bytes(heading) - 2;
-  if (room <= 0) return clipUtf8("[Earlier summary]", Math.max(0, grant));
-  const excerpt = boundedHeadTail(body, room).text;
-  return excerpt ? `${heading}\n\n${excerpt}` : "[Earlier summary]";
-};
 
 // Construct expectations from events and documented grants, not from the
 // projected goal or the renderer's protected-block producer.
@@ -116,9 +103,6 @@ const sourceGoal = (events: CompactionEvent[], exchanges: readonly DialogueExcha
   return { header, items, selected, block: items.length ? sourceProtected(header, items, grant) : "" };
 };
 
-const fallback = (expected: string): string =>
-  expected.split("\n").find((line) => line.includes("omitted") && line.includes("rendered lines")) ?? "";
-
 /** The source and cut are normalized and addressed by compact, before rendering. */
 export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
   literalSource: LiteralSource, budgets: Budgets, requestLines: readonly string[] = []): QaPlan => {
@@ -128,35 +112,43 @@ export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
   };
   const window = sourceExchanges(events, retained);
   const exchanges = window.slice(-MAX_RECENT_EXCHANGES);
-  const goal = sourceGoal(events, exchanges, requestLines, budgets.goal);
+  const sourceRecentItems = sourceDialogue(exchanges).map(shortAssistantHeading);
+  const sourceOlderItems = sourceOlderReplies(window);
+  const sourceCaveat = [...sourceRecentItems, ...sourceOlderItems].some((item) => item.startsWith("Assistant response [entry ")) ? ASSISTANT_CAVEAT : "";
+  const recentDemand = recentDialogueBytes(sourceCaveat ? [sourceCaveat, ...sourceRecentItems] : sourceRecentItems);
+  const goalGrant = allocateProtectedRoom(recentDemand, requestSectionBytes(requestLines), MAX_EARLIER_USERS_SECTION_BYTES, 0).newestBytes;
+  const goal = sourceGoal(events, exchanges, requestLines, goalGrant);
   const first = events.find((event) => event.kind === "user" && event.text.trim());
   if (first && !exchanges.some(({ user }) => user.entryId === first.entryId)) {
     const { header, items, selected } = goal;
     const index = selected.findIndex((user) => user.entryId === first.entryId);
     let expected = index < 0 ? "" : items[index]!;
-    if (expected && utf8Bytes([header, ...items].join("\n\n")) > budgets.goal) {
-      if (utf8Bytes(header) + 2 * items.length > budgets.goal) {
-        expected = boundedExcerpt(items.join("\n\n"), budgets.goal - utf8Bytes(header) - 2).text;
+    if (expected && utf8Bytes([header, ...items].join("\n\n")) > goalGrant) {
+      if (utf8Bytes(header) + 2 * items.length > goalGrant) {
+        expected = boundedExcerpt(items.join("\n\n"), goalGrant - utf8Bytes(header) - 2).text;
       } else {
-        expected = boundedExcerpt(expected, protectedBudgets(header, items, budgets.goal)[index]!).text;
+        expected = boundedExcerpt(expected, protectedBudgets(header, items, goalGrant)[index]!).text;
       }
     }
-    add("original request", EARLIER_USERS_HEADER, expected);
+    add("original request", EARLIER_USERS_HEADER, expected ? goal.block : "", true);
   }
-  const recent = sourceDialogue(exchanges).map(shortAssistantHeading);
+  const recent = sourceRecentItems;
   let fullDialogue = "";
   if (recent.length) {
-    const older = sourceOlderReplies(window);
-    const caveat = [...recent, ...older].some((item) => item.startsWith("Assistant response [entry ")) ? ASSISTANT_CAVEAT : "";
+    const older = sourceOlderItems;
+    const caveat = sourceCaveat;
     const header = caveat ? `${DIALOGUE_HEADER}\n\n${caveat}` : DIALOGUE_HEADER;
     const expected = sourceProtected(header, recent, MAX_DIALOGUE_SECTION_BYTES);
     const olderHeader = "Earlier assistant replies (unverified):";
-    fullDialogue = older.length && budgets.olderReplies >= utf8Bytes(olderHeader) + 2
-      ? `${expected}\n\n${sourceHistoryBlock(olderHeader, older, budgets.olderReplies)}` : expected;
-    add(first && exchanges.some(({ user }) => user.entryId === first.entryId) ? "original request" : "dialogue", DIALOGUE_HEADER, expected);
+    const replyRoom = allocateProtectedRoom(recentDemand, requestSectionBytes(requestLines), utf8Bytes(goal.block), MAX_DIALOGUE_SECTION_BYTES).carryBytes;
+    const olderGrant = Math.min(MAX_DIALOGUE_SECTION_BYTES - utf8Bytes(expected), replyRoom) - 2;
+    fullDialogue = older.length && olderGrant >= utf8Bytes(olderHeader) + 2
+      ? `${expected}\n\n${sourceHistoryBlock(olderHeader, older, olderGrant)}` : expected;
+    add(first && exchanges.some(({ user }) => user.entryId === first.entryId) ? "original request" : "dialogue", DIALOGUE_HEADER, fullDialogue, true);
     // A separate check retains the dialogue reason even if the first request is recent.
-    if (first && exchanges.some(({ user }) => user.entryId === first.entryId)) add("dialogue", DIALOGUE_HEADER, expected);
+    if (first && exchanges.some(({ user }) => user.entryId === first.entryId)) add("dialogue", DIALOGUE_HEADER, fullDialogue, true);
   }
+  if (!recent.length) add("dialogue", DIALOGUE_HEADER, "", true);
   const sourceRecent = sourceDialogue(exchanges);
   const projectedGoal = [goal.header.includes("\n") ? goal.header.split("\n").slice(1).join("\n") : "", ...goal.items];
   const protectedText = [...projectedGoal, ...sourceRecent].join("\n\n");
@@ -167,27 +159,42 @@ export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
   }));
   const values = sourceLiterals(literalSource, wholeUsers, protectedText);
   const framing = `${LITERALS_HEADER}\nUnverified excerpts. Source ids; Recall expansion is best-effort.`;
-  let literalBlock = framing;
+  let demand = utf8Bytes(framing);
+  let hasDemand = false;
+  for (const value of values) {
+    const bytes = utf8Bytes(`\n- [entry ${value.entryId}] ${value.value}`);
+    if (allocateSummaryCarry(MAX_LITERALS_SECTION_BYTES, 0, demand + bytes, 0, 0).newestBytes === demand + bytes) {
+      demand += bytes;
+      hasDemand = true;
+    }
+  }
+  if (!hasDemand) demand = 0;
+  const request = requestLines.length ? sourceProtected(REQUEST_HEADER, requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row") : "";
+  const newest = [goal.block, fullDialogue, request].filter(Boolean);
+  const carried = literalSource.earlierSummary;
+  const carryBody = carried.startsWith(`${LITERALS_HEADER}\n`) && carried.indexOf("\n\n") >= 0
+    ? carried.slice(carried.indexOf("\n\n") + 2) : carried;
+  const carryDemand = carried ? utf8Bytes(`[Earlier summary]\n${ASSISTANT_CAVEAT}`) + 2 + utf8Bytes(carryBody) : 0;
+  // Partial literal-demand check: history sizes and minima come from the renderer.
+  // It catches some dropped selections, but is not independent of history demand.
+  const blockCount = 2 + newest.length + Number(!!carried) + Number(demand > 0) + budgets.historyFacts.length;
+  const framingBytes = utf8Bytes(SUMMARY_HEADER) + budgets.footerBytes + 2 * (blockCount - 1) + 1;
+  const otherDemand = budgets.historyFacts.reduce((sum, fact) => sum + fact.bytes, 0);
+  const allocation = allocateSummaryCarry(MAX_SUMMARY_BYTES, framingBytes, newest.reduce((sum, block) => sum + utf8Bytes(block), 0), carryDemand, otherDemand + demand);
+  const minimum = Math.min(allocation.historyBytes, budgets.historyFacts.reduce((sum, fact) => sum + fact.minimum, 0));
+  const owed = allocateSummaryCarry(allocation.historyBytes - minimum, 0, demand, 0, 0).newestBytes;
   let used = utf8Bytes(framing);
-  let count = 0;
   for (const value of values) {
     const line = `- [entry ${value.entryId}] ${value.value}`;
     const bytes = utf8Bytes(`\n${line}`);
-    if (used + bytes <= budgets.literals) {
-      literalBlock += `\n${line}`;
+    if (allocateSummaryCarry(owed, 0, used + bytes, 0, 0).newestBytes === used + bytes) {
       used += bytes;
-      count++;
       add("exact values", LITERALS_HEADER, line);
     }
   }
-  if (!count) literalBlock = "";
+  probes.push({ reason: "exact values", section: LITERALS_HEADER, expected: "", assertion: qaGrant.step({}, qaGrant.init({}), { owed, offered: budgets.literals }).scalars["out.adequate"] === 1 });
+  if (!demand) add("exact values", LITERALS_HEADER, "", true);
   const failures = sourceFailures(events);
-  const failureGrant = budgets.historyBlocks["[Outstanding Context]"];
-  const outstanding = failures.length && failureGrant !== undefined
-    ? sourceHistoryBlock("[Outstanding Context]", failures, failureGrant) : "";
-  // A missing allocation for a real failure is not an omission notice.
-  if (failures.length && failureGrant === undefined) add("open failures", "[Outstanding Context]", "");
-  else add("open failures", "[Outstanding Context]", outstanding, true);
 
   // Pair calls with results, then fold in result order: parallel calls need not
   // finish in the order in which they were issued.
@@ -202,101 +209,115 @@ export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
     latest = qaLatestModification.step({}, latest, { success: result.isError ? 0 : 1, callIndex: call.index });
   }
   const selected = changes[(latest.scalars.chosen ?? 0) - 1];
-  if (changes.length) {
-    const pathValue = selected?.call.args.file_path ?? selected?.call.args.path ?? selected?.call.args.dir;
-    const path = typeof pathValue === "string" && pathValue.trim() ? ` ${pathValue}` : "";
-    const line = selected ? clipUtf8(`Last change: ${selected.call.name}${path}`, MAX_RENDERED_LINE_BYTES) : "";
-    const statusSource = sourceStatus(events, selected ? `Last change: ${selected.call.name}${path}` : "");
-    const statusGrant = budgets.historyBlocks["[Current Status]"];
-    const status = statusGrant === undefined ? "" : sourceHistoryBlock(statusSource.header, statusSource.lines, statusGrant);
-    const omission = fallback(status);
-    if (line && !status.split("\n").includes(line) && omission) add("last modification", "[Current Status]", omission);
-    else probes.push({ reason: "last modification", section: "[Current Status]", expected: line, lastChange: true });
-  }
+  const pathValue = selected?.call.args.file_path ?? selected?.call.args.path ?? selected?.call.args.dir;
+  const path = typeof pathValue === "string" && pathValue.trim() ? ` ${pathValue}` : "";
+  const statusSource = sourceStatus(events, selected ? `Last change: ${selected.call.name}${path}` : "");
+  const histories: HistoryProbe[] = [
+    { reason: "open failures", header: "[Outstanding Context]", lines: failures },
+    { reason: "last modification", header: statusSource.header, lines: statusSource.lines },
+  ];
   add("recall footer", "footer", "Recover full context in fabric_exec with history.recall and history.expand.");
-  const prefix = [SUMMARY_HEADER, literalBlock, sourceCarry(literalSource.earlierSummary, budgets.carry)].filter(Boolean);
-  const outerStart = prefix.join("\n\n").length + 2;
-  const request = requestLines.length ? sourceProtected(REQUEST_HEADER, requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row") : "";
-  const beforeHistory = [...prefix, goal.block, fullDialogue, request].filter(Boolean);
-  const historyStart = beforeHistory.join("\n\n").length + 2;
-  const files = sourceFiles(events);
-  const filesGrant = budgets.historyBlocks["[Files And Changes]"];
-  const fileBlock = files.length && filesGrant !== undefined ? sourceHistoryBlock("[Files And Changes]", files, filesGrant) : "";
-  const outstandingStart = [...beforeHistory, fileBlock].filter(Boolean).join("\n\n").length + 2;
-  const turns = sourceEarlierTurns(events);
-  const turnGrant = budgets.historyBlocks["[Earlier Turns]"];
-  const turnBlock = turns.length && turnGrant !== undefined ? sourceHistoryBlock("[Earlier Turns]", turns, turnGrant) : "";
-  const statusStart = [...beforeHistory, fileBlock, outstanding, turnBlock].filter(Boolean).join("\n\n").length + 2;
-  return { probes, outerStart, historyStart, outstandingStart, statusStart, literalLength: literalBlock.length, goalBlock: goal.block };
+  return { probes, histories, literals: values.map(({ entryId, value }) => `- [entry ${entryId}] ${value}`), spans: budgets.spans };
 };
 
-// Sections are located in their outer order. Exact values always lead; the
-// footer is anchored at the end, not at a transcript's `---` line.
-const sectionOf = (summary: string, header: string, outerStart: number, expected: string): string => {
-  if (header === "footer") {
-    const at = summary.lastIndexOf("\n\n---\n");
-    return at < 0 ? "" : summary.slice(at + 2).trimEnd();
+// Spans are emitted as the renderer joins its blocks. Validate their entire
+// ordered partition before trusting one: a heading quoted inside source text
+// is not an outer section, and gaps or overlaps cannot hide that text.
+const ORDER = ["summary", LITERALS_HEADER, "[Earlier summary]", EARLIER_USERS_HEADER, DIALOGUE_HEADER,
+  "[Compaction Request]", "[Files And Changes]", "[Outstanding Context]", "[Earlier Turns]", "[Current Status]", "transcript", "footer"];
+const spanReason = (name: string): QaReason => name === LITERALS_HEADER ? "exact values"
+  : name === EARLIER_USERS_HEADER ? "original request" : name === DIALOGUE_HEADER ? "dialogue"
+  : name === "[Outstanding Context]" ? "open failures" : name === "[Current Status]" ? "last modification" : "recall footer";
+
+const badSpan = (summary: string, spans: QaPlan["spans"]): QaReason | undefined => {
+  let end = -2, order = -1;
+  for (const span of spans) {
+    const next = ORDER.indexOf(span.name);
+    const header = span.name === "summary" ? SUMMARY_HEADER : span.name === "footer" || span.name === "transcript" ? "---" : span.name;
+    if (!Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) || next <= order || span.start !== end + 2 ||
+        span.end <= span.start || span.end > summary.length || !summary.startsWith(header, span.start) ||
+        (summary[span.start + header.length] !== "\n" && span.name !== "summary") ||
+        (span.name !== "footer" && summary.slice(span.end, span.end + 2) !== "\n\n") ||
+        (span.name === "footer" && summary.slice(span.end) !== "\n")) return spanReason(span.name);
+    end = span.end;
+    order = next;
   }
-  const start = summary.indexOf(`\n\n${header}\n`, header === LITERALS_HEADER ? 0 : Math.max(0, outerStart - 2));
-  if (start < 0) return "";
-  const from = start + 2;
-  // These two sections have source-defined positions: exact values are first,
-  // and earlier-user messages are the first protected block after any carry.
-  if (header === LITERALS_HEADER && from !== SUMMARY_HEADER.length + 2) return "";
-  if (header === EARLIER_USERS_HEADER && summary.slice(Math.min(from, outerStart), Math.max(from, outerStart)).trim()) return "";
-  // A verbatim selected excerpt can itself contain section-looking text. Such a
-  // heading belongs to the excerpt, not to the enclosing summary structure.
-  const expectedAt = !expected ? -1 : summary.startsWith(expected, from) ? from : summary.indexOf(expected, from + header.length);
-  const inExpected = (at: number): boolean => expectedAt >= 0 && at >= expectedAt && at < expectedAt + expected.length;
-  let end = summary.length;
-  for (const next of HEADERS) {
-    if (next === header || next === LITERALS_HEADER || (next === "[Earlier summary]" && header !== LITERALS_HEADER)) continue;
-    let at = summary.indexOf(`\n\n${next}\n`, from + header.length);
-    while (at >= 0 && inExpected(at)) at = summary.indexOf(`\n\n${next}\n`, at + 2);
-    if (at >= 0 && at < end) end = at;
-  }
-  return summary.slice(from, end);
+  return spans[0]?.name === "summary" && spans.at(-1)?.name === "footer" ? undefined : "recall footer";
+};
+
+// Match whole bounded records, even when a path contains newlines or a heading.
+// The renderer's omission marker counts source-projected lines, not raw events.
+const historyMatches = (section: string, probe: HistoryProbe): boolean => {
+  const lines = probe.lines.map((line) => clipUtf8(line, MAX_RENDERED_LINE_BYTES));
+  if (!section) return qaHistoryAccounting.step({}, qaHistoryAccounting.init({}), { shown: 0, omitted: 0, total: lines.length }).scalars["out.admitted"] === 1;
+  if (section !== probe.header && !section.startsWith(`${probe.header}\n`)) return false;
+  const body = section.slice(probe.header.length + 1);
+  const seen = new Set<string>();
+  const visit = (offset: number, from: number, shown: number, omitted: number, marker: boolean): boolean => {
+    if (offset === body.length) return qaHistoryAccounting.step({}, qaHistoryAccounting.init({}), { shown, omitted, total: lines.length }).scalars["out.admitted"] === 1;
+    const key = `${offset}/${from}/${shown}/${omitted}/${marker}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    const nextOffset = (text: string): number => {
+      if (!body.startsWith(text, offset)) return -1;
+      const end = offset + text.length;
+      return end === body.length ? end : body[end] === "\n" ? end + 1 : -1;
+    };
+    for (let index = from; index < lines.length; index++) {
+      const line = lines[index]!;
+      const next = nextOffset(line);
+      if (next >= 0 && visit(next, index + 1, shown + 1, omitted, marker)) return true;
+    }
+    if (!marker) {
+      const match = /^… omitted ([1-9]\d*) rendered lines(?=\n|$)/.exec(body.slice(offset));
+      if (match) {
+        const count = Number(match[1]);
+        const next = nextOffset(match[0]);
+        if (Number.isSafeInteger(count) && count <= lines.length && next >= 0 && visit(next, from, shown, count, true)) return true;
+      }
+    }
+    return false;
+  };
+  return visit(0, 0, 0, 0, false);
+};
+
+const literalsSound = (section: string, source: readonly string[]): boolean => {
+  if (!section) return true;
+  const prefix = `${LITERALS_HEADER}\nUnverified excerpts. Source ids; Recall expansion is best-effort.\n`;
+  if (!section.startsWith(prefix)) return false;
+  const values = section.slice(prefix.length).split("\n");
+  const allowed = new Set(source);
+  return values.length > 0 && values.every((value, index) => allowed.has(value) && values.indexOf(value) === index);
 };
 
 export const checkQa = (summary: string, plan: QaPlan): { reason?: QaReason; required: number; satisfied: number } => {
   const failed: QaReason[] = [];
   let tally = qaTally.init({});
-  // The literal block precedes every outer section. Recalculate only its framing
-  // length so a removed literal cannot shift a later probe onto carried text.
-  const literalStart = summary.startsWith(`${SUMMARY_HEADER}\n\n${LITERALS_HEADER}\n`) ? SUMMARY_HEADER.length : -1;
-  const literalEnd = literalStart < 0 ? -1 : summary.indexOf("\n\n", literalStart + 2);
-  const actualLiteralLength = literalStart < 0 ? 0 : (literalEnd < 0 ? summary.length : literalEnd) - literalStart - 2;
-  const outerStart = Math.max(0, plan.outerStart + actualLiteralLength - plan.literalLength);
+  const broken = badSpan(summary, plan.spans);
+  tally = qaTally.step({}, tally, { pass: broken ? 0 : 1, isFooter: 0 });
+  if (broken) failed.push(broken);
   for (const probe of plan.probes) {
-    const adjustment = actualLiteralLength - plan.literalLength;
-    const history = probe.section === "[Outstanding Context]" || probe.section === "[Current Status]";
-    let sectionStart = history ? Math.max(0, (probe.section === "[Outstanding Context]" ? plan.outstandingStart : plan.statusStart) + adjustment) : outerStart;
-    let section = "";
-    if (history) {
-      if (summary.startsWith(`${probe.section}\n`, sectionStart)) section = sectionOf(summary, probe.section, sectionStart, probe.expected);
-    } else if (probe.section === DIALOGUE_HEADER && plan.goalBlock) {
-      // Earlier user text can contain arbitrary section headings. Only the
-      // end of its complete source-derived block locates the real dialogue.
-      if (summary.startsWith(plan.goalBlock, outerStart)) {
-        sectionStart = outerStart + plan.goalBlock.length + 2;
-        section = sectionOf(summary, probe.section, sectionStart, probe.expected);
-      }
-    } else section = sectionOf(summary, probe.section, sectionStart, probe.expected);
-    const matches = (value: string): boolean => {
-      if (probe.lastChange) {
-        const lines = value.split("\n").filter((line) => line.startsWith("Last change: "));
-        return probe.expected ? lines.length === 1 && lines[0] === probe.expected : lines.length === 0;
-      }
-      return probe.exact ? value === probe.expected : !!probe.expected && value.includes(probe.expected);
-    };
-    const pass = matches(section);
+    const span = plan.spans.find((item) => item.name === probe.section);
+    const section = span ? summary.slice(span.start, span.end) : "";
+    let pass: boolean;
+    if (probe.assertion !== undefined) pass = probe.assertion;
+    else if (probe.exact) pass = section === probe.expected;
+    else if (probe.reason === "exact values") pass = section.split("\n").filter((line) => line === probe.expected).length === 1;
+    else pass = !!probe.expected && section.split("\n").filter((line) => line === probe.expected).length === 1;
     tally = qaTally.step({}, tally, { pass: pass ? 1 : 0, isFooter: probe.reason === "recall footer" ? 1 : 0 });
-    // A damaged earlier block can move later sections. Searching in that case is
-    // diagnostic only: it never turns a structurally failed probe into a pass.
-    const diagnostic = history && !section
-      ? matches(sectionOf(summary, probe.section, Math.max(0, plan.historyStart + adjustment), probe.expected))
-      : pass;
-    if (!diagnostic) failed.push(probe.reason);
+    if (!pass) failed.push(probe.reason);
+  }
+  const section = (name: string): string => {
+    const span = plan.spans.find((item) => item.name === name);
+    return span ? summary.slice(span.start, span.end) : "";
+  };
+  const sound = literalsSound(section(LITERALS_HEADER), plan.literals);
+  tally = qaTally.step({}, tally, { pass: sound ? 1 : 0, isFooter: 0 });
+  if (!sound) failed.push("exact values");
+  for (const history of plan.histories) {
+    const pass = historyMatches(section(history.header.split("\n")[0]!), history);
+    tally = qaTally.step({}, tally, { pass: pass ? 1 : 0, isFooter: 0 });
+    if (!pass) failed.push(history.reason);
   }
   const { required = 0, satisfied = 0, footer = 0 } = tally.scalars;
   const admitted = compactionQa.step({}, compactionQa.init({}), { required, satisfied, footer }).scalars["out.admitted"] === 1;

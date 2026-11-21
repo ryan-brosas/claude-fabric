@@ -53,6 +53,34 @@ function step(params, state, input) {
 return { init, step };
 })();
 
+export const qaGrant = /* @__PURE__ */ (() => {
+// Generated from the machine compaction QA grant. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"out.adequate": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"owed": $n(input["owed"], "input owed"), "offered": $n(input["offered"], "input offered")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  const scalars = {...s, "out.adequate": ((env["owed"] <= env["offered"]) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
+export const qaHistoryAccounting = /* @__PURE__ */ (() => {
+// Generated from the machine compaction QA history accounting. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"out.admitted": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"shown": $n(input["shown"], "input shown"), "omitted": $n(input["omitted"], "input omitted"), "total": $n(input["total"], "input total")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  const scalars = {...s, "out.admitted": (($x(env["shown"] + env["omitted"]) === env["total"]) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
 export const qaTally = /* @__PURE__ */ (() => {
 // Generated from the machine compaction QA tally. step consumes its state: keep the one it returns (fork to branch).
 function init(params) {
