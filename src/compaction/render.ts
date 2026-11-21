@@ -4,7 +4,7 @@ import { allocateProtectedRoom, boundedExcerpt, boundedHeadTail, clipUtf8, DIALO
   MAX_SUMMARY_BYTES, MAX_SUMMARY_FOOTER_BYTES, MAX_SUMMARY_FRAMING_BYTES, protectedBudgets, recentDialogueBytes,
   REQUEST_HEADER, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
-import { carryReference, isPathLiteral, LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
+import { LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
 // The first line of every summary this compactor writes, and how a later
@@ -174,41 +174,6 @@ const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
   return body.text ? `${CARRY_HEADER}\n\n${body.text}` : EARLIER_SUMMARY_HEADER;
 };
 
-// A substring inside a longer path, identifier or error code does not show the
-// same value. A terminal period is punctuation unless another value character follows it.
-const VALUE_BEFORE = /[\p{L}\p{N}_./\\-]$/u;
-const VALUE_AFTER = /^(?:[\p{L}\p{N}_/\\-]|\.[\p{L}\p{N}_/\\-])/u;
-
-// Strip surrounding prose punctuation, not characters inside a path. An
-// unmatched opening bracket can itself start an extractor-valid path.
-const carryTokenAt = (carry: string, start: number, end: number): { text: string; end: number } => {
-  let first = start, last = end;
-  while (first > 0 && !/\s/.test(carry[first - 1]!)) first--;
-  while (last < carry.length && !/\s/.test(carry[last]!)) last++;
-  let text = carry.slice(first, last).replace(/^["'`]+|["'`.,;:!?]+$/g, "");
-  while ((text.startsWith("(") && text.endsWith(")")) || (text.startsWith("[") && text.endsWith("]"))) {
-    text = text.slice(1, -1);
-  }
-  return { text: text.replace(/[)\]"'`.,;:!?]+$/g, ""), end: last };
-};
-
-const locationInCarry = (carry: string, value: string): number => {
-  if (!value) return -1;
-  const path = isPathLiteral(value);
-  let tokenEnd = -1, longerPath = false;
-  for (let start = carry.indexOf(value); start >= 0; start = carry.indexOf(value, start + 1)) {
-    const end = start + value.length;
-    if (VALUE_BEFORE.test(carry.slice(Math.max(0, start - 2), start)) || VALUE_AFTER.test(carry.slice(end, end + 3))) continue;
-    if (path && start >= tokenEnd) {
-      const token = carryTokenAt(carry, start, end);
-      tokenEnd = token.end;
-      longerPath = token.text !== value && token.text.includes(value) && isPathLiteral(token.text);
-    }
-    if (!longerPath) return start;
-  }
-  return -1;
-};
-
 export interface RenderedSummary {
   summary: string;
   requestOmittedBytes: number;
@@ -275,13 +240,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // Every block, its separator and the final newline are counted before the
   // allocation, so no section can push the footer past the ceiling.
   const literals = options.literals ?? [];
-  // A reference can be longer than a short value; reserve for the larger form
-  // before the Carry is cut and its actual offsets are known.
-  const literalDemandValues = options.earlierSummary ? literals.map((literal) => {
-    const reference = carryReference(MAX_SUMMARY_BYTES, literal.value.length);
-    return utf8Bytes(reference) > utf8Bytes(literal.value) ? { ...literal, value: reference } : literal;
-  }) : literals;
-  const literalDemand = utf8Bytes(renderExactValues(literalDemandValues, MAX_LITERALS_SECTION_BYTES));
+  const literalDemand = utf8Bytes(renderExactValues(literals, MAX_LITERALS_SECTION_BYTES));
   const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + (literalDemand ? 1 : 0) + history.length + 1;
   const framingBytes = utf8Bytes(SUMMARY_HEADER) + utf8Bytes(footerBlock) + 2 * (blockCount - 1) + 1;
   if (framingBytes > MAX_SUMMARY_FRAMING_BYTES) {
@@ -303,21 +262,11 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // Keep operational minima first, then exact values, then sampled history.
   const historyMinimum = Math.min(allocation.historyBytes, history.reduce((sum, block) => sum + historyCandidate(block).minimum, 0));
   const literalRoom = allocateSummaryCarry(allocation.historyBytes - historyMinimum, 0, literalDemand, 0, 0).newestBytes;
-  // Only the rendered Carry can replace a value. Refer to its position so the
-  // next compaction can recover the value before that Carry is cut again.
-  const carryBlock = earlierSummary !== undefined ? carriedBlock(earlierSummary, allocation.carryBytes) : "";
-  const needed: ExactValue[] = [], references: ExactValue[] = [];
-  for (const literal of literals) {
-    const offset = locationInCarry(carryBlock, literal.value);
-    if (offset < 0) needed.push(literal);
-    else references.push({ ...literal, value: carryReference(offset, literal.value.length) });
-  }
-  // Actual values take priority: references must not crowd fresh values out.
-  const literalBlock = renderExactValues([...needed, ...references], literalRoom);
+  const literalBlock = renderExactValues(literals, literalRoom);
   const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
   // The literal block must be first: later headings can belong to verbatim user text.
   const blocks: string[] = [SUMMARY_HEADER, literalBlock];
-  blocks.push(carryBlock);
+  if (earlierSummary !== undefined) blocks.push(carriedBlock(earlierSummary, allocation.carryBytes));
   blocks.push(...newest, ...boundedHistory(history, historyRoom), footerBlock);
   // A block with no allocation prints nothing; dropping it leaves no empty separators.
   const summary = `${blocks.filter((block) => block.length > 0).join("\n\n")}\n`;
