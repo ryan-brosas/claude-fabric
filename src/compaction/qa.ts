@@ -5,7 +5,7 @@ import { projectDialogue, recentDialogue } from "./dialogue.ts";
 import type { CompactionEvent } from "./from-claude.ts";
 import { LITERALS_HEADER, renderExactValues, type ExactValue } from "./literals.ts";
 import { projectOutstanding, type Sections } from "./projections.ts";
-import { ASSISTANT_CAVEAT, boundedHistory, protectedBlock, shortAssistantHeading, SUMMARY_SECTIONS, type HistoryBlock, type RenderedSummary } from "./render.ts";
+import { ASSISTANT_CAVEAT, boundedHistory, protectedBlock, shortAssistantHeading, SUMMARY_HEADER, SUMMARY_SECTIONS, type HistoryBlock, type RenderedSummary } from "./render.ts";
 import { compactionQa } from "./verified/generated/compaction-qa.js";
 
 export type QaReason = "original request" | "dialogue" | "exact values" | "open failures" | "last modification" | "recall footer";
@@ -117,6 +117,10 @@ const sectionOf = (summary: string, header: string, outerStart: number, expected
   const start = summary.indexOf(`\n\n${header}\n`, header === LITERALS_HEADER ? 0 : Math.max(0, outerStart - 2));
   if (start < 0) return "";
   const from = start + 2;
+  // These two sections have source-defined positions: exact values are first,
+  // and earlier-user messages are the first protected block after any carry.
+  if (header === LITERALS_HEADER && from !== SUMMARY_HEADER.length + 2) return "";
+  if (header === EARLIER_USERS_HEADER && summary.slice(Math.min(from, outerStart), Math.max(from, outerStart)).trim()) return "";
   // A verbatim selected excerpt can itself contain section-looking text. Such a
   // heading belongs to the excerpt, not to the enclosing summary structure.
   const expectedAt = !expected ? -1 : summary.startsWith(expected, from) ? from : summary.indexOf(expected, from + header.length);
@@ -136,7 +140,7 @@ export const checkQa = (summary: string, plan: QaPlan): { reason?: QaReason; req
   let satisfied = 0;
   // The literal block precedes every outer section. Recalculate only its framing
   // length so a removed literal cannot shift a later probe onto carried text.
-  const literalStart = summary.indexOf(`\n\n${LITERALS_HEADER}\n`);
+  const literalStart = summary.startsWith(`${SUMMARY_HEADER}\n\n${LITERALS_HEADER}\n`) ? SUMMARY_HEADER.length : -1;
   const literalEnd = literalStart < 0 ? -1 : summary.indexOf("\n\n", literalStart + 2);
   const actualLiteralLength = literalStart < 0 ? 0 : (literalEnd < 0 ? summary.length : literalEnd) - literalStart - 2;
   const outerStart = Math.max(0, plan.outerStart + actualLiteralLength - plan.literalLength);
