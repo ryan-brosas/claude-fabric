@@ -21,6 +21,10 @@ test("the section names every program tool and no Pi vocabulary", () => {
   expect(GUIDANCE_TEXT).not.toMatch(/\bpi\b/);
 });
 
+test("the section directs whole-file context reads to Read", () => {
+  expect(GUIDANCE_TEXT).toContain("For full file text in your context, call `Read` directly: program results are bounded.");
+});
+
 test("the section stays under the cap that every turn pays", () => {
   expect(GUIDANCE_TEXT.length).toBeLessThan(GUIDANCE_MAX_CHARS);
 });

@@ -54,6 +54,7 @@ describe("the prompt.compose hook", () => {
     // Nothing the engine composed was rewritten, reordered or dropped.
     expect(result.sections.slice(0, base.length)).toEqual(base);
     expect(result.sections.at(-1)).toEqual({ id: GUIDANCE_SECTION, text: GUIDANCE_TEXT, scope: "session" });
+    expect(result.sections.at(-1)?.text).toContain("For full file text in your context, call `Read` directly: program results are bounded.");
   });
 
   test("adds nothing when the pool has no fabric_exec", async () => {
