@@ -4,7 +4,8 @@
 import { type ClaudeMessage, messageBytes, normalizeMessages } from "./from-claude.ts";
 import { projectWithMetadata } from "./projections.ts";
 import { exactValues } from "./literals.ts";
-import { renderSummary, SUMMARY_HEADER } from "./render.ts";
+import { renderSummaryWithMetadata, SUMMARY_HEADER } from "./render.ts";
+import { EARLIER_USERS_HEADER } from "./bounds.ts";
 import { acceptCut } from "./verified/cut.ts";
 import { noCutVerdict } from "./verified/no-cut.ts";
 
@@ -118,7 +119,7 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
   const addressed = (event: typeof events[number]) => ({ ...event, entryId: source(Number(event.entryId)) });
   const instructions = options.instructions?.trim();
   const requestLines = instructions ? [instructions] : [];
-  const { sections } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed), requestLines);
+  const { sections, userSelection } = projectWithMetadata(summarizedEvents.map(addressed), retainedDialogue.map(addressed), requestLines);
   // Prefer excerpts from messages absent or clipped in the protected user sections.
   const wholeUsers = new Set<string>();
   messages.slice(0, start).forEach((message, index) => {
@@ -127,7 +128,7 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     if (sections.goal.includes(`User [entry ${id}]:\n${message.text}`)
       || sections.dialogue.some((line) => line.includes(`User instruction [entry ${id}]:\n${message.text}`))) wholeUsers.add(id);
   });
-  const summary = renderSummary(sections, {
+  const rendered = renderSummaryWithMetadata(sections, {
     firstEntryId: source(0),
     lastEntryId: source(start - 1),
     lastTimestamp: "",
@@ -136,9 +137,13 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 
+  if (!userSelection.gate.acceptSummary(rendered.summary, rendered.goalBlock, rendered.goalOffset, userSelection.marker, EARLIER_USERS_HEADER)) {
+    throw new Error("fabric: the earlier-user omission notice did not survive rendering");
+  }
+
   return {
     messages: [
-      { role: "user", text: summary, toolUses: [] },
+      { role: "user", text: rendered.summary, toolUses: [] },
       ...messages.slice(start),
     ],
   };

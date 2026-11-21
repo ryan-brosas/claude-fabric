@@ -30,8 +30,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   earlier compaction. If the transcript or join fails, the mod also logs why and carries the earlier
   summary instead. The summary shares a 32 KiB ceiling. The request and recent exchanges have room
   first. Earlier user messages take the room they leave, up to 22 KiB for the section and 4 KiB
-  per message. After them, the dialogue section keeps the closing bytes of up to 64 earlier assistant
-  replies, up to 256 bytes each. The Carry and operational history share the remaining room
+  per message. When more than 64 earlier messages are eligible, one slot keeps the opening message
+  and 63 prefer newer distinct messages, then newer repeats; a later correction can still be omitted,
+  with the section notice naming its source range. After them, the dialogue section keeps the closing
+  bytes of up to 64 earlier assistant replies, up to 256 bytes each. The Carry and operational history share the remaining room
   (`summaryCarry`). When the Carry must shrink, it keeps its start and end and names the middle cut.
 - **A summary keeps a bounded section of exact values.** This intentionally departs from pi-fabric's
   compaction invariant 4, which does not apply regex to prose or tool output. We extract the measured

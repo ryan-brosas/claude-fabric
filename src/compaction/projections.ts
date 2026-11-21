@@ -2,7 +2,7 @@
 import { allocateProtectedRoom, boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, omissionLine,
   protectedBudgets, recentDialogueBytes, requestSectionBytes, sampleAddressed, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
 import { foldFailureLedger } from "./verified/context.ts";
-import { acceptSampleAccounting, shortUserSwap, userBefore } from "./verified/policy.ts";
+import { checkUserSelection, type UserSelectionGate } from "./verified/policy.ts";
 import { earlierAssistantReplies, projectDialogue, recentDialogue } from "./dialogue.ts";
 import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
 
@@ -33,7 +33,7 @@ const MAX_STATUS_LINE = 140;
 const MAX_TRANSCRIPT_LINE = 100;
 const MAX_TRANSCRIPT_CMD = 80;
 // Every earlier user message renders verbatim while it fits. Above the count
-// bound, the newest copy of each distinct message wins, then newer repeats.
+// bound, reserve the opening and prefer newest distinct messages, then repeats.
 export const MAX_EARLIER_USERS = 64;
 export const MAX_USER_MESSAGE_BYTES = 4096;
 export const MAX_FILES_PER_KIND = 24;
@@ -53,6 +53,7 @@ export interface ProjectionOmittedCounts {
 export interface ProjectionResult {
   sections: Sections;
   omittedCounts: ProjectionOmittedCounts;
+  userSelection: { gate: UserSelectionGate; marker: string };
 }
 
 interface ProjectedSection {
@@ -166,31 +167,21 @@ export const earlierUserItem = (user: { entryId: string; text: string }, maxByte
 
 // Earlier user messages are the user's own words, kept verbatim and in order.
 // They are evidence of what was asked, not an inferred active mandate.
-const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>, maxBytes: number): ProjectedSection => {
+const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>, maxBytes: number): ProjectedSection & { gate: UserSelectionGate; marker: string } => {
   const users = events.flatMap((event) => event.kind === "user" && !protectedUsers.has(event.entryId) && event.text.trim()
-    ? [{ event, bytes: utf8Bytes(event.text) }] : []);
+    ? [{ event }] : []);
   const last = new Map(users.map(({ event }, index) => [event.text, index]));
   const ranked = users.map((user, index) => ({ ...user, index, distinct: last.get(user.event.text) === index }));
-  ranked.sort((a, b) => userBefore(a.distinct, b.distinct, a.index, b.index) ? -1
-    : userBefore(b.distinct, a.distinct, b.index, a.index) ? 1 : 0);
-  const chosen = ranked.slice(0, MAX_EARLIER_USERS);
-  // Under byte pressure reserve one slot for a shorter omitted statement,
-  // without displacing a distinct message for a repeat.
-  const slot = chosen.at(-1);
-  if (slot && ranked.length > MAX_EARLIER_USERS) {
-    const candidate = ranked.slice(MAX_EARLIER_USERS).filter((item) => item.distinct === slot.distinct)
-      .reduce<(typeof ranked)[number] | undefined>((best, item) => !best || item.bytes < best.bytes ? item : best, undefined);
-    const pressure = chosen.reduce((sum, item) => sum + item.bytes, 0) > maxBytes;
-    if (candidate && shortUserSwap(pressure, true, candidate.bytes, slot.bytes)) chosen[chosen.length - 1] = candidate;
-  }
-  const kept = new Set(chosen.map(({ index }) => index));
+  ranked.sort((a, b) => Number(b.distinct) - Number(a.distinct) || b.index - a.index);
+  const chosen = users.length > MAX_EARLIER_USERS
+    ? [0, ...ranked.filter(({ index }) => index !== 0).slice(0, MAX_EARLIER_USERS - 1).map(({ index }) => index)]
+    : ranked.map(({ index }) => index);
+  const kept = new Set(chosen);
+  const gate = checkUserSelection(users.map(({ event }) => event.text), kept);
   const omitted = users.filter((_, index) => !kept.has(index));
-  if (!acceptSampleAccounting(users.length, kept.size, omitted.length, MAX_EARLIER_USERS)) {
-    throw new Error("User sample failed conservation/bound verification");
-  }
   // Omitted entries can be interleaved with kept ones, so the endpoints name
   // the range containing omissions, not a claim that every entry in it was lost.
-  const marker = omitted.length ? `${omissionLine(omitted.length, omitted[0]?.event.entryId, omitted.at(-1)?.event.entryId, "user messages")} (not necessarily consecutive); later directives may be omitted` : "";
+  const marker = gate.noticeRequired ? `${omissionLine(gate.omitted, omitted[0]?.event.entryId, omitted.at(-1)?.event.entryId, "user messages")} (not necessarily consecutive); later directives may be omitted` : "";
   const selected = users.filter((_, index) => kept.has(index));
   const items = selected.map(({ event }) => earlierUserItem(event));
   const header = marker ? `${EARLIER_USERS_HEADER}\n${marker}` : EARLIER_USERS_HEADER;
@@ -203,7 +194,7 @@ const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<stri
       items[index] = earlierUserItem(event, bodyBytes);
     });
   }
-  return { lines: marker ? [marker, ...items] : items, omitted: omitted.length };
+  return { lines: marker ? [marker, ...items] : items, omitted: gate.omitted, gate, marker };
 };
 
 // [Files And Changes] uses only successful structural operations. Writes are
@@ -555,6 +546,7 @@ export const projectWithMetadata = (
       status: projectStatus(events),
       transcript: transcript.lines,
     },
+    userSelection: { gate: goal.gate, marker: goal.marker },
     omittedCounts: {
       goal: goal.omitted,
       dialogueBytes: dialogue.omittedBytes,

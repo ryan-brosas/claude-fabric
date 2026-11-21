@@ -176,6 +176,8 @@ const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
 
 export interface RenderedSummary {
   summary: string;
+  goalBlock: string;
+  goalOffset: number;
   requestOmittedBytes: number;
   dialogueOmittedBytes: number;
 }
@@ -187,6 +189,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   let requestOmittedBytes = 0;
   let dialogueOmittedBytes = 0;
   let goalBytes = 0;
+  let goalBlock = "";
   const recentItems = sections.dialogue.map(shortAssistantHeading);
   const olderItems = sections.earlierAssistantReplies.map(shortAssistantHeading);
   const caveat = [...recentItems, ...olderItems].some((item) => item.startsWith(SHORT_ASSISTANT_HEADING))
@@ -208,7 +211,8 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
         // even when the renderer must reduce the projected block again.
         const marker = lines[0]?.startsWith("… omitted ") && lines[0].includes(" user messages; source entries ") ? lines[0] : "";
         dialogueOmittedBytes += protect(marker ? `${header}\n${marker}` : header, marker ? lines.slice(1) : lines, goalBudget);
-        goalBytes = utf8Bytes(newest[newest.length - 1]!);
+        goalBlock = newest[newest.length - 1]!;
+        goalBytes = utf8Bytes(goalBlock);
       }
     } else if (key === "dialogue") {
       if (lines.length > 0) {
@@ -270,13 +274,14 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // The literal block must be first: later headings can belong to verbatim user text.
   const blocks: string[] = [SUMMARY_HEADER, literalBlock];
   if (earlierSummary !== undefined) blocks.push(carriedBlock(earlierSummary, allocation.carryBytes));
+  const goalOffset = blocks.filter((block) => block.length > 0).join("\n\n").length + 2;
   blocks.push(...newest, ...boundedHistory(history, historyRoom), footerBlock);
   // A block with no allocation prints nothing; dropping it leaves no empty separators.
   const summary = `${blocks.filter((block) => block.length > 0).join("\n\n")}\n`;
   if (utf8Bytes(summary) > MAX_SUMMARY_BYTES) {
     throw new Error("fabric: the summary allocation exceeded its byte ceiling");
   }
-  return { summary, requestOmittedBytes, dialogueOmittedBytes };
+  return { summary, goalBlock, goalOffset, requestOmittedBytes, dialogueOmittedBytes };
 };
 
 export const renderSummary = (sections: Sections, options: RenderOptions): string =>
