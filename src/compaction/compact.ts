@@ -8,6 +8,7 @@ import { renderSummaryWithMetadata, SUMMARY_HEADER } from "./render.ts";
 import { EARLIER_USERS_HEADER } from "./bounds.ts";
 import { acceptCut } from "./verified/cut.ts";
 import { noCutVerdict } from "./verified/no-cut.ts";
+import { checkQa, qaPlan } from "./qa.ts";
 
 export const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
 const SKIP_NOTHING = "fabric: nothing to compact";
@@ -23,6 +24,8 @@ export interface CompactOptions {
 export type CompactResult =
   | { messages: ClaudeMessage[] }
   | { skip: string }
+  /** A source-derived QA check refused the candidate summary. */
+  | { qa: string }
   /** Over the budget with no prompt to cut at (one long turn): core's compactor, which can cut inside a turn, takes it. */
   | { core: string };
 
@@ -128,18 +131,24 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     if (sections.goal.includes(`User [entry ${id}]:\n${message.text}`)
       || sections.dialogue.some((line) => line.includes(`User instruction [entry ${id}]:\n${message.text}`))) wholeUsers.add(id);
   });
+  const literals = exactValues(messages, start, earlierSummary, summaryIndexes, wholeUsers, [...sections.goal, ...sections.dialogue].join("\n\n"));
+  const sourceEvents = summarizedEvents.map(addressed);
+  const sourceRetained = retainedDialogue.map(addressed);
   const rendered = renderSummaryWithMetadata(sections, {
     firstEntryId: source(0),
     lastEntryId: source(start - 1),
     lastTimestamp: "",
     requestLines,
-    literals: exactValues(messages, start, earlierSummary, summaryIndexes, wholeUsers, [...sections.goal, ...sections.dialogue].join("\n\n")),
+    literals,
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 
   if (!userSelection.gate.acceptSummary(rendered.summary, rendered.goalBlock, rendered.goalOffset, userSelection.marker, EARLIER_USERS_HEADER)) {
     throw new Error("fabric: the earlier-user omission notice did not survive rendering");
   }
+
+  const checked = checkQa(rendered.summary, qaPlan(sourceEvents, sourceRetained, sections, literals, rendered.qaBudgets));
+  if (checked.reason) return { qa: `fabric: summary QA refused: ${checked.reason}` };
 
   return {
     messages: [

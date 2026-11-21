@@ -50,6 +50,11 @@ export const register: Register = (on, options) => {
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
     const carried = compact(e.messages, { instructions: e.instructions });
+    // Refuse a bad initial/carry candidate without delegating it to core.
+    if ("qa" in carried) {
+      try { $.ui.log(carried.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
+      return { skip: carried.qa };
+    }
     // One long turn has no prompt to cut at; core can cut inside it. An automatic
     // skip also goes to core: our text projection does not count media blocks.
     if ("core" in carried || (e.trigger === "auto" && "skip" in carried)) return next(e);
@@ -78,6 +83,7 @@ export const register: Register = (on, options) => {
         const problem = outcomeConservationProblem(e.messages, rebuilt);
         if (problem) throw new Error(problem);
         const result = compact(rebuilt, { instructions: e.instructions });
+        if ("qa" in result) throw new Error(result.qa);
         if (!("messages" in result)) throw new Error("rebuilt input did not produce a summary");
         // A row converted from the transcript has no engine handle, so core would rebuild it from
         // text and tool blocks only and lose an image. Keep such a tail out of the result.

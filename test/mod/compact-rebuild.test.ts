@@ -335,6 +335,32 @@ test("the active chain crosses a core boundary through logicalParentUuid", async
   });
 });
 
+test("a rebuilt candidate's QA refusal logs its reason and returns the carried summary", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "qa-refusal.jsonl");
+    const first = message("user", "Original request.", "first");
+    const longPath = `src/${"p".repeat(1200)}.txt`;
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "assistant", uuid: "call", parentUuid: "first", message: { content: [
+        { type: "tool_use", id: "edit", name: "Edit", input: { file_path: longPath } }] } },
+      { type: "user", uuid: "answer", parentUuid: "call", message: { content: [
+        { type: "tool_result", tool_use_id: "edit", content: "permission denied", is_error: true }] } },
+      row(joinMessage, "answer"), row(last, "join")]);
+    const event: Event = { trigger: "manual", messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const carried = compact(event.messages);
+    expect("messages" in carried).toBe(true);
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(result).toEqual(carried);
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("summary QA refused: last modification");
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
 const fallbackEvent = (): Event => ({ trigger: "manual", messages: [
   message("user", "[Fabric summary]\n\nPRESERVED-CARRY-FACT", "summary"),
   message("user", `Some earlier work ${"a".repeat(5000)}`, "older"),
