@@ -89,6 +89,42 @@ test("the fallback stays under the real result cap, not 28 chars over it", async
   expect(text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
 });
 
+test("a failed save still tells the model to use top-level Read without claiming a saved file", async () => {
+  const text = await outputBudget({
+    text: "start-" + "x".repeat(31_000) + "-end",
+    max: MAX_RESULT_CHARS,
+    fallback: bound,
+    write: async () => { throw new Error("disk full"); },
+  });
+  expect(text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+  expect(text.includes("Top-level Read returns full files; call it, not programs.")).toBe(true);
+  expect(text).toContain("chars cut from the middle");
+  expect(text).not.toContain("saved to:");
+});
+
+test("a fallback that fits beside the hint stays whole", async () => {
+  const text = await outputBudget({
+    text: "x".repeat(31_000),
+    max: MAX_RESULT_CHARS,
+    fallback: () => "short fallback",
+    write: async () => { throw new Error("disk full"); },
+  });
+  expect(text).toBe("short fallback\nTop-level Read returns full files; call it, not programs.");
+});
+
+test("a long saved path and the Read hint both fit under the real result cap", async () => {
+  const path = "/tmp/" + "p".repeat(10_000) + "/result.txt";
+  const text = await outputBudget({
+    text: "x".repeat(31_000),
+    max: MAX_RESULT_CHARS,
+    fallback: bound,
+    write: async () => path,
+  });
+  expect(text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+  expect(text.includes("Top-level Read returns full files; call it, not programs.")).toBe(true);
+  expect(text.endsWith(path + "]")).toBe(true);
+});
+
 test("writes a private file under CLAUDE_PLUGIN_DATA holding the whole result", async () => {
   const base = await mkdtemp(join(tmpdir(), "fabric-data-"));
   const previous = process.env.CLAUDE_PLUGIN_DATA;

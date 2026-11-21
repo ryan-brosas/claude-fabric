@@ -12,7 +12,9 @@ import { acceptBudget } from "./verified/output-budget.ts";
 
 export type Writer = (content: string) => Promise<string>;
 
-/** How many chars of the text fit beside the saved-to line. One char keeps a marker possible. */
+const READ_HINT = "\nTop-level Read returns full files; call it, not programs.";
+
+/** How many chars of the text fit beside the suffix. One char keeps a marker possible. */
 export function bodyBudget(max: number, suffixLength: number): number {
   return Math.max(1, max - suffixLength);
 }
@@ -61,8 +63,8 @@ export interface BudgetOptions {
 }
 
 /**
- * The result cut to the cap: whole when it fits, otherwise the middle cut out and a last line
- * naming the private file that holds all of it. Never longer than max.
+ * The result cut to the cap: whole when it fits, otherwise a Read hint and, when saved, a last
+ * line naming the private file that holds all of it. Never longer than max.
  */
 export async function outputBudget(options: BudgetOptions): Promise<string> {
   const { text, max, fallback } = options;
@@ -80,21 +82,23 @@ export async function outputBudget(options: BudgetOptions): Promise<string> {
     } catch {
       path = undefined;
     }
+    const ending = READ_HINT + (path === undefined ? "" : savedLine(text.length, path));
+    suffix = ending.length;
+    const room = bodyBudget(max, suffix);
+    let body: string;
     if (path === undefined) {
-      // The injected cut appends its own marker past the cap, so the stage keeps the last word: the
-      // fallback stands while it fits, and the middle cut (already bounded) takes over when it does not.
-      const cut = fallback(text, max);
+      // The kernel cut appends its marker past its budget. Keep it when it fits, otherwise use the
+      // bounded middle cut, leaving room for the hint on either path.
+      const cut = fallback(text, room);
       fallbackLength = cut.length;
-      out = cut.length <= max ? cut : cutMiddle(text, max);
+      body = cut.length <= room ? cut : cutMiddle(text, room);
     } else {
       wrote = true;
-      const saved = savedLine(text.length, path);
-      suffix = saved.length;
-      // The body budget has a floor of one char, so a cap too small for both keeps the path: it is
-      // the only part that cannot be recovered from anywhere else.
-      const kept = cutMiddle(text, bodyBudget(max, suffix)) + saved;
-      out = kept.length > max ? saved.slice(-max) : kept;
+      body = cutMiddle(text, room);
     }
+    // If the cap cannot hold the suffix, keep its tail: on the saved path the file path is last.
+    const kept = body + ending;
+    out = kept.length > max ? ending.slice(-max) : kept;
   }
   // The length arithmetic is the compiled machine's (src/stages/verified/output-budget.ts, with its
   // laws in proofs/output-budget.ts): a result the machine does not predict is a bug in this stage,

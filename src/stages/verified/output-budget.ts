@@ -10,9 +10,9 @@ export interface BudgetFacts {
   text: number;
   /** The cap the model sees; at least one, or no proof covers the call. */
   max: number;
-  /** The length of the line naming the saved file; 0 when nothing was saved. */
+  /** The hint and, when written, the line naming the saved file; 0 when the text fits. */
   suffix: number;
-  /** The length of the kernel's own cut; 0 when it did not run. */
+  /** The length of the kernel's own cut at the remaining body budget; 0 when it did not run. */
   fallback: number;
   /** The whole text reached a file. */
   wrote: boolean;
@@ -20,13 +20,13 @@ export interface BudgetFacts {
 
 /** The lengths the machine proves for those facts. */
 export interface BudgetLengths {
-  /** The middle-cut body under the saved-to line. */
+  /** The middle-cut body beside the suffix. */
   body: number;
   /** The room that body may use. */
   bodyBudget: number;
-  /** The middle cut at the whole cap. */
+  /** The middle cut at the body budget. */
   cut: number;
-  /** The saved path's result before the cap takes its last word. */
+  /** The saved path's result after the cap takes its last word. */
   kept: number;
   /** The result's length. */
   out: number;
