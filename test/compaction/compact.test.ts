@@ -259,16 +259,24 @@ describe("compact: what the summary loses today", () => {
     // Observe the actual extractor at every reachable countdown and trigger bit.
     // The future markers reveal how many following lines remain screened.
     const edges = Array.from({ length: 9 }, (_, pending) => [false, true].map((trigger) => ({ pending, trigger }))).flat();
-    const agreement = clean.compare(({ pending, trigger }) => {
+    const reference = ({ pending, trigger }: { pending: number; trigger: boolean }) => {
       const before = pending ? ["password:", ...Array(8 - pending).fill("ordinary")] : [];
       const current = trigger ? "password: CURRENT-ab12" : "CURRENT-ab12";
       const future = Array.from({ length: 8 }, (_, index) => `FUTURE-${index}ab12`);
       const values = exactValues([reply([...before, current, ...future].join("\n"), "source")], 1).map(({ value }) => value);
       return { blocked: values.includes("CURRENT-ab12") ? 0 : 1, next: future.filter((value) => !values.includes(value)).length };
-    }, { edges, trials: 0 });
+    };
+    const agreement = clean.compare(reference, { edges, trials: 0 });
     expect(agreement.failure).toBeUndefined();
-    expect(agreement.checked).toBe(36); // 18 inputs, two output fields each.
-    console.log(`credential screen extractor comparison: ${agreement.checked} fields across ${edges.length} inputs`);
+    expect(agreement.checked).toBe(18); // 18 input cases; both returned fields are compared.
+    for (const field of ["blocked", "next"] as const) {
+      const mismatch = clean.compare((input) => {
+        const actual = reference(input);
+        return { ...actual, [field]: actual[field] + 1 };
+      }, { edges, trials: 0 });
+      expect(mismatch.failure).toContain(`${field} is `);
+    }
+    console.log(`credential screen extractor comparison: ${agreement.checked} inputs, both fields checked`);
   });
 
   test("does not promote multiline credentials", () => {
