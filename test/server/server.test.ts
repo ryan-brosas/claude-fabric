@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { MAX_RESULT_CHARS } from "../../src/kernel/result.ts";
@@ -88,6 +88,41 @@ test("history calls cross the real server and expand the fixture token", async (
   } finally {
     await other.close();
     await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("a cut Read result tells the model to use top-level Read for whole files", async () => {
+  const hint = "This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.";
+  const file = join(work, "long-guide.txt");
+  await Bun.write(file, ("x".repeat(99) + "\n").repeat(310));
+  const result = await call({ code: 'return await Read("long-guide.txt");' });
+  const saved = /saved to: (.+)\]$/.exec(result.text)?.[1];
+  try {
+    expect(result.isError).toBe(false);
+    expect(result.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+    expect(result.text.includes(hint)).toBe(true);
+    expect(saved).toBeDefined();
+    expect((await Bun.file(saved!).text()).length).toBeGreaterThan(31_000);
+    const small = await call({ code: 'return await Read("a.txt");' });
+    expect(small.isError).toBe(false);
+    expect(small.text.includes(hint)).toBe(false);
+  } finally {
+    if (saved) await rm(dirname(saved), { recursive: true, force: true });
+    await rm(file, { force: true });
+  }
+});
+
+test("a cut command result points to a saved file for top-level Read", async () => {
+  const result = await call({ code: 'return (await Bash("printf x%.0s {1..31000}")).output;' });
+  const saved = /saved to: (.+)\]$/.exec(result.text)?.[1];
+  try {
+    expect(result.isError).toBe(false);
+    expect(result.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
+    expect(result.text.includes("This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.")).toBe(true);
+    expect(saved).toBeDefined();
+    expect(await Bun.file(saved!).text()).toBe("x".repeat(31_000));
+  } finally {
+    if (saved) await rm(dirname(saved), { recursive: true, force: true });
   }
 });
 

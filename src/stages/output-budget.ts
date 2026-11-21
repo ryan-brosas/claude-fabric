@@ -8,11 +8,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acceptBudget } from "./verified/output-budget.ts";
+import { acceptBudget, budgetLengths } from "./verified/output-budget.ts";
 
 export type Writer = (content: string) => Promise<string>;
 
-/** How many chars of the text fit beside the saved-to line. One char keeps a marker possible. */
+const READ_HINT = "\nThis is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.";
+
+/** How many chars of the text fit beside the suffix. One char keeps a marker possible. */
 export function bodyBudget(max: number, suffixLength: number): number {
   return Math.max(1, max - suffixLength);
 }
@@ -61,8 +63,8 @@ export interface BudgetOptions {
 }
 
 /**
- * The result cut to the cap: whole when it fits, otherwise the middle cut out and a last line
- * naming the private file that holds all of it. Never longer than max.
+ * The result cut to the cap: whole when it fits, otherwise a Read hint where it fits and, when
+ * saved, a last line naming the private file. A fitting fallback takes precedence over the hint.
  */
 export async function outputBudget(options: BudgetOptions): Promise<string> {
   const { text, max, fallback } = options;
@@ -81,25 +83,27 @@ export async function outputBudget(options: BudgetOptions): Promise<string> {
       path = undefined;
     }
     if (path === undefined) {
-      // The injected cut appends its own marker past the cap, so the stage keeps the last word: the
-      // fallback stands while it fits, and the middle cut (already bounded) takes over when it does not.
       const cut = fallback(text, max);
       fallbackLength = cut.length;
-      out = cut.length <= max ? cut : cutMiddle(text, max);
+      // The compiled machine chooses whether the hint fits beside the fallback. A fitting
+      // fallback wins; otherwise the bounded middle cut gets the remaining room.
+      const facts = { text: text.length, max, suffix, hint: READ_HINT.length, fallback: fallbackLength, wrote };
+      const ending = budgetLengths(facts).fallbackSuffix === 0 ? "" : READ_HINT;
+      const body = cut.length <= max ? cut : cutMiddle(text, bodyBudget(max, ending.length));
+      out = body + ending;
     } else {
       wrote = true;
-      const saved = savedLine(text.length, path);
-      suffix = saved.length;
-      // The body budget has a floor of one char, so a cap too small for both keeps the path: it is
-      // the only part that cannot be recovered from anywhere else.
-      const kept = cutMiddle(text, bodyBudget(max, suffix)) + saved;
-      out = kept.length > max ? saved.slice(-max) : kept;
+      const ending = READ_HINT + savedLine(text.length, path);
+      suffix = ending.length;
+      const kept = cutMiddle(text, bodyBudget(max, suffix)) + ending;
+      // If the cap cannot hold the suffix, its tail keeps the file path.
+      out = kept.length > max ? ending.slice(-max) : kept;
     }
   }
   // The length arithmetic is the compiled machine's (src/stages/verified/output-budget.ts, with its
   // laws in proofs/output-budget.ts): a result the machine does not predict is a bug in this stage,
   // so it fails here instead of reaching the model.
-  if (!acceptBudget({ text: text.length, max, suffix, fallback: fallbackLength, wrote }, out.length)) {
+  if (!acceptBudget({ text: text.length, max, suffix, hint: READ_HINT.length, fallback: fallbackLength, wrote }, out.length)) {
     throw new Error("fabric: the result budget failed its verified check");
   }
   return out;
