@@ -3,6 +3,7 @@
 // The registered kernels. Each module is proved, refused in every broken
 // variant, cross-checked against its builders, and compiled to
 // `<out>/<module>.js`.
+import { BOUNDS_BUGS, boundsKernels } from "./bounds.ts";
 import { BRIDGE_BINDING_BUGS, bridgeBindingKernels } from "./bridge-binding.ts";
 import { BUILTIN_ACCESS_BUGS, builtinAccessKernels } from "./builtin-access.ts";
 import { CALL_TIMEOUT_BUGS, callTimeoutKernels } from "./call-timeout.ts";
@@ -44,6 +45,7 @@ const mod = "src/mod/verified/generated";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const modules: readonly KernelModule[] = [
+  { stem: "bounds", source: "proofs/bounds.ts", out: compaction, kernels: boundsKernels as any, bugs: BOUNDS_BUGS },
   { stem: "policy", source: "proofs/policy.ts", out: compaction, kernels: policyKernels as any, bugs: POLICY_BUGS },
   { stem: "context", source: "proofs/context.ts", out: compaction, kernels: contextKernels as any, bugs: CONTEXT_BUGS },
   { stem: "cut", source: "proofs/cut.ts", out: compaction, kernels: cutKernels as any, bugs: CUT_BUGS },
