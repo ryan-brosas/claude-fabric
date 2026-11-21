@@ -3,6 +3,7 @@ import { fromTranscript, rebuildTranscript } from "../../src/compaction/from-tra
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { normalizeMessages } from "../../src/compaction/from-claude.ts";
+import { projectOutstanding } from "../../src/compaction/projections.ts";
 
 test("transcript rows preserve Claude text, tool uses, results and errors for the compactor", () => {
   const user = fromTranscript({ type: "user", uuid: "u1", message: { content: "Read the note." } });
@@ -58,7 +59,7 @@ const resultRow = (uuid: string, parentUuid: string, id: string, text: string, i
     { type: "tool_result", tool_use_id: id, content: text, is_error: isError },
   ] } });
 
-test("restores current sibling result rows in order with addresses, multiplicity and error status", () => {
+test("refuses repeated outcomes but restores one row per sibling in order with addresses and errors", () => {
   // Separate assistant rows share a message id, as in the recorded parallel call.
   const a = callMessage("copy-a", "a"), c = callMessage("copy-c", "c"), b = callMessage("copy-b", "b");
   const first = resultMessage("sibling-a1", "a", "FAILED", true);
@@ -74,25 +75,117 @@ test("restores current sibling result rows in order with addresses, multiplicity
     resultRow("sibling-c", "call-c", "c", "OTHER"),
     resultRow("joined", "call-b", "b", "ON-CHAIN"), promptRow("last", "joined"));
   const rebuilt = rebuildTranscript(current, text);
-  expect(rebuilt.map((message) => message.handle ?? message.uuid)).toEqual([
-    "start", "call-a", "call-c", "call-b", "sibling-a1", "sibling-a2", "sibling-c", "joined", "last",
+  expect(rebuilt.some((message) => message.handle === "sibling-a1" || message.handle === "sibling-c")).toBe(false);
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
+
+  // The narrowed rule admits exactly one missing effective outcome per call.
+  const oneEach = [summary, a, c, b, first, second, joined, last];
+  const restored = rebuildTranscript(oneEach, text);
+  expect(restored.map((message) => message.handle ?? message.uuid)).toEqual([
+    "start", "call-a", "call-c", "call-b", "sibling-a1", "sibling-c", "joined", "last",
   ]);
-  expect(rebuilt.slice(4, 7)).toEqual([first, duplicate, second]);
-  expect(rebuilt.slice(4, 7)).toHaveLength(3);
+  expect(restored.slice(4, 6)).toEqual([first, second]);
+  expect(restored.slice(4, 6)).toHaveLength(2);
+  expect(restored[4]).toBe(first);
+  expect(restored[4]!.toolResults![0]!.isError).toBe(true);
+  expect(outcomeConservationProblem(oneEach, restored)).toBeUndefined();
+});
+
+test("restores a matching inline sibling while leaving an earlier non-deficit result alone", () => {
+  const earlier = callMessage("copy-earlier", "earlier");
+  earlier.toolUses[0] = { ...earlier.toolUses[0]!, text: "EARLIER" };
+  const earlierResult = resultMessage("copy-earlier-result", "earlier", "EARLIER");
+  const a = callMessage("copy-a", "a"), b = callMessage("copy-b", "b");
+  a.toolUses[0] = { ...a.toolUses[0]!, text: "FAILED", isError: true };
+  b.toolUses[0] = { ...b.toolUses[0]!, text: "OK" };
+  const sibling = resultMessage("sibling-a", "a", "FAILED", true);
+  const joined = resultMessage("joined", "b", "OK");
+  const current = [summary, earlier, earlierResult, a, b, sibling, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), callRow("call-earlier", "start", "earlier", "earlier-group"),
+    resultRow("result-earlier", "call-earlier", "earlier", "EARLIER"),
+    callRow("call-a", "result-earlier", "a"), callRow("call-b", "call-a", "b"),
+    resultRow("sibling-a", "call-a", "a", "FAILED", true),
+    resultRow("joined", "call-b", "b", "OK"), promptRow("last", "joined"));
+  const rebuilt = rebuildTranscript(current, text);
+  expect(rebuilt.map((message) => message.handle ?? message.uuid)).toEqual([
+    "start", "call-earlier", "result-earlier", "call-a", "call-b", "sibling-a", "joined", "last",
+  ]);
+  expect(rebuilt.find((message) => message.handle === "sibling-a")).toBe(sibling);
+  expect(rebuilt.some((message) => message.handle === "copy-earlier-result")).toBe(false);
+  const outcomes = (messages: ClaudeMessage[]) => normalizeMessages(messages).flatMap((event) =>
+    event.kind === "toolResult" ? [{ id: event.toolCallId, error: event.isError, text: event.text }] : []);
+  const expected = outcomes(current), actual = outcomes(rebuilt);
+  expect(actual).toHaveLength(expected.length);
+  expect(actual).toEqual(expected);
   expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
 });
 
-test("restores an inline-only outcome on the unique active-chain call", () => {
+test("an earlier call with excess raw outcomes is left alone when restoring another call", () => {
+  const earlier = callMessage("copy-earlier", "earlier");
+  earlier.toolUses[0] = { ...earlier.toolUses[0]!, text: "EARLIER" };
+  const earlierResult = resultMessage("copy-earlier-result", "earlier", "EARLIER");
+  const a = callMessage("copy-a", "a"), b = callMessage("copy-b", "b");
+  const sibling = resultMessage("sibling-a", "a", "A");
+  const joined = resultMessage("joined", "b", "B");
+  const current = [summary, earlier, earlierResult, a, b, sibling, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), callRow("call-earlier", "start", "earlier", "earlier-group"),
+    resultRow("result-earlier1", "call-earlier", "earlier", "EARLIER"),
+    resultRow("result-earlier2", "result-earlier1", "earlier", "EARLIER"),
+    callRow("call-a", "result-earlier2", "a"), callRow("call-b", "call-a", "b"),
+    resultRow("sibling-a", "call-a", "a", "A"), resultRow("joined", "call-b", "b", "B"), promptRow("last", "joined"));
+  const rebuilt = rebuildTranscript(current, text);
+  expect(rebuilt.find((message) => message.handle === "sibling-a")).toBe(sibling);
+  expect(rebuilt.some((message) => message.handle === "copy-earlier-result")).toBe(false);
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "earlier")).toHaveLength(2);
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+});
+
+test.each([
+  { inline: { text: "WRONG", isError: true as const }, rowText: "FAILED", rowError: true },
+  { inline: { text: "FAILED", isError: true as const }, rowText: "FAILED", rowError: false },
+])("a deficient inline outcome differing from its row is refused: $inline / $rowError", ({ inline, rowText, rowError }) => {
+  const a = callMessage("copy-a", "a"), b = callMessage("copy-b", "b");
+  a.toolUses[0] = { ...a.toolUses[0]!, ...inline };
+  const sibling = resultMessage("sibling-a", "a", rowText, rowError);
+  const joined = resultMessage("joined", "b", "OK");
+  const current = [summary, a, b, sibling, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), callRow("call-a", "start", "a"),
+    callRow("call-b", "call-a", "b"), resultRow("sibling-a", "call-a", "a", rowText, rowError),
+    resultRow("joined", "call-b", "b", "OK"), promptRow("last", "joined"));
+  const rebuilt = rebuildTranscript(current, text);
+  expect(rebuilt.some((message) => message.handle === "sibling-a")).toBe(false);
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
+});
+
+test.each([{ inlineExit: 0, rowExit: 1 }, { inlineExit: 1, rowExit: undefined }])(
+  "a deficient Bash inline outcome cannot hide a different exit-derived row error: $inlineExit/$rowExit", ({ inlineExit, rowExit }) => {
+  const bash = { tool_use_id: "a", tool: "Bash", input: { command: "check" } };
+  const a: ClaudeMessage = { role: "assistant", text: "", handle: "copy-a",
+    toolUses: [{ ...bash, text: "DONE", result: { exitCode: inlineExit } }] };
+  const b = callMessage("copy-b", "b");
+  const sibling = resultMessage("sibling-a", "a", "DONE");
+  if (rowExit !== undefined) sibling.toolResults![0]!.result = { exitCode: rowExit };
+  const joined = resultMessage("joined", "b", "OK");
+  const current = [summary, a, b, sibling, joined, userMessage("last", "next")];
+  const bashRow = { type: "assistant", uuid: "call-a", parentUuid: "start", message: { id: "parallel", content: [
+    { type: "tool_use", id: "a", name: "Bash", input: bash.input },
+  ] } };
+  const text = transcript(promptRow("start", null), bashRow, callRow("call-b", "call-a", "b"),
+    resultRow("sibling-a", "call-a", "a", "DONE"), resultRow("joined", "call-b", "b", "OK"), promptRow("last", "joined"));
+  const rebuilt = rebuildTranscript(current, text);
+  expect(rebuilt.some((message) => message.handle === "sibling-a")).toBe(false);
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
+});
+
+test("an inline-only deficit without a result row is refused", () => {
   const call = callMessage("copy-a", "a");
   call.toolUses[0] = { ...call.toolUses[0]!, text: "INLINE-ONLY", isError: true };
   const joined = userMessage("joined", "next");
   const current = [summary, call, joined];
   const rebuilt = rebuildTranscript(current, transcript(promptRow("start", null), callRow("call-a", "start", "a"),
     promptRow("joined", "call-a")));
-  expect(rebuilt.find((message) => message.uuid === "call-a")?.toolUses[0]).toMatchObject({
-    tool_use_id: "a", text: "INLINE-ONLY", isError: true,
-  });
-  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.find((message) => message.uuid === "call-a")?.toolUses[0]).toEqual(toolUse("a"));
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
 });
 
 test("an outcome with no active-chain call is not restored", () => {
@@ -129,7 +222,7 @@ test("an ambiguous repeated active-chain call is not used to restore a sibling",
   expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
 });
 
-test("a restored sibling stays after an earlier result already in the chain", () => {
+test("a nonterminal group with an earlier raw-chain result is refused", () => {
   const a = callMessage("copy-a", "a"), b = callMessage("copy-b", "b");
   const earlier = resultMessage("copy-result-a", "a", "FIRST");
   const sibling = resultMessage("sibling-b", "b", "SECOND", true);
@@ -139,9 +232,10 @@ test("a restored sibling stays after an earlier result already in the chain", ()
     callRow("call-b", "call-a", "b"), resultRow("result-a", "call-b", "a", "FIRST"),
     resultRow("sibling-b", "call-b", "b", "SECOND", true), promptRow("joined", "result-a")));
   expect(rebuilt.map((message) => message.handle ?? message.uuid)).toEqual([
-    "start", "call-a", "call-b", "result-a", "sibling-b", "joined",
+    "start", "call-a", "call-b", "result-a", "joined",
   ]);
-  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.some((message) => message.handle === "sibling-b")).toBe(false);
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
 });
 
 test("restoring a shortage cannot hide a different conflicting outcome", () => {
@@ -165,6 +259,73 @@ test("reused sibling addresses are ambiguous and are not restored", () => {
     resultRow("same-address", "call-a", "a", "ANSWER"), promptRow("joined", "call-a")));
   expect(rebuilt.some((message) => message.handle === "same-address")).toBe(false);
   expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
+});
+
+const editUse = (id: string) => ({ tool_use_id: id, tool: "Edit", input: { file_path: "same.txt" } });
+const editCall = (handle: string, id: string, outcome?: { text: string; isError?: true }): ClaudeMessage =>
+  ({ role: "assistant", text: "", toolUses: [{ ...editUse(id), ...outcome }], handle });
+const editRow = (uuid: string, parentUuid: string, id: string) =>
+  ({ type: "assistant", uuid, parentUuid, message: { id: "parallel", content: [
+    { type: "tool_use", id, name: "Edit", input: { file_path: "same.txt" } },
+  ] } });
+
+// A refused reconstruction is safe; an accepted one must preserve the effective
+// outcome sequence, multiplicity and whether an exact retry resolves a failure.
+function expectSameOutcomesOrRefused(current: ClaudeMessage[], rebuilt: ClaudeMessage[]): void {
+  const problem = outcomeConservationProblem(current, rebuilt);
+  if (problem) {
+    expect(problem).toBe("missing tool outcome in rebuilt input");
+    return;
+  }
+  const outcomes = (messages: ClaudeMessage[]) => normalizeMessages(messages).flatMap((event) =>
+    event.kind === "toolResult" ? [{ id: event.toolCallId, error: event.isError, text: event.text }] : []);
+  const expected = outcomes(current), actual = outcomes(rebuilt);
+  expect(actual).toHaveLength(expected.length);
+  expect(actual).toEqual(expected);
+  const status = (messages: ClaudeMessage[]) => projectOutstanding(normalizeMessages(messages))
+    .map((line) => line.replace(/ \[entry [^\]]+\]/g, ""));
+  expect(status(rebuilt)).toEqual(status(current));
+}
+
+test("inline failure and success cannot be reordered by restoring a sibling row", () => {
+  const a = editCall("copy-a", "a", { text: "FAILED", isError: true });
+  const b = editCall("copy-b", "b", { text: "OK" });
+  const c = callMessage("copy-c", "c");
+  const sibling = resultMessage("sibling-a", "a", "FAILED", true);
+  const joined = resultMessage("joined", "c", "C");
+  const current = [summary, a, b, c, sibling, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), editRow("call-a", "start", "a"),
+    editRow("call-b", "call-a", "b"), callRow("call-c", "call-b", "c"),
+    resultRow("sibling-a", "call-a", "a", "FAILED", true),
+    resultRow("joined", "call-c", "c", "C"), promptRow("last", "joined"));
+  expectSameOutcomesOrRefused(current, rebuildTranscript(current, text));
+});
+
+test("two result rows cannot duplicate an authoritative inline outcome", () => {
+  const a = editCall("copy-a", "a", { text: "FAILED", isError: true });
+  const c = callMessage("copy-c", "c");
+  const first = resultMessage("sibling-a1", "a", "FAILED", true);
+  const second = resultMessage("sibling-a2", "a", "FAILED", true);
+  const joined = resultMessage("joined", "c", "C");
+  const current = [summary, a, c, first, second, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), editRow("call-a", "start", "a"),
+    callRow("call-c", "call-a", "c"), resultRow("sibling-a1", "call-a", "a", "FAILED", true),
+    resultRow("sibling-a2", "call-a", "a", "FAILED", true), resultRow("joined", "call-c", "c", "C"),
+    promptRow("last", "joined"));
+  expectSameOutcomesOrRefused(current, rebuildTranscript(current, text));
+});
+
+test("ambiguous repeated raw result anchors cannot move a later failure before successes", () => {
+  const a = editCall("copy-a", "a"), b = editCall("copy-b", "b");
+  const first = resultMessage("copy-b1", "b", "OK"), second = resultMessage("copy-b2", "b", "OK");
+  const missing = resultMessage("sibling-a", "a", "FAILED", true);
+  const joined = userMessage("joined", "next");
+  const current = [summary, a, b, first, second, missing, joined];
+  const text = transcript(promptRow("start", null), editRow("call-a", "start", "a"),
+    editRow("call-b", "call-a", "b"), resultRow("result-b1", "call-b", "b", "OK"),
+    resultRow("result-b2", "result-b1", "b", "OK"), resultRow("sibling-a", "call-a", "a", "FAILED", true),
+    promptRow("joined", "result-b2"));
+  expectSameOutcomesOrRefused(current, rebuildTranscript(current, text));
 });
 
 test("the converter rejects a row that cannot be addressed", () => {
