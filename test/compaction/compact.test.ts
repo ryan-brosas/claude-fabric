@@ -297,8 +297,57 @@ describe("compact: what the summary loses today", () => {
     expect(exactValues([], 0, `[Exact values]\n- [entry old] ${safe}`).map(({ value }) => value)).toEqual([safe]);
   });
 
+  test("screens user-stated PINs, passphrases, and OTPs in fresh and carried excerpts", () => {
+    // Synthetic values only; exercise the user-binding extractor and Carry.
+    for (const excerpt of ["PIN is 493827.", "Passphrase is maple-493827.", "OTP is 493827.",
+      "user_pin=493827", "otp: 493827", "PASSPHRASE=maple-493827"]) {
+      expect(exactValues([prompt(excerpt, "user")], 1)).toEqual([]);
+      expect(exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`)).toEqual([]);
+      const summary = summaryOf([prompt(`${"ordinary ".repeat(600)}\n${excerpt}`, "user"), reply("Done."), prompt("Next."), reply("Done.")]);
+      const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+      expect(section).not.toContain(excerpt);
+    }
+    for (const excerpt of ["Shipping is batch-1234.", "Pinpoint is region-1234."]) {
+      expect(exactValues([prompt(excerpt, "user")], 1).map(({ value }) => value)).toEqual([excerpt]);
+    }
+  });
+
+  test.each([
+    "one-time code", "one time code", "one-time password", "one-time passcode", "verification code",
+    "security code", "passcode", "2FA code", "recovery code", "ONE_TIME_CODE", "user_passcode",
+  ].flatMap((label) => ["fresh", "carried"].map((source) => ({ label, source }))))
+  ("screens $label in $source user excerpts", ({ label, source }) => {
+    const excerpt = `${label} is 493827.`; // Synthetic value only.
+    const values = source === "fresh"
+      ? exactValues([prompt(excerpt, "user")], 1)
+      : exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`);
+    expect(values).toEqual([]);
+  });
+
+  test("does not promote a one-time code into a compacted exact-values section", () => {
+    const excerpt = "one-time code is 493827."; // Synthetic value only.
+    const section = summaryOf([prompt(`${"ordinary ".repeat(600)}\n${excerpt}`, "user"), reply("Done."), prompt("Next."), reply("Done.")])
+      .split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).not.toContain(excerpt);
+  });
+
+  test.each(["zip code", "error code", "exit code", "status code", "source code", "code review"])
+  ("keeps noncredential %s in fresh and carried user excerpts", (label) => {
+    const excerpt = `${label} is 493827.`;
+    expect(exactValues([prompt(excerpt, "user")], 1)).toEqual([{ entryId: "user", value: excerpt }]);
+    expect(exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`))
+      .toEqual([{ entryId: "user", value: excerpt }]);
+  });
+
+  test("keeps an error code in the exact-values section", () => {
+    const result = { ...results({ tool_use_id: "error", text: "E4471", isError: true }), handle: "source" };
+    const section = summaryOf([prompt("Check."), result, prompt("Next."), reply("Done.")])
+      .split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry source] E4471");
+  });
+
   test("screens credential key words in fresh and carried excerpts", () => {
-    for (const key of ["key", "token", "secret", "password", "passwd", "authorization", "bearer", "credential", "cookie", "session"]) {
+    for (const key of ["key", "token", "secret", "password", "passwd", "passphrase", "PIN", "OTP", "authorization", "bearer", "credential", "cookie", "session"]) {
       const excerpt = `E4471: ${key} unavailable`;
       expect(exactValues([reply(excerpt, "source")], 1)).toEqual([]);
       expect(exactValues([], 0, `[Exact values]\n- [entry old] ${excerpt}`)).toEqual([]);
@@ -403,6 +452,49 @@ describe("compact: what the summary loses today", () => {
     const summary = summaryOf(messages);
     expect(summary).toContain("[Exact values]");
     expect(summary).toContain("[entry result-error] E4471 line 58");
+  });
+
+  test("a noisy failed result keeps its error excerpt ahead of incidental paths", () => {
+    const paths = Array.from({ length: 300 }, (_, i) => `src/atrace_${String(i).padStart(4, "0")}.ts`).join("\n");
+    const messages: ClaudeMessage[] = [
+      prompt("Run validation."),
+      { role: "assistant", text: "Running.", toolUses: [toolCall("Bash", { command: "validate" }, "err")] },
+      { ...results({ tool_use_id: "err", text: `validation started\nE4471 line 58: missing column\n${paths}`, isError: true }), handle: "r" },
+      prompt("Continue."), reply("Done."),
+    ];
+    const section = summaryOf(messages).split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry r] E4471 line 58: missing column");
+  });
+
+  test("keeps an echoed path when a failed result floods the exact-values budget with codes", () => {
+    const codes = Array.from({ length: 300 }, (_, i) => `E${1000 + i}`);
+    const messages: ClaudeMessage[] = [
+      { ...results({ tool_use_id: "path", text: "tools/important.ts", isError: false }), handle: "p" },
+      { ...results({ tool_use_id: "errors", text: codes.join("\n"), isError: true }), handle: "r" },
+      reply("Keep tools/important.ts for later.", "tail"),
+    ];
+    const values = exactValues(messages, 2);
+    expect(values).toHaveLength(301);
+    const section = renderExactValues(values, 2048);
+    expect(section).toContain("[entry p] tools/important.ts");
+    expect(section).toContain("[entry r] E1299");
+    expect(utf8Bytes(section)).toBeLessThanOrEqual(2048);
+  });
+
+  test("error excerpts outrank failed-result paths without discarding the paths", () => {
+    for (const isError of [true, false]) {
+      const text = "E4471 line 58: missing column\nsrc/atrace_0000.ts\nsrc/atrace_0001.ts";
+      const row = { ...results({ tool_use_id: "err", text, isError }), handle: "row" };
+      const inline: ClaudeMessage = { role: "assistant", text: "", handle: "call", toolUses: [
+        { ...toolCall("Bash", {}, "err"), text, ...(isError ? { isError: true as const } : {}) },
+      ] };
+      for (const source of [row, inline]) {
+        const values = exactValues([source], 1).map(({ value }) => value);
+        expect(values[0]).toBe("E4471 line 58: missing column");
+        expect(values).toContain("src/atrace_0000.ts");
+        expect(values).toContain("src/atrace_0001.ts");
+      }
+    }
   });
 
   test("keeps a created path and computed id from older assistant replies", () => {
@@ -554,6 +646,37 @@ describe("compact: what the summary loses today", () => {
     expect(section).toContain("[entry old-result] BATCH-5c1e8a0b77d2");
     expect(section).not.toContain("[entry earlier-summary] BATCH-5c1e8a0b77d2");
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
+  test.each([
+    ["user sentence", "Target is violet-harbor-01."],
+    ["path", "src/audit-target.ts"],
+    ["identifier", "BATCH-5c1e8a0b77d2"],
+    ["error code", "E4471"],
+  ])("keeps a carried %s when a later Carry cut removes it", (kind, value) => {
+    // Confirm the seed row comes from the real user or assistant extractor.
+    const source = kind === "user sentence" ? prompt(value, "source") : reply(`Observed ${value}.`, "source");
+    expect(exactValues([source], 1)).toContainEqual({ entryId: "source", value });
+    const previous = `[Fabric summary]\n\n[Exact values]\nUnverified excerpts.\n- [entry source] ${value}\n\n[Earlier user messages]\n${"🦊" + "a".repeat(8496)}\n${value}\n${"z".repeat(8500)}`;
+    const first = summaryOf([prompt(previous, "previous"), prompt("Continue."), reply("Working."), prompt("Next."), reply("Done.")]);
+    const firstExact = first.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    const firstCarry = first.split("[Earlier summary]\n")[1] ?? "";
+    const carryCut = /\[omitted \d+ UTF-8 bytes from the middle of the earlier summary\]/;
+    expect(firstCarry.split(value)).toHaveLength(2);
+    expect(firstCarry).not.toMatch(carryCut);
+    // Keep the duplicate row so the next compaction can recover its source.
+    expect(firstExact).toContain(`[entry source] ${value}`);
+    const newer = Array.from({ length: 8 }, (_, index) => [
+      prompt(`New work ${index}. ${"u".repeat(2600)}`), reply(`Progress ${index}. ${"r".repeat(850)}`),
+    ]).flat();
+    const final = summaryOf([prompt(first, "first-summary"), ...newer, prompt("Next."), reply("Done.")]);
+    expect(final).toContain("[Earlier summary]\n");
+    const finalCarry = final.slice(final.indexOf("[Earlier summary]\n") + "[Earlier summary]\n".length);
+    expect(finalCarry).toMatch(carryCut);
+    expect(finalCarry).not.toContain(value);
+    const finalExact = final.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(finalExact).toContain(`[entry source] ${value}`);
+    expect(utf8Bytes(final)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
   test("does not extract unbound user values, tool inputs or the kept tail", () => {
