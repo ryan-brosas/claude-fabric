@@ -37,15 +37,26 @@ export function fromTranscript(row: TranscriptRow): ClaudeMessage {
 
 const MISSING_OUTCOME = "missing tool outcome in rebuilt input";
 
-// Current outcomes must appear in order. The raw prefix may already contain
-// additional outcomes for a non-deficit call, which restoration leaves alone.
-function sameCurrentOrder(current: readonly ClaudeMessage[], rebuilt: readonly ClaudeMessage[]): boolean {
+// Extra raw outcomes may precede restoration, but must not follow the first
+// restored outcome: they could change which failures an exact retry resolves.
+function sameRestoredSuffix(expected: readonly string[], actual: readonly string[], restored: ReadonlySet<string>): boolean {
+  const firstExpected = expected.findIndex((id) => restored.has(id));
+  const firstActual = actual.findIndex((id) => restored.has(id));
+  if (firstExpected < 0 || firstActual < 0) return false;
+  const suffix = expected.slice(firstExpected);
+  return suffix.length === actual.length - firstActual
+    && suffix.every((id, index) => id === actual[firstActual + index]);
+}
+
+// Current outcomes must appear in order, including an exact restored suffix.
+// The final conservation check also compares the outcome contents.
+function sameCurrentOrder(current: readonly ClaudeMessage[], rebuilt: readonly ClaudeMessage[], restored: ReadonlySet<string>): boolean {
   const ids = (messages: readonly ClaudeMessage[]) => normalizeMessages(messages).flatMap((event) =>
     event.kind === "toolResult" || event.kind === "bash" ? [event.toolCallId] : []);
-  const expected = ids(current);
+  const expected = ids(current), actual = ids(rebuilt);
   let next = 0;
-  for (const id of ids(rebuilt)) if (id === expected[next]) next++;
-  return next === expected.length;
+  for (const id of actual) if (id === expected[next]) next++;
+  return next === expected.length && sameRestoredSuffix(expected, actual, restored);
 }
 
 // Count the effective outcomes the compactor sees, not duplicate inline/row copies.
@@ -126,7 +137,7 @@ function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, joi
   if (!candidates.size) return rebuilt;
   const additions = current.slice(summary + 1, join).filter((message) => candidates.has(message));
   const output = [...rebuilt.slice(0, prefixLength), ...additions, ...rebuilt.slice(prefixLength)];
-  return sameCurrentOrder(current, output) ? output : rebuilt;
+  return sameCurrentOrder(current, output, deficits) ? output : rebuilt;
 }
 
 /** Rebuild only before the first current handle found on the active chain. */

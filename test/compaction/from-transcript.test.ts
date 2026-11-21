@@ -287,6 +287,35 @@ function expectSameOutcomesOrRefused(current: ClaudeMessage[], rebuilt: ClaudeMe
   expect(status(rebuilt)).toEqual(status(current));
 }
 
+test.each(["before", "after"])("a repeated earlier success %s the joined result cannot resolve a restored failure", (position) => {
+  const earlier = editCall("copy-earlier", "earlier", { text: "OK" });
+  const earlierResult = resultMessage("copy-earlier-result", "earlier", "OK");
+  const a = editCall("copy-a", "a"), c = callMessage("copy-c", "c");
+  const sibling = resultMessage("sibling-a", "a", "FAILED", true);
+  const joined = resultMessage("joined", "c", "C");
+  const repeat = { tool_use_id: "earlier", text: "OK", isError: false };
+  if (position === "before") joined.toolResults!.unshift(repeat);
+  else joined.toolResults!.push(repeat);
+  const current = [summary, earlier, earlierResult, a, c, sibling, joined, userMessage("last", "next")];
+  const text = transcript(promptRow("start", null), editRow("call-earlier", "start", "earlier"),
+    resultRow("result-earlier", "call-earlier", "earlier", "OK"),
+    editRow("call-a", "result-earlier", "a"), callRow("call-c", "call-a", "c"),
+    resultRow("sibling-a", "call-a", "a", "FAILED", true),
+    { type: "user", uuid: "joined", parentUuid: "call-c", message: { content: joined.toolResults!.map((result) =>
+      ({ type: "tool_result", tool_use_id: result.tool_use_id, content: result.text })) } }, promptRow("last", "joined"));
+
+  const currentEvents = normalizeMessages(current);
+  expect(currentEvents.flatMap((event) => event.kind === "toolResult" ? [event.toolCallId] : []))
+    .toEqual(["earlier", "a", "c"]);
+  expect(projectOutstanding(currentEvents).join("\n")).toContain("same.txt: FAILED");
+  const rebuilt = rebuildTranscript(current, text);
+  expect(outcomeConservationProblem(current, rebuilt)).toBe("missing tool outcome in rebuilt input");
+  expect(rebuilt.map((message) => message.handle ?? message.uuid)).toEqual([
+    "start", "call-earlier", "result-earlier", "call-a", "call-c", "joined", "last",
+  ]);
+  expect(rebuilt[5]).toBe(joined);
+});
+
 test("inline failure and success cannot be reordered by restoring a sibling row", () => {
   const a = editCall("copy-a", "a", { text: "FAILED", isError: true });
   const b = editCall("copy-b", "b", { text: "OK" });

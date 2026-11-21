@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compact } from "../../src/compaction/compact.ts";
-import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
+import type { ClaudeMessage, ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { register } from "../../src/mod/index.ts";
 
 type Row = { type: string; uuid?: string; parentUuid?: string | null; logicalParentUuid?: string | null;
@@ -105,6 +105,52 @@ test("later compaction rebuilds parallel sibling tool failures instead of carryi
     expect(result.messages?.[0]?.text).not.toContain("[Earlier summary]");
     expect(h.logs).toEqual([]);
     expect(h.logTargets).toEqual([]);
+  });
+});
+
+test("a duplicated success after a restored failure falls back to the current event", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "duplicate-success.jsonl");
+    const prior = message("user", `[Fabric summary]\nEarlier work. ${"p".repeat(9000)}`, "summary");
+    const first = message("user", `Original request. ${"o".repeat(9000)}`, "first");
+    const edit = (id: string) => ({ tool_use_id: id, tool: "Edit", input: { file_path: "same.txt" } });
+    const read = { tool_use_id: "c", tool: "Read", input: { file_path: "other.txt" } };
+    const call = (handle: string, use: ClaudeToolUse): ClaudeMessage =>
+      ({ role: "assistant", text: "", toolUses: [use], handle });
+    const result = (handle: string, id: string, text: string, isError = false): ClaudeMessage =>
+      ({ ...message("user", "", handle), toolResults: [{ tool_use_id: id, text, isError }] });
+    const earlier = call("copy-earlier", { ...edit("earlier"), text: "OK" });
+    const earlierResult = result("copy-earlier-result", "earlier", "OK");
+    const a = call("copy-a", edit("a")), c = call("copy-c", read);
+    const sibling = result("sibling-a", "a", "FAILED", true);
+    const joined = result("joined", "c", "C");
+    joined.toolResults!.push({ tool_use_id: "earlier", text: "OK", isError: false });
+    const last = message("user", `LAST ${"x".repeat(75000)}`, "last");
+    const toolRow = (uuid: string, parentUuid: string, use: ClaudeToolUse, id: string): Row =>
+      ({ type: "assistant", uuid, parentUuid, message: { id, content: [
+        { type: "tool_use", id: use.tool_use_id, name: use.tool, input: use.input },
+      ] } });
+    const resultRow = (uuid: string, parentUuid: string, entries: NonNullable<ClaudeMessage["toolResults"]>): Row =>
+      ({ type: "user", uuid, parentUuid, message: { content: entries.map((entry) => ({
+        type: "tool_result", tool_use_id: entry.tool_use_id, content: entry.text, is_error: entry.isError,
+      })) } });
+    await writeRows(path, [row(first, null), toolRow("call-earlier", "first", edit("earlier"), "earlier-group"),
+      resultRow("result-earlier", "call-earlier", earlierResult.toolResults!),
+      toolRow("call-a", "result-earlier", edit("a"), "parallel"), toolRow("call-c", "call-a", read, "parallel"),
+      resultRow("sibling-a", "call-a", sibling.toolResults!), resultRow("joined", "call-c", joined.toolResults!),
+      row(last, "joined")]);
+    const event: Event = { trigger: "manual", messages: [prior, earlier, earlierResult, a, c, sibling, joined, last] };
+    const carried = compact(event.messages);
+    if (!("messages" in carried)) throw new Error("expected the current messages to compact");
+    expect(carried.messages[0]!.text).toContain("same.txt: FAILED");
+    const h = hook(path);
+    const output = await h.run(event);
+    expect(output).toEqual(carried);
+    expect(output.messages?.[0]?.text).toContain("same.txt: FAILED");
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("missing tool outcome in rebuilt input");
+    expect(h.logTargets).toEqual(["debug"]);
   });
 });
 
