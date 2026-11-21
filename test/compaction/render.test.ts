@@ -318,6 +318,48 @@ describe("demand-based compaction rendering", () => {
     expect(withDuplicate.summary === plain.summary).toBe(true);
   });
 
+  test.each([
+    ["path extension", "src/foo.ts", "src/foo.tsx"],
+    ["path suffix", "src/foo.ts", "src/foo.ts.backup"],
+    ["parent path", "src/foo.ts", "lib/src/foo.ts"],
+    ["id suffix", "BATCH-ab12", "BATCH-ab12cd"],
+    ["id segment", "BATCH-ab12", "BATCH-ab12-extra"],
+    ["id prefix", "BATCH-ab12", "XBATCH-ab12"],
+    ["Unicode id prefix", "BATCH-ab12", "𐐀BATCH-ab12"],
+    ["Unicode id suffix", "BATCH-ab12", "BATCH-ab12𐐀"],
+    ["error-code suffix", "E4471", "E44712"],
+    ["error-code prefix", "E4471", "XE4471"],
+    ["error-code segment", "E4471", "E4471_extra"],
+  ].flatMap(([kind, shorter, longer]) => [
+    { kind, value: shorter!, carried: longer! },
+    { kind, value: longer!, carried: shorter! },
+  ]))("keeps a distinct $kind exact value $value when Carry holds $carried", ({ value, carried }) => {
+    const { summary } = renderSummaryWithMetadata(project([]), {
+      ...options, literals: [{ entryId: "fresh", value }], earlierSummary: `Use ${carried}.`,
+    });
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(summary).toContain(`Use ${carried}.`);
+    expect(section).toContain(`[entry fresh] ${value}`);
+  });
+
+  test.each(["src/foo.ts", "BATCH-ab12", "E4471", "Release is violet-harbor."])
+  ("deduplicates the complete value %s when Carry surrounds it with punctuation", (value) => {
+    const { summary } = renderSummaryWithMetadata(project([]), {
+      ...options, literals: [{ entryId: "fresh", value }], earlierSummary: `Use '${value}', then continue.`,
+    });
+    expect(summary).toContain(`Use '${value}', then continue.`);
+    expect(summary).not.toContain(`[entry fresh] ${value}`);
+  });
+
+  test("finds a complete carried value after an earlier partial match", () => {
+    const { summary } = renderSummaryWithMetadata(project([]), {
+      ...options, literals: [{ entryId: "fresh", value: "src/foo.ts" }],
+      earlierSummary: "Use src/foo.tsx, then src/foo.ts.",
+    });
+    expect(summary).toContain("Use src/foo.tsx, then src/foo.ts.");
+    expect(summary).not.toContain("[entry fresh] src/foo.ts");
+  });
+
   test("allocates the carried earlier summary inside the ceiling, keeping its start and its newest bytes", () => {
     const sections = history(true);
     sections.dialogue = Array.from({ length: 3 }, (_, i) => `EXCHANGE_${i}\n${"界🦊".repeat(2000)}`);

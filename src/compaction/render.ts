@@ -174,6 +174,19 @@ const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
   return body.text ? `${CARRY_HEADER}\n\n${body.text}` : EARLIER_SUMMARY_HEADER;
 };
 
+// A substring inside a longer path, identifier or error code does not show the
+// same value. A terminal period is punctuation unless another value character follows it.
+const VALUE_BEFORE = /[\p{L}\p{N}_./\\-]$/u;
+const VALUE_AFTER = /^(?:[\p{L}\p{N}_/\\-]|\.[\p{L}\p{N}_/\\-])/u;
+const visibleInCarry = (carry: string, value: string): boolean => {
+  if (!value) return false;
+  for (let start = carry.indexOf(value); start >= 0; start = carry.indexOf(value, start + 1)) {
+    const end = start + value.length;
+    if (!VALUE_BEFORE.test(carry.slice(Math.max(0, start - 2), start)) && !VALUE_AFTER.test(carry.slice(end, end + 3))) return true;
+  }
+  return false;
+};
+
 export interface RenderedSummary {
   summary: string;
   requestOmittedBytes: number;
@@ -265,7 +278,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // A Carry can be cut in the middle: only its actual rendered text can
   // replace an exact-value row without losing a value.
   const carryBlock = earlierSummary !== undefined ? carriedBlock(earlierSummary, allocation.carryBytes) : "";
-  const literalBlock = renderExactValues(literals.filter(({ value }) => !carryBlock.includes(value)), literalRoom);
+  const literalBlock = renderExactValues(literals.filter(({ value }) => !visibleInCarry(carryBlock, value)), literalRoom);
   const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
   // The literal block must be first: later headings can belong to verbatim user text.
   const blocks: string[] = [SUMMARY_HEADER, literalBlock];
