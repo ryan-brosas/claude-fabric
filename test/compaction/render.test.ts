@@ -321,6 +321,16 @@ describe("demand-based compaction rendering", () => {
   test.each([
     ["path extension", "src/foo.ts", "src/foo.tsx"],
     ["path suffix", "src/foo.ts", "src/foo.ts.backup"],
+    ["parenthesized path segment", "src/foo.ts", "src/foo.ts(backup).md"],
+    ["bracketed path segment", "src/foo.ts", "src/foo.ts[old].md"],
+    ["open parenthesis in path", "src/foo.ts", "src/foo.ts(.md"],
+    ["open bracket in path", "src/foo.ts", "src/foo.ts[.md"],
+    ["close parenthesis in path", "src/foo.ts", "src/foo.ts).md"],
+    ["close bracket in path", "src/foo.ts", "src/foo.ts].md"],
+    ["opening parenthesis path prefix", "src/foo.ts", "(src/foo.ts"],
+    ["opening bracket path prefix", "src/foo.ts", "[src/foo.ts"],
+    ["parenthesized path prefix", "src/foo.ts", "lib(src/foo.ts"],
+    ["bracketed path prefix", "src/foo.ts", "lib[src/foo.ts"],
     ["parent path", "src/foo.ts", "lib/src/foo.ts"],
     ["id suffix", "BATCH-ab12", "BATCH-ab12cd"],
     ["id segment", "BATCH-ab12", "BATCH-ab12-extra"],
@@ -349,6 +359,55 @@ describe("demand-based compaction rendering", () => {
     });
     expect(summary).toContain(`Use '${value}', then continue.`);
     expect(summary).not.toContain(`[entry fresh] ${value}`);
+  });
+
+  test.each([
+    "(src/foo.ts(backup).md)",
+    "[src/foo.ts[old].md]",
+    "(lib(src/foo.ts)",
+    "[lib[src/foo.ts]",
+  ])("keeps a distinct path in Carry even when the longer path is wrapped: %s", (carried) => {
+    const { summary } = renderSummaryWithMetadata(project([]), {
+      ...options, literals: [{ entryId: "fresh", value: "src/foo.ts" }], earlierSummary: `Use ${carried}`,
+    });
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(summary).toContain(`Use ${carried}`);
+    expect(section).toContain("[entry fresh] src/foo.ts");
+  });
+
+  test.each([
+    "(src/foo.ts)",
+    "[src/foo.ts]",
+    '"src/foo.ts"',
+    "src/foo.ts).",
+    "src/foo.ts],",
+    "src/foo.ts(",
+    "src/foo.ts[",
+    "src/foo.ts(backup)",
+    "src/foo.ts[old]",
+  ])("deduplicates a complete path with surrounding punctuation or an incomplete continuation: %s", (carried) => {
+    const { summary } = renderSummaryWithMetadata(project([]), {
+      ...options, literals: [{ entryId: "fresh", value: "src/foo.ts" }], earlierSummary: `Use ${carried}`,
+    });
+    expect(summary).toContain(`Use ${carried}`);
+    expect(summary).not.toContain("[entry fresh] src/foo.ts");
+  });
+
+  test.each(["src/foo.ts(backup).md", "src/foo.ts[old].md"])
+  ("keeps a freshly extracted path when real compaction carries a different path: %s", (carried) => {
+    const tail: ClaudeMessage = { role: "user", text: "Continue.", toolUses: [], handle: "tail" };
+    const messages: ClaudeMessage[] = [
+      { role: "user", text: `[Fabric summary]\n\n[Earlier Turns]\nUse ${carried}.`, toolUses: [], handle: "old" },
+      { role: "user", text: "Read the file.", toolUses: [], handle: "request" },
+      { role: "assistant", text: "Opened src/foo.ts.", toolUses: [], handle: "fresh" },
+      tail,
+    ];
+    const result = compact(messages, { keepRecentTokens: Math.ceil(messageBytes(tail) / 4) });
+    if (!("messages" in result)) throw new Error(JSON.stringify(result));
+    const summary = result.messages[0]!.text;
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(summary).toContain(`Use ${carried}.`);
+    expect(section).toContain("[entry fresh] src/foo.ts");
   });
 
   test("finds a complete carried value after an earlier partial match", () => {

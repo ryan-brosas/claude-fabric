@@ -28,6 +28,7 @@ interface Candidate extends ExactValue {
 // Brackets and parentheses are allowed in route segments, as in Next.js paths.
 const TOKEN = /\S+/g;
 const PATH = /^(?:\.{0,2}\/)?(?:[A-Za-z0-9_.()[\]-]+\/)+[A-Za-z0-9_.()[\]-]+\.[A-Za-z0-9_]+$/;
+export const isPathLiteral = (value: string): boolean => PATH.test(value);
 const HYPHENATED = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/;
 const HEX = /^[0-9a-f]{12,31}$/i;
 const ERROR_CODE = /^[A-Z][A-Z_]*\d{3,}$/;
@@ -69,7 +70,7 @@ function* safeLines(text: string): Generator<string> {
   }
 }
 
-const isLiteralToken = (value: string): boolean => HEX.test(value) || PATH.test(value)
+const isLiteralToken = (value: string): boolean => HEX.test(value) || isPathLiteral(value)
   || (value.length >= 8 && HYPHENATED.test(value) && /[A-Za-z]/.test(value) && /\d/.test(value));
 
 const addToken = (values: Set<string>, match: RegExpMatchArray, line: string): void => {

@@ -4,7 +4,7 @@ import { allocateProtectedRoom, boundedExcerpt, boundedHeadTail, clipUtf8, DIALO
   MAX_SUMMARY_BYTES, MAX_SUMMARY_FOOTER_BYTES, MAX_SUMMARY_FRAMING_BYTES, protectedBudgets, recentDialogueBytes,
   REQUEST_HEADER, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
-import { LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
+import { isPathLiteral, LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
 // The first line of every summary this compactor writes, and how a later
@@ -178,11 +178,33 @@ const carriedBlock = (earlierSummary: string, maxBytes: number): string => {
 // same value. A terminal period is punctuation unless another value character follows it.
 const VALUE_BEFORE = /[\p{L}\p{N}_./\\-]$/u;
 const VALUE_AFTER = /^(?:[\p{L}\p{N}_/\\-]|\.[\p{L}\p{N}_/\\-])/u;
+
+// Strip surrounding prose punctuation, not characters inside a path. An
+// unmatched opening bracket can itself start an extractor-valid path.
+const carryTokenAt = (carry: string, start: number, end: number): { text: string; end: number } => {
+  let first = start, last = end;
+  while (first > 0 && !/\s/.test(carry[first - 1]!)) first--;
+  while (last < carry.length && !/\s/.test(carry[last]!)) last++;
+  let text = carry.slice(first, last).replace(/^["'`]+|["'`.,;:!?]+$/g, "");
+  while ((text.startsWith("(") && text.endsWith(")")) || (text.startsWith("[") && text.endsWith("]"))) {
+    text = text.slice(1, -1);
+  }
+  return { text: text.replace(/[)\]"'`.,;:!?]+$/g, ""), end: last };
+};
+
 const visibleInCarry = (carry: string, value: string): boolean => {
   if (!value) return false;
+  const path = isPathLiteral(value);
+  let tokenEnd = -1, longerPath = false;
   for (let start = carry.indexOf(value); start >= 0; start = carry.indexOf(value, start + 1)) {
     const end = start + value.length;
-    if (!VALUE_BEFORE.test(carry.slice(Math.max(0, start - 2), start)) && !VALUE_AFTER.test(carry.slice(end, end + 3))) return true;
+    if (VALUE_BEFORE.test(carry.slice(Math.max(0, start - 2), start)) || VALUE_AFTER.test(carry.slice(end, end + 3))) continue;
+    if (path && start >= tokenEnd) {
+      const token = carryTokenAt(carry, start, end);
+      tokenEnd = token.end;
+      longerPath = token.text !== value && token.text.includes(value) && isPathLiteral(token.text);
+    }
+    if (!longerPath) return true;
   }
   return false;
 };
