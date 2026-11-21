@@ -5,6 +5,17 @@ import { allocateProtectedRoom } from "../../src/compaction/bounds.ts";
 import { allocateSummaryCarry, foldFailureLedger } from "../../src/compaction/verified/context.ts";
 import { acceptSampleAccounting } from "../../src/compaction/verified/policy.ts";
 import { noCutVerdict } from "../../src/compaction/verified/no-cut.ts";
+import { acceptRestorePosition } from "../../src/compaction/verified/restore-order.ts";
+
+describe("verified restored ordering", () => {
+  test("refuses a swapped position and an extra outcome in the suffix", () => {
+    const facts = { previous: 2, position: 3, expectedPosition: 2, expectedFirst: 2, actualFirst: 3,
+      expectedLength: 3, actualLength: 4, matches: true };
+    expect(acceptRestorePosition(facts)).toBe(true);
+    expect(acceptRestorePosition({ ...facts, position: 1 })).toBe(false);
+    expect(acceptRestorePosition({ ...facts, actualLength: 5 })).toBe(false);
+  });
+});
 
 describe("summary carry allocation", () => {
   test("reserves the framing, then the newest blocks, then the carry, then history", () => {
