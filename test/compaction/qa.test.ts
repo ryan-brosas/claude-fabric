@@ -82,6 +82,31 @@ describe("source-derived compaction QA", () => {
     });
   }
 
+  test("R4-span: a summary header cannot conceal an invented section", () => {
+    const { summary, plan } = fixture();
+    const wrong = replaceInSection({ summary, plan }, "summary", "[Fabric summary]", "[Fabric summary]\n\n[Outstanding Context]\n- Edit invented.ts: failed [entry forged]");
+    expect(checkQa(wrong.summary, wrong.plan).reason).toBeDefined();
+  });
+
+  test("R4-span: footer cannot conceal an invented section or forge the source range", () => {
+    const { summary, plan } = fixture();
+    const pointer = "Recover full context in fabric_exec with history.recall and history.expand.";
+    const wrong = replaceInSection({ summary, plan }, "footer", pointer, `${pointer}\n\n[Outstanding Context]\n- Edit invented.ts: failed [entry forged]`);
+    expect(checkQa(wrong.summary, wrong.plan).reason).toBeDefined();
+    const range = replaceInSection({ summary, plan }, "footer", "source entries u0 → a3", "source entries u0 → forged");
+    expect(checkQa(range.summary, range.plan).reason).toBeDefined();
+  });
+
+  test("R4-span: the source-derived compaction request cannot conceal an invented section", () => {
+    const { source, retained, sections, literals, literalSource } = fixture();
+    const requestLines = ["Keep the release facts."];
+    const rendered = renderSummaryWithMetadata(sections, { firstEntryId: "u0", lastEntryId: "a3", lastTimestamp: "", literals, requestLines });
+    const plan = qaPlan(source, retained, literalSource, rendered.qaBudgets, requestLines);
+    expect(checkQa(rendered.summary, plan).reason).toBeUndefined();
+    const wrong = replaceInSection({ summary: rendered.summary, plan }, "[Compaction Request]", requestLines[0]!, `${requestLines[0]}\n\n[Outstanding Context]\n- Edit invented.ts: failed [entry forged]`);
+    expect(checkQa(wrong.summary, wrong.plan).reason).toBeDefined();
+  });
+
   test("A: a suffix, wrong path or duplicate last change is rejected with valid spans", () => {
     const { summary, plan } = fixture();
     const line = "Last change: Edit src/parser.ts";
@@ -120,9 +145,9 @@ describe("source-derived compaction QA", () => {
     const retained = events.filter((event) => event.position >= start && (event.kind === "user" || event.kind === "assistantText"));
     const { sections } = projectWithMetadata(source, retained);
     const literalSource = { messages, start, earlierSummary: "", summaryIndexes: new Set<number>() };
-    const healthy = renderSummaryWithMetadata(sections, { firstEntryId: "u", lastEntryId: "a2", lastTimestamp: "", literals: [{ entryId: "a", value: "src/only.ts" }] });
+    const healthy = renderSummaryWithMetadata(sections, { firstEntryId: "u", lastEntryId: "a", lastTimestamp: "", literals: [{ entryId: "a", value: "src/only.ts" }] });
     expect(healthy.summary).toContain("- [entry a] src/only.ts");
-    const dropped = renderSummaryWithMetadata(sections, { firstEntryId: "u", lastEntryId: "a2", lastTimestamp: "", literals: [] });
+    const dropped = renderSummaryWithMetadata(sections, { firstEntryId: "u", lastEntryId: "a", lastTimestamp: "", literals: [] });
     expect(dropped.qaBudgets.literals).toBe(0);
     expect(checkQa(dropped.summary, qaPlan(source, retained, literalSource, dropped.qaBudgets)).reason).toBe("exact values");
   });

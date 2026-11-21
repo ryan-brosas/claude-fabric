@@ -1,6 +1,6 @@
 // Source-based reconstruction checks. History records are checked without
 // trusting their renderer grants; literal demand has a narrower partial check.
-import { DIALOGUE_HEADER, EARLIER_USERS_HEADER, MAX_DIALOGUE_SECTION_BYTES, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, MAX_REQUEST_SECTION_BYTES, REQUEST_HEADER, allocateProtectedRoom, clipUtf8, protectedBudgets, boundedExcerpt, boundedHeadTail, boundedTailExcerpt, omissionLine, recentDialogueBytes, requestSectionBytes, utf8Bytes } from "./bounds.ts";
+import { DIALOGUE_HEADER, EARLIER_USERS_HEADER, MAX_DIALOGUE_SECTION_BYTES, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, MAX_REQUEST_SECTION_BYTES, MAX_SUMMARY_FOOTER_BYTES, REQUEST_HEADER, allocateProtectedRoom, clipUtf8, protectedBudgets, boundedExcerpt, boundedTailExcerpt, omissionLine, recentDialogueBytes, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import { MAX_RECENT_EXCHANGES, type DialogueExchange } from "./dialogue.ts";
 import type { CompactionEvent } from "./from-claude.ts";
 import { LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES } from "./literals.ts";
@@ -15,7 +15,7 @@ import { compactionQa, qaGrant, qaHistoryAccounting, qaLatestModification, qaTal
 export type QaReason = "original request" | "dialogue" | "exact values" | "open failures" | "last modification" | "recall footer";
 interface Probe { reason: QaReason; section: string; expected: string; exact?: boolean; assertion?: boolean; }
 interface HistoryProbe { reason: QaReason; header: string; lines: string[]; }
-export interface QaPlan { probes: Probe[]; histories: HistoryProbe[]; literals: string[]; spans: RenderedSummary["qaBudgets"]["spans"]; }
+export interface QaPlan { probes: Probe[]; histories: HistoryProbe[]; literals: string[]; request: string; spans: RenderedSummary["qaBudgets"]["spans"]; }
 type Budgets = RenderedSummary["qaBudgets"];
 
 // Reconstruct source exchange order, including a response crossing the cut.
@@ -216,8 +216,14 @@ export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
     { reason: "open failures", header: "[Outstanding Context]", lines: failures },
     { reason: "last modification", header: statusSource.header, lines: statusSource.lines },
   ];
-  add("recall footer", "footer", "Recover full context in fabric_exec with history.recall and history.expand.");
-  return { probes, histories, literals: values.map(({ entryId, value }) => `- [entry ${entryId}] ${value}`), spans: budgets.spans };
+  const firstMessage = literalSource.messages[0];
+  const lastMessage = literalSource.messages[literalSource.start - 1];
+  const firstId = firstMessage?.handle ?? firstMessage?.uuid ?? "(start)";
+  const lastId = lastMessage?.handle ?? lastMessage?.uuid ?? "(end)";
+  const footer = sourceHistoryBlock("---", ["Recover full context in fabric_exec with history.recall and history.expand.",
+    `[compacted (unknown time); cumulative source entries ${firstId} → ${lastId}]`], MAX_SUMMARY_FOOTER_BYTES);
+  add("recall footer", "footer", footer, true);
+  return { probes, histories, literals: values.map(({ entryId, value }) => `- [entry ${entryId}] ${value}`), request, spans: budgets.spans };
 };
 
 // Spans are emitted as the renderer joins its blocks. Validate their entire
@@ -229,20 +235,24 @@ const spanReason = (name: string): QaReason => name === LITERALS_HEADER ? "exact
   : name === EARLIER_USERS_HEADER ? "original request" : name === DIALOGUE_HEADER ? "dialogue"
   : name === "[Outstanding Context]" ? "open failures" : name === "[Current Status]" ? "last modification" : "recall footer";
 
-const badSpan = (summary: string, spans: QaPlan["spans"]): QaReason | undefined => {
+const badSpan = (summary: string, spans: QaPlan["spans"], request: string): QaReason | undefined => {
   let end = -2, order = -1;
   for (const span of spans) {
     const next = ORDER.indexOf(span.name);
     const header = span.name === "summary" ? SUMMARY_HEADER : span.name === "footer" || span.name === "transcript" ? "---" : span.name;
     if (!Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) || next <= order || span.start !== end + 2 ||
         span.end <= span.start || span.end > summary.length || !summary.startsWith(header, span.start) ||
+        (span.name === "summary" && summary.slice(span.start, span.end) !== SUMMARY_HEADER) ||
         (summary[span.start + header.length] !== "\n" && span.name !== "summary") ||
         (span.name !== "footer" && summary.slice(span.end, span.end + 2) !== "\n\n") ||
         (span.name === "footer" && summary.slice(span.end) !== "\n")) return spanReason(span.name);
     end = span.end;
     order = next;
   }
-  return spans[0]?.name === "summary" && spans.at(-1)?.name === "footer" ? undefined : "recall footer";
+  if (spans[0]?.name !== "summary" || spans.at(-1)?.name !== "footer") return "recall footer";
+  const requestSpan = spans.find((span) => span.name === REQUEST_HEADER);
+  const renderedRequest = requestSpan ? summary.slice(requestSpan.start, requestSpan.end) : "";
+  return renderedRequest === request ? undefined : "dialogue";
 };
 
 // Match whole bounded records, even when a path contains newlines or a heading.
@@ -293,7 +303,7 @@ const literalsSound = (section: string, source: readonly string[]): boolean => {
 export const checkQa = (summary: string, plan: QaPlan): { reason?: QaReason; required: number; satisfied: number } => {
   const failed: QaReason[] = [];
   let tally = qaTally.init({});
-  const broken = badSpan(summary, plan.spans);
+  const broken = badSpan(summary, plan.spans, plan.request);
   tally = qaTally.step({}, tally, { pass: broken ? 0 : 1, isFooter: 0 });
   if (broken) failed.push(broken);
   for (const probe of plan.probes) {

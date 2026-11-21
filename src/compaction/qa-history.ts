@@ -1,5 +1,5 @@
 // Reconstruct the failure and status checks from normalized source events.
-import { clipUtf8, MAX_RENDERED_LINE_BYTES, omissionLine, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
+import { clipUtf8, MAX_RENDERED_LINE_BYTES, omissionLine, utf8Bytes } from "./bounds.ts";
 import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
 import { ASSISTANT_CAVEAT } from "./render.ts";
 

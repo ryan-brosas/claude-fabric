@@ -184,7 +184,7 @@ export interface RenderedSummary {
   requestOmittedBytes: number;
   dialogueOmittedBytes: number;
   /** Source-only byte grants for independently checking selected content. */
-  qaBudgets: { goal: number; literals: number; carry: number; olderReplies: number; historyBlocks: Record<string, number>; spans: SectionSpan[]; footerBytes: number; historyFacts: { name: string; bytes: number; minimum: number; maxBytes: number }[]; framingBytes: number; newestBytes: number; carryDemand: number; literalDemand: number };
+  qaBudgets: { literals: number; historyBlocks: Record<string, number>; spans: SectionSpan[]; footerBytes: number; historyFacts: { bytes: number; minimum: number }[] };
 }
 
 export interface SectionSpan { name: string; start: number; end: number; }
@@ -198,7 +198,6 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   let dialogueOmittedBytes = 0;
   let goalBytes = 0;
   let goalBlock = "";
-  let olderRepliesBudget = 0;
   const recentItems = sections.dialogue.map(shortAssistantHeading);
   const olderItems = sections.earlierAssistantReplies.map(shortAssistantHeading);
   const caveat = [...recentItems, ...olderItems].some((item) => item.startsWith(SHORT_ASSISTANT_HEADING))
@@ -230,7 +229,6 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
         const dialogue = dialogueBlock(recentItems, olderItems, replyRoom, caveat);
         newest.push(dialogue.text);
         newestNames.push(DIALOGUE_HEADER);
-        olderRepliesBudget = dialogue.olderGrant;
         dialogueOmittedBytes += dialogue.omittedBytes;
       }
       if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row");
@@ -305,10 +303,10 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   }
   const historyBlocks = Object.fromEntries(history.map((block, index) => [block.header.split("\n")[0]!, bounded.grants[index]!]));
   const historyFacts = history.map((block) => {
-    const { bytes, minimum, maxBytes, header } = historyCandidate(block);
-    return { name: header.split("\n")[0]!, bytes, minimum, maxBytes };
+    const { bytes, minimum } = historyCandidate(block);
+    return { bytes, minimum };
   });
-  return { summary, goalBlock, goalOffset, requestOmittedBytes, dialogueOmittedBytes, qaBudgets: { goal: goalBudget, literals: literalRoom, carry: allocation.carryBytes, olderReplies: olderRepliesBudget, historyBlocks, spans, footerBytes: utf8Bytes(footerBlock), historyFacts, framingBytes, newestBytes, carryDemand, literalDemand } };
+  return { summary, goalBlock, goalOffset, requestOmittedBytes, dialogueOmittedBytes, qaBudgets: { literals: literalRoom, historyBlocks, spans, footerBytes: utf8Bytes(footerBlock), historyFacts } };
 };
 
 export const renderSummary = (sections: Sections, options: RenderOptions): string =>
