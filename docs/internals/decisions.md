@@ -55,11 +55,16 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
 - **One system prompt section, added by `prompt.compose`.** It teaches when to reach for
   `fabric_exec` and what a program keeps: one program instead of many tool calls, the program tools
   by their Claude Code names, `Promise.all` for independent calls, and only the result or
-  `print()` lines entering context. `prompt.compose` is the hook because its event carries the
-  session's tool pool and its result is the whole ordered list: the section is added last as
-  `session` only when the pool holds `mcp__plugin_fabric_fabric__fabric_exec`, and a recompose
-  that already holds the id is left alone. `prompt.section` rewrites one named section and carries
-  no pool, so it cannot gate on the tool. The text is capped at 900 chars (745 now) because every
+  `print()` lines entering context. For a file's full text in context, it directs a call to `Read`
+  instead: a program's result is bounded. In 20 DeepSeek l3-memory runs on 2026-11-21, each with
+  55 whole-file read turns, the 12 sessions using direct `Read` took 110 to 117 calls and about 6.0M
+  tokens on those turns, 9.3M to 10.4M per run. The 8 using `fabric_exec` took 154 to 216 calls and
+  8.9M to 12.2M tokens on those turns, 12.8M to 17.3M per run. Plain Claude took about 111 calls and
+  5.3M tokens on those turns. Other turn types cost the same. `prompt.compose` is the hook because
+  its event carries the session's tool pool and its result is the whole ordered list. The section
+  is added last as `session` only when the pool holds `mcp__plugin_fabric_fabric__fabric_exec`,
+  and a recompose that already holds the id is left alone. `prompt.section` rewrites one named section and carries
+  no pool, so it cannot gate on the tool. The text is capped at 900 chars (899 now) because every
   turn pays for it and step 6 allows at most 10% more tokens than native code mode. Its tool names
   are generated from `providers/tools/names.ts`, a names-only list beside `TOOLS`: the hooks
   worker refuses the zod import every provider pulls in, so the mod cannot read `TOOLS` itself, and
