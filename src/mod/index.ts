@@ -50,10 +50,16 @@ export const register: Register = (on, options) => {
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
     const carried = compact(e.messages, { instructions: e.instructions });
+    // Preserve the previous initial/carry disposition even when QA reports a
+    // defect: automatic compaction must not lose compaction altogether.
+    if ("qa" in carried) {
+      try { $.ui.log(carried.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
+    }
+    const fallback = "qa" in carried ? { messages: carried.candidate } : carried;
     // One long turn has no prompt to cut at; core can cut inside it. An automatic
     // skip also goes to core: our text projection does not count media blocks.
     if ("core" in carried || (e.trigger === "auto" && "skip" in carried)) return next(e);
-    if (!e.messages.some(isFabricSummary)) return carried;
+    if (!e.messages.some(isFabricSummary)) return fallback;
     return (async () => {
       try {
         // session.info names the main transcript, not a subagent's transcript.
@@ -78,15 +84,20 @@ export const register: Register = (on, options) => {
         const problem = outcomeConservationProblem(e.messages, rebuilt);
         if (problem) throw new Error(problem);
         const result = compact(rebuilt, { instructions: e.instructions });
-        if (!("messages" in result)) throw new Error("rebuilt input did not produce a summary");
+        if ("qa" in result) {
+          if (!("qa" in carried)) throw new Error(result.qa);
+          try { $.ui.log(result.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
+        }
+        const messages = "qa" in result ? result.candidate : "messages" in result ? result.messages : undefined;
+        if (!messages) throw new Error("rebuilt input did not produce a summary");
         // A row converted from the transcript has no engine handle, so core would rebuild it from
         // text and tool blocks only and lose an image. Keep such a tail out of the result.
-        if (result.messages.slice(1).some((m) => !m.handle)) throw new Error("rebuilt result would retain messages without engine handles");
-        return result;
+        if (messages.slice(1).some((m) => !m.handle)) throw new Error("rebuilt result would retain messages without engine handles");
+        return { messages };
       } catch (error) {
         try { $.ui.log(`fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`, { to: "debug" }); }
         catch { /* Logging must not stop compaction. */ }
-        return carried;
+        return fallback;
       }
     })();
   }).catch(($, e, next) => {

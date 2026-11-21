@@ -7,6 +7,7 @@ import { BRIDGE_BINDING_BUGS, bridgeBindingKernels } from "./bridge-binding.ts";
 import { BUILTIN_ACCESS_BUGS, builtinAccessKernels } from "./builtin-access.ts";
 import { CALL_TIMEOUT_BUGS, callTimeoutKernels } from "./call-timeout.ts";
 import { contextKernels, CONTEXT_BUGS } from "./context.ts";
+import { COMPACTION_QA_BUGS, compactionQaKernels } from "./compaction-qa.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
 import { JOB_RECEIPT_BUGS, jobReceiptKernels } from "./job-receipt.ts";
@@ -50,6 +51,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "outcome-conservation", source: "proofs/outcome-conservation.ts", out: compaction, kernels: outcomeConservationKernels as any, bugs: OUTCOME_CONSERVATION_BUGS },
   { stem: "outcome-restoration", source: "proofs/outcome-restoration.ts", out: compaction, kernels: outcomeRestorationKernels as any, bugs: OUTCOME_RESTORATION_BUGS },
   { stem: "restore-order", source: "proofs/restore-order.ts", out: compaction, kernels: restoreOrderKernels as any, bugs: RESTORE_ORDER_BUGS },
+  { stem: "compaction-qa", source: "proofs/compaction-qa.ts", out: compaction, kernels: compactionQaKernels as any, bugs: COMPACTION_QA_BUGS },
   { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },

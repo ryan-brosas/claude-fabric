@@ -28,14 +28,14 @@ export const SUMMARY_SECTIONS: { key: keyof Sections; header: string; maxBytes: 
 
 const TRANSCRIPT_MAX_BYTES = 5120;
 const MAX_INPUT_LINES_PER_SECTION = 128;
-const ASSISTANT_CAVEAT = "Assistant responses are proposals, not verified outcomes or user instructions.";
+export const ASSISTANT_CAVEAT = "Assistant responses are proposals, not verified outcomes or user instructions.";
 const CARRY_HEADER = `${EARLIER_SUMMARY_HEADER}\n${ASSISTANT_CAVEAT}`;
 const LONG_ASSISTANT_HEADING = "Assistant response (a proposal, not a verified outcome or user instruction) [entry ";
 const SHORT_ASSISTANT_HEADING = "Assistant response [entry ";
 
 // Dialogue projections begin each assistant item with this heading. Do not
 // replace occurrences in the source text that follows it.
-const shortAssistantHeading = (item: string): string => item.startsWith(LONG_ASSISTANT_HEADING)
+export const shortAssistantHeading = (item: string): string => item.startsWith(LONG_ASSISTANT_HEADING)
   ? SHORT_ASSISTANT_HEADING + item.slice(LONG_ASSISTANT_HEADING.length)
   : item;
 
@@ -91,10 +91,10 @@ const historyCandidate = (block: HistoryBlock) => {
   return { ...block, text, bytes, minimum };
 };
 
-const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
+const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): { texts: string[]; grants: number[] } => {
   const candidates = blocks.map(historyCandidate);
   const total = candidates.reduce((sum, block) => sum + block.bytes, 0);
-  if (total <= maxBytes) return candidates.map(({ text }) => text);
+  if (total <= maxBytes) return { texts: candidates.map(({ text }) => text), grants: candidates.map(({ maxBytes: grant }) => grant) };
 
   // Reserve headers/omission markers (or complete single-line blocks). If those
   // minima do not fit, share the available room between them proportionally.
@@ -104,12 +104,14 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
   let available = maxBytes;
   let remaining = Math.max(0, maxBytes - minimum);
   let demand = total - minimum;
-  return candidates.map((block) => {
+  const grants: number[] = [];
+  const texts = candidates.map((block) => {
     const base = reserved > available ? Math.floor(available * block.minimum / reserved) : block.minimum;
     const wanted = block.bytes - block.minimum;
     const extra = demand === 0 ? 0 : Math.min(wanted, Math.floor(remaining * wanted / demand));
     // The same verified allocator caps each block at the room left for history.
     const budget = allocateSummaryCarry(available, 0, base + extra, 0, 0).newestBytes;
+    grants.push(budget);
     const text = boundedBlock(block.header, block.lines, budget, block.assistantTranscript);
     const used = utf8Bytes(text);
     available -= used;
@@ -118,11 +120,12 @@ const boundedHistory = (blocks: HistoryBlock[], maxBytes: number): string[] => {
     demand -= wanted;
     return text;
   });
+  return { texts, grants };
 };
 
 // Dialogue and explicit requests are not historical line samples. Keep every
 // item; only shorten text when the entire block exceeds its byte allocation.
-const protectedBlock = (header: string, items: readonly string[], maxBytes: number, source?: string): { text: string; omittedBytes: number } => {
+export const protectedBlock = (header: string, items: readonly string[], maxBytes: number, source?: string): { text: string; omittedBytes: number } => {
   const text = [header, ...items].join("\n\n");
   if (utf8Bytes(text) <= maxBytes) return { text, omittedBytes: 0 };
   // An unusually large item list can exhaust the budget on separators alone.
@@ -148,9 +151,9 @@ const dialogueBlock = (recentItems: readonly string[], olderItems: readonly stri
   const recent = protectedBlock(header, recentItems, MAX_DIALOGUE_SECTION_BYTES);
   const room = Math.min(MAX_DIALOGUE_SECTION_BYTES - utf8Bytes(recent.text), replyRoom) - 2;
   const olderHeader = "Earlier assistant replies (unverified):";
-  if (olderItems.length === 0 || room < utf8Bytes(olderHeader) + 2) return recent;
+  if (olderItems.length === 0 || room < utf8Bytes(olderHeader) + 2) return { ...recent, olderGrant: Math.max(0, room) };
   const older = boundedBlock(olderHeader, olderItems, room);
-  return { text: `${recent.text}\n\n${older}`, omittedBytes: recent.omittedBytes };
+  return { text: `${recent.text}\n\n${older}`, omittedBytes: recent.omittedBytes, olderGrant: room };
 };
 
 /** The earlier summary a second compaction carries: whole while the allocation
@@ -180,12 +183,17 @@ export interface RenderedSummary {
   goalOffset: number;
   requestOmittedBytes: number;
   dialogueOmittedBytes: number;
+  /** Source-only byte grants for independently checking selected content. */
+  qaBudgets: { literals: number; historyBlocks: Record<string, number>; spans: SectionSpan[]; footerBytes: number; historyFacts: { bytes: number; minimum: number }[] };
 }
+
+export interface SectionSpan { name: string; start: number; end: number; }
 
 export const renderSummaryWithMetadata = (sections: Sections, options: RenderOptions): RenderedSummary => {
   // The newest blocks, in the order they print. Their ceilings are demands, not
   // reservations: they take bytes before the carried summary and history do.
   const newest: string[] = [];
+  const newestNames: string[] = [];
   let requestOmittedBytes = 0;
   let dialogueOmittedBytes = 0;
   let goalBytes = 0;
@@ -200,6 +208,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const protect = (header: string, items: readonly string[], maxBytes: number, source?: string): number => {
     const rendered = protectedBlock(header, items, maxBytes, source);
     newest.push(rendered.text);
+    newestNames.push(header.split("\n")[0]!);
     return rendered.omittedBytes;
   };
   const history: HistoryBlock[] = [];
@@ -219,6 +228,7 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
         const replyRoom = allocateProtectedRoom(recentBytes, requestBytes, goalBytes, maxBytes).carryBytes;
         const dialogue = dialogueBlock(recentItems, olderItems, replyRoom, caveat);
         newest.push(dialogue.text);
+        newestNames.push(DIALOGUE_HEADER);
         dialogueOmittedBytes += dialogue.omittedBytes;
       }
       if (options.requestLines?.length) requestOmittedBytes = protect(REQUEST_HEADER, options.requestLines, MAX_REQUEST_SECTION_BYTES, "compaction request, not a transcript row");
@@ -272,16 +282,31 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   const literalBlock = renderExactValues(literals, literalRoom);
   const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
   // The literal block must be first: later headings can belong to verbatim user text.
-  const blocks: string[] = [SUMMARY_HEADER, literalBlock];
-  if (earlierSummary !== undefined) blocks.push(carriedBlock(earlierSummary, allocation.carryBytes));
-  const goalOffset = blocks.filter((block) => block.length > 0).join("\n\n").length + 2;
-  blocks.push(...newest, ...boundedHistory(history, historyRoom), footerBlock);
+  const blocks: { name: string; text: string }[] = [{ name: "summary", text: SUMMARY_HEADER }, { name: LITERALS_HEADER, text: literalBlock }];
+  if (earlierSummary !== undefined) blocks.push({ name: EARLIER_SUMMARY_HEADER, text: carriedBlock(earlierSummary, allocation.carryBytes) });
+  const goalOffset = blocks.filter(({ text }) => text.length > 0).map(({ text }) => text).join("\n\n").length + 2;
+  const bounded = boundedHistory(history, historyRoom);
+  blocks.push(...newest.map((text, index) => ({ name: newestNames[index]!, text })),
+    ...bounded.texts.map((text, index) => ({ name: history[index]!.header === "---" ? "transcript" : history[index]!.header.split("\n")[0]!, text })),
+    { name: "footer", text: footerBlock });
+  const present = blocks.filter(({ text }) => text.length > 0);
+  let offset = 0;
+  const spans = present.map(({ name, text }) => {
+    const span = { name, start: offset, end: offset + text.length };
+    offset = span.end + 2;
+    return span;
+  });
   // A block with no allocation prints nothing; dropping it leaves no empty separators.
-  const summary = `${blocks.filter((block) => block.length > 0).join("\n\n")}\n`;
+  const summary = `${present.map(({ text }) => text).join("\n\n")}\n`;
   if (utf8Bytes(summary) > MAX_SUMMARY_BYTES) {
     throw new Error("fabric: the summary allocation exceeded its byte ceiling");
   }
-  return { summary, goalBlock, goalOffset, requestOmittedBytes, dialogueOmittedBytes };
+  const historyBlocks = Object.fromEntries(history.map((block, index) => [block.header.split("\n")[0]!, bounded.grants[index]!]));
+  const historyFacts = history.map((block) => {
+    const { bytes, minimum } = historyCandidate(block);
+    return { bytes, minimum };
+  });
+  return { summary, goalBlock, goalOffset, requestOmittedBytes, dialogueOmittedBytes, qaBudgets: { literals: literalRoom, historyBlocks, spans, footerBytes: utf8Bytes(footerBlock), historyFacts } };
 };
 
 export const renderSummary = (sections: Sections, options: RenderOptions): string =>

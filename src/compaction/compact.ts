@@ -8,6 +8,7 @@ import { renderSummaryWithMetadata, SUMMARY_HEADER } from "./render.ts";
 import { EARLIER_USERS_HEADER } from "./bounds.ts";
 import { acceptCut } from "./verified/cut.ts";
 import { noCutVerdict } from "./verified/no-cut.ts";
+import { checkQa, qaPlan } from "./qa.ts";
 
 export const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
 const SKIP_NOTHING = "fabric: nothing to compact";
@@ -23,6 +24,8 @@ export interface CompactOptions {
 export type CompactResult =
   | { messages: ClaudeMessage[] }
   | { skip: string }
+  /** A source-derived QA check refused the candidate summary. */
+  | { qa: string; candidate: ClaudeMessage[] }
   /** Over the budget with no prompt to cut at (one long turn): core's compactor, which can cut inside a turn, takes it. */
   | { core: string };
 
@@ -128,12 +131,15 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     if (sections.goal.includes(`User [entry ${id}]:\n${message.text}`)
       || sections.dialogue.some((line) => line.includes(`User instruction [entry ${id}]:\n${message.text}`))) wholeUsers.add(id);
   });
+  const literals = exactValues(messages, start, earlierSummary, summaryIndexes, wholeUsers, [...sections.goal, ...sections.dialogue].join("\n\n"));
+  const sourceEvents = summarizedEvents.map(addressed);
+  const sourceRetained = retainedDialogue.map(addressed);
   const rendered = renderSummaryWithMetadata(sections, {
     firstEntryId: source(0),
     lastEntryId: source(start - 1),
     lastTimestamp: "",
     requestLines,
-    literals: exactValues(messages, start, earlierSummary, summaryIndexes, wholeUsers, [...sections.goal, ...sections.dialogue].join("\n\n")),
+    literals,
     ...(earlierSummary ? { earlierSummary } : {}),
   });
 
@@ -141,10 +147,11 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     throw new Error("fabric: the earlier-user omission notice did not survive rendering");
   }
 
-  return {
-    messages: [
-      { role: "user", text: rendered.summary, toolUses: [] },
-      ...messages.slice(start),
-    ],
-  };
+  const checked = checkQa(rendered.summary, qaPlan(sourceEvents, sourceRetained, { messages, start, earlierSummary: earlierSummary ?? "", summaryIndexes }, rendered.qaBudgets, requestLines));
+  const candidate: ClaudeMessage[] = [
+    { role: "user", text: rendered.summary, toolUses: [] },
+    ...messages.slice(start),
+  ];
+  if (checked.reason) return { qa: `fabric: summary QA refused: ${checked.reason}`, candidate };
+  return { messages: candidate };
 };

@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as renderer from "../../src/compaction/render.ts";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -332,6 +333,132 @@ test("the active chain crosses a core boundary through logicalParentUuid", async
     expect(result.messages?.[0]?.text).not.toContain("[Earlier summary]");
     expect(h.calls).toEqual([]);
     expect(h.logs).toEqual([]);
+  });
+});
+
+for (const carry of [false, true]) test(`G: auto compaction returns its genuinely wrong ${carry ? "carried" : "initial"} candidate`, async () => {
+  const original = renderer.renderSummaryWithMetadata;
+  const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+    const candidate = original(sections, options);
+    return { ...candidate, summary: candidate.summary.replace("Recover full context in fabric_exec with history.recall and history.expand.", "[missing footer]") };
+  });
+  try {
+    const prior = message("user", "[Fabric summary]\nEarlier.", "summary");
+    const first = message("user", "Original request.", "first");
+    const event: Event = { trigger: "auto", messages: [...(carry ? [prior] : []), first, message("user", `LAST ${"x".repeat(81000)}`, "last")] };
+    const h = hook("");
+    const result = await h.run(event);
+    expect(result.messages?.[0]?.text).toContain("[missing footer]");
+    expect(h.calls).toEqual([]);
+    expect(h.logs[0]).toContain("summary QA refused: recall footer");
+    expect(h.logTargets).toEqual(carry ? ["debug", "debug"] : ["debug"]);
+    if (carry) expect(h.logs[1]).toContain("no transcript path");
+  } finally { spy.mockRestore(); }
+});
+
+for (const trigger of ["manual", "auto"] as const) test(`R3-5: ${trigger} rebuilds after only the carried candidate fails QA`, async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "good-rebuild.jsonl");
+    const first = message("user", "Original request.", "first");
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null), row(joinMessage, "first"), row(last, "join")]);
+    const event: Event = { trigger, messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const original = renderer.renderSummaryWithMetadata;
+    const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+      const candidate = original(sections, options);
+      return !options.earlierSummary ? candidate : { ...candidate, summary: candidate.summary.replace(
+        "Recover full context in fabric_exec with history.recall and history.expand.", "[missing footer]") };
+    });
+    try {
+      const h = hook(path);
+      const result = await h.run(event);
+      expect(result.messages?.[0]?.text).toContain("Original request.");
+      expect(result.messages?.[0]?.text).not.toContain("[missing footer]");
+      expect(h.reads.length).toBeGreaterThan(0);
+      expect(h.logs[0]).toContain("summary QA refused: recall footer");
+      expect(h.logTargets).toEqual(["debug"]);
+      expect(h.calls).toEqual([]);
+    } finally { spy.mockRestore(); }
+  });
+});
+
+for (const trigger of ["manual", "auto"] as const) test(`R3-both: ${trigger} returns the refused rebuild when the carry was also refused`, async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "both-bad.jsonl");
+    const first = message("user", "Original request.", "first");
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null), row(joinMessage, "first"), row(last, "join")]);
+    const event: Event = { trigger, messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const original = renderer.renderSummaryWithMetadata;
+    const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+      const candidate = original(sections, options);
+      const marker = options.earlierSummary ? "[bad carry]" : "[bad rebuild]";
+      return { ...candidate, summary: candidate.summary.replace("Recover full context in fabric_exec with history.recall and history.expand.", marker) };
+    });
+    try {
+      const h = hook(path);
+      const result = await h.run(event);
+      expect(result.messages?.[0]?.text).toContain("[bad rebuild]");
+      expect(result.messages?.[0]?.text).not.toContain("[bad carry]");
+      expect(h.logs.filter((line) => line.includes("summary QA refused: recall footer"))).toHaveLength(2);
+      expect(h.logTargets).toEqual(["debug", "debug"]);
+      expect(h.calls).toEqual([]);
+    } finally { spy.mockRestore(); }
+  });
+});
+
+test("E: a rebuilt failed edit with a clipped long path is admitted", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "qa-refusal.jsonl");
+    const first = message("user", "Original request.", "first");
+    const longPath = `src/${"p".repeat(1200)}.txt`;
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null),
+      { type: "assistant", uuid: "call", parentUuid: "first", message: { content: [
+        { type: "tool_use", id: "edit", name: "Edit", input: { file_path: longPath } }] } },
+      { type: "user", uuid: "answer", parentUuid: "call", message: { content: [
+        { type: "tool_result", tool_use_id: "edit", content: "permission denied", is_error: true }] } },
+      row(joinMessage, "answer"), row(last, "join")]);
+    const event: Event = { trigger: "manual", messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const carried = compact(event.messages);
+    expect("messages" in carried).toBe(true);
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(result.messages?.[0]?.text).toContain("Original request.");
+    expect(result.messages?.[0]?.text).toContain("- Edit src/");
+    expect(result.messages?.[0]?.text).not.toContain(longPath);
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toEqual([]);
+  });
+});
+
+test("G: a genuinely wrong rebuilt candidate falls back to the carried summary", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "bad-rebuild.jsonl");
+    const first = message("user", "Original request.", "first");
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null), row(joinMessage, "first"), row(last, "join")]);
+    const event: Event = { trigger: "auto", messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const carried = compact(event.messages);
+    expect("messages" in carried).toBe(true);
+    const original = renderer.renderSummaryWithMetadata;
+    const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+      const candidate = original(sections, options);
+      return options.firstEntryId !== "first" ? candidate : { ...candidate, summary: candidate.summary.replace(
+        "Recover full context in fabric_exec with history.recall and history.expand.", "[missing footer]") };
+    });
+    try {
+      const h = hook(path);
+      const result = await h.run(event);
+      expect(result).toEqual(carried);
+      expect(h.calls).toEqual([]);
+      expect(h.logs[0]).toContain("summary QA refused: recall footer");
+      expect(h.logTargets).toEqual(["debug"]);
+    } finally { spy.mockRestore(); }
   });
 });
 
