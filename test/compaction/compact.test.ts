@@ -312,6 +312,40 @@ describe("compact: what the summary loses today", () => {
     }
   });
 
+  test.each([
+    "one-time code", "one time code", "one-time password", "one-time passcode", "verification code",
+    "security code", "passcode", "2FA code", "recovery code", "ONE_TIME_CODE", "user_passcode",
+  ].flatMap((label) => ["fresh", "carried"].map((source) => ({ label, source }))))
+  ("screens $label in $source user excerpts", ({ label, source }) => {
+    const excerpt = `${label} is 493827.`; // Synthetic value only.
+    const values = source === "fresh"
+      ? exactValues([prompt(excerpt, "user")], 1)
+      : exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`);
+    expect(values).toEqual([]);
+  });
+
+  test("does not promote a one-time code into a compacted exact-values section", () => {
+    const excerpt = "one-time code is 493827."; // Synthetic value only.
+    const section = summaryOf([prompt(`${"ordinary ".repeat(600)}\n${excerpt}`, "user"), reply("Done."), prompt("Next."), reply("Done.")])
+      .split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).not.toContain(excerpt);
+  });
+
+  test.each(["zip code", "error code", "exit code", "status code", "source code", "code review"])
+  ("keeps noncredential %s in fresh and carried user excerpts", (label) => {
+    const excerpt = `${label} is 493827.`;
+    expect(exactValues([prompt(excerpt, "user")], 1)).toEqual([{ entryId: "user", value: excerpt }]);
+    expect(exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`))
+      .toEqual([{ entryId: "user", value: excerpt }]);
+  });
+
+  test("keeps an error code in the exact-values section", () => {
+    const result = { ...results({ tool_use_id: "error", text: "E4471", isError: true }), handle: "source" };
+    const section = summaryOf([prompt("Check."), result, prompt("Next."), reply("Done.")])
+      .split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry source] E4471");
+  });
+
   test("screens credential key words in fresh and carried excerpts", () => {
     for (const key of ["key", "token", "secret", "password", "passwd", "passphrase", "PIN", "OTP", "authorization", "bearer", "credential", "cookie", "session"]) {
       const excerpt = `E4471: ${key} unavailable`;
