@@ -119,19 +119,7 @@ export const qaPlan = (events: CompactionEvent[], retained: CompactionEvent[],
   const goalGrant = allocateProtectedRoom(recentDemand, requestSectionBytes(requestLines), MAX_EARLIER_USERS_SECTION_BYTES, 0).newestBytes;
   const goal = sourceGoal(events, exchanges, requestLines, goalGrant);
   const first = events.find((event) => event.kind === "user" && event.text.trim());
-  if (first && !exchanges.some(({ user }) => user.entryId === first.entryId)) {
-    const { header, items, selected } = goal;
-    const index = selected.findIndex((user) => user.entryId === first.entryId);
-    let expected = index < 0 ? "" : items[index]!;
-    if (expected && utf8Bytes([header, ...items].join("\n\n")) > goalGrant) {
-      if (utf8Bytes(header) + 2 * items.length > goalGrant) {
-        expected = boundedExcerpt(items.join("\n\n"), goalGrant - utf8Bytes(header) - 2).text;
-      } else {
-        expected = boundedExcerpt(expected, protectedBudgets(header, items, goalGrant)[index]!).text;
-      }
-    }
-    add("original request", EARLIER_USERS_HEADER, expected ? goal.block : "", true);
-  }
+  add("original request", EARLIER_USERS_HEADER, goal.block, true);
   const recent = sourceRecentItems;
   let fullDialogue = "";
   if (recent.length) {
@@ -260,6 +248,7 @@ const badSpan = (summary: string, spans: QaPlan["spans"], request: string): QaRe
 const historyMatches = (section: string, probe: HistoryProbe): boolean => {
   const lines = probe.lines.map((line) => clipUtf8(line, MAX_RENDERED_LINE_BYTES));
   if (!section) return qaHistoryAccounting.step({}, qaHistoryAccounting.init({}), { shown: 0, omitted: 0, total: lines.length }).scalars["out.admitted"] === 1;
+  if (lines.length === 0) return false;
   if (section !== probe.header && !section.startsWith(`${probe.header}\n`)) return false;
   const body = section.slice(probe.header.length + 1);
   const seen = new Set<string>();
