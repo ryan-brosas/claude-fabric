@@ -4,7 +4,7 @@ import { allocateProtectedRoom, boundedExcerpt, boundedHeadTail, clipUtf8, DIALO
   MAX_SUMMARY_BYTES, MAX_SUMMARY_FOOTER_BYTES, MAX_SUMMARY_FRAMING_BYTES, protectedBudgets, recentDialogueBytes,
   REQUEST_HEADER, requestSectionBytes, utf8Bytes } from "./bounds.ts";
 import type { Sections } from "./projections.ts";
-import { isPathLiteral, LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
+import { carryReference, isPathLiteral, LITERALS_HEADER, MAX_LITERALS_SECTION_BYTES, renderExactValues, type ExactValue } from "./literals.ts";
 import { allocateSummaryCarry } from "./verified/context.ts";
 
 // The first line of every summary this compactor writes, and how a later
@@ -192,8 +192,8 @@ const carryTokenAt = (carry: string, start: number, end: number): { text: string
   return { text: text.replace(/[)\]"'`.,;:!?]+$/g, ""), end: last };
 };
 
-const visibleInCarry = (carry: string, value: string): boolean => {
-  if (!value) return false;
+const locationInCarry = (carry: string, value: string): number => {
+  if (!value) return -1;
   const path = isPathLiteral(value);
   let tokenEnd = -1, longerPath = false;
   for (let start = carry.indexOf(value); start >= 0; start = carry.indexOf(value, start + 1)) {
@@ -204,9 +204,9 @@ const visibleInCarry = (carry: string, value: string): boolean => {
       tokenEnd = token.end;
       longerPath = token.text !== value && token.text.includes(value) && isPathLiteral(token.text);
     }
-    if (!longerPath) return true;
+    if (!longerPath) return start;
   }
-  return false;
+  return -1;
 };
 
 export interface RenderedSummary {
@@ -275,7 +275,13 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // Every block, its separator and the final newline are counted before the
   // allocation, so no section can push the footer past the ceiling.
   const literals = options.literals ?? [];
-  const literalDemand = utf8Bytes(renderExactValues(literals, MAX_LITERALS_SECTION_BYTES));
+  // A reference can be longer than a short value; reserve for the larger form
+  // before the Carry is cut and its actual offsets are known.
+  const literalDemandValues = options.earlierSummary ? literals.map((literal) => {
+    const reference = carryReference(MAX_SUMMARY_BYTES, literal.value.length);
+    return utf8Bytes(reference) > utf8Bytes(literal.value) ? { ...literal, value: reference } : literal;
+  }) : literals;
+  const literalDemand = utf8Bytes(renderExactValues(literalDemandValues, MAX_LITERALS_SECTION_BYTES));
   const blockCount = 1 + newest.length + (options.earlierSummary ? 1 : 0) + (literalDemand ? 1 : 0) + history.length + 1;
   const framingBytes = utf8Bytes(SUMMARY_HEADER) + utf8Bytes(footerBlock) + 2 * (blockCount - 1) + 1;
   if (framingBytes > MAX_SUMMARY_FRAMING_BYTES) {
@@ -297,10 +303,17 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // Keep operational minima first, then exact values, then sampled history.
   const historyMinimum = Math.min(allocation.historyBytes, history.reduce((sum, block) => sum + historyCandidate(block).minimum, 0));
   const literalRoom = allocateSummaryCarry(allocation.historyBytes - historyMinimum, 0, literalDemand, 0, 0).newestBytes;
-  // A Carry can be cut in the middle: only its actual rendered text can
-  // replace an exact-value row without losing a value.
+  // Only the rendered Carry can replace a value. Refer to its position so the
+  // next compaction can recover the value before that Carry is cut again.
   const carryBlock = earlierSummary !== undefined ? carriedBlock(earlierSummary, allocation.carryBytes) : "";
-  const literalBlock = renderExactValues(literals.filter(({ value }) => !visibleInCarry(carryBlock, value)), literalRoom);
+  const needed: ExactValue[] = [], references: ExactValue[] = [];
+  for (const literal of literals) {
+    const offset = locationInCarry(carryBlock, literal.value);
+    if (offset < 0) needed.push(literal);
+    else references.push({ ...literal, value: carryReference(offset, literal.value.length) });
+  }
+  // Actual values take priority: references must not crowd fresh values out.
+  const literalBlock = renderExactValues([...needed, ...references], literalRoom);
   const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
   // The literal block must be first: later headings can belong to verbatim user text.
   const blocks: string[] = [SUMMARY_HEADER, literalBlock];

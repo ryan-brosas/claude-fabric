@@ -648,6 +648,42 @@ describe("compact: what the summary loses today", () => {
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
+  test("keeps values when a later Carry cut removes their only visible copy", () => {
+    const cases = [
+      { kind: "user sentence", value: "Target is violet-harbor-01." },
+      { kind: "path", value: "src/audit-target.ts" },
+      { kind: "identifier", value: "BATCH-5c1e8a0b77d2" },
+      { kind: "error code", value: "E4471" },
+    ];
+    const results: Record<string, boolean> = {};
+    for (const { kind, value } of cases) {
+      // Confirm the seed row comes from the real user or assistant extractor.
+      const source = kind === "user sentence" ? prompt(value, "source") : reply(`Observed ${value}.`, "source");
+      expect(exactValues([source], 1)).toContainEqual({ entryId: "source", value });
+      const previous = `[Fabric summary]\n\n[Exact values]\nUnverified excerpts.\n- [entry source] ${value}\n\n[Earlier user messages]\n${"🦊" + "a".repeat(8496)}\n${value}\n${"z".repeat(8500)}`;
+      const first = summaryOf([prompt(previous, "previous"), prompt("Continue."), reply("Working."), prompt("Next."), reply("Done.")]);
+      const firstExact = first.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+      const firstCarry = first.split("[Earlier summary]\n")[1] ?? "";
+      expect(firstCarry.split(value)).toHaveLength(2);
+      expect(firstExact).not.toContain(value);
+      expect(first.split(value)).toHaveLength(2);
+      const newer = Array.from({ length: 8 }, (_, index) => [
+        prompt(`New work ${index}. ${"u".repeat(2600)}`), reply(`Progress ${index}. ${"r".repeat(850)}`),
+      ]).flat();
+      const final = summaryOf([prompt(first, "first-summary"), ...newer, prompt("Next."), reply("Done.")]);
+      const finalCarry = final.slice(final.indexOf("[Earlier summary]\n") + "[Earlier summary]\n".length);
+      expect(finalCarry).toContain("omitted");
+      expect(finalCarry).not.toContain(value);
+      const finalExact = final.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+      expect(utf8Bytes(final)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+      results[kind] = finalExact.includes(`[entry source] ${value}`);
+    }
+    expect(results).toEqual({ "user sentence": true, path: true, identifier: true, "error code": true });
+    // A bad offset must not turn unrelated summary text into an exact value.
+    const invalid = "[Exact values]\n- [entry source] [Carry reference 999999:5]\n\n[Earlier summary]\nE4471";
+    expect(exactValues([], 0, invalid)).toEqual([]);
+  });
+
   test("carried visible values do not crowd a fresh value out of exact values", () => {
     const facts = Array.from({ length: 40 }, (_, i) => `Target is previous-environment-${String(i).padStart(2, "0")}.`);
     const rows = facts.map((fact, i) => `- [entry u${String(i).padStart(2, "0")}] ${fact}`).join("\n");

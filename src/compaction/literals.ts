@@ -14,6 +14,10 @@ export interface ExactValue {
   value: string;
 }
 
+// An exact value visible in Carry needs no second copy, but its source and
+// position must survive until the next compaction can extract it again.
+export const carryReference = (offset: number, length: number): string => `[Carry reference ${offset}:${length}]`;
+
 interface Candidate extends ExactValue {
   position: number;
   order: number;
@@ -163,16 +167,30 @@ const userExcerpts = (text: string): string[] => {
   return [...values];
 };
 
+// References address UTF-16 code units in the immediately following Carry.
+const referencedValue = (text: string, carry: string): string => {
+  const reference = /^\[Carry reference (\d+):(\d+)\]$/.exec(text);
+  if (!reference) return text;
+  const offset = Number(reference[1]), length = Number(reference[2]);
+  if (!carry.startsWith("[Earlier summary]\n") || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length)
+    || offset < "[Earlier summary]\n".length || length <= 0 || offset + length > carry.length) return "";
+  return carry.slice(offset, offset + length);
+};
+
 const carriedValues = (summary: string): ExactValue[] => {
   const values: ExactValue[] = [];
   // Only the first outer block is ours. Later headings can be verbatim user text
   // or a nested earlier summary, neither of which may supply carried values.
   if (!summary.startsWith(`${LITERALS_HEADER}\n`)) return values;
+  const blockEnd = summary.indexOf("\n\n");
+  const carry = blockEnd < 0 ? "" : summary.slice(blockEnd + 2);
   for (const line of summary.slice(LITERALS_HEADER.length + 1).split("\n")) {
     if (!line || line === "---" || /^\[[^\]]+\]$/.test(line)) break;
     const match = /^- \[entry ([^;\]\r\n]+)\] (.+)$/.exec(line);
-    if (match && (valuesIn(match[2]!).includes(match[2]!) || userExcerpts(match[2]!).includes(match[2]!))) {
-      values.push({ entryId: match[1]!, value: match[2]! });
+    if (!match) continue;
+    const value = referencedValue(match[2]!, carry);
+    if (valuesIn(value).includes(value) || userExcerpts(value).includes(value)) {
+      values.push({ entryId: match[1]!, value });
     }
   }
   return values;
