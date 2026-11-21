@@ -64,8 +64,9 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   its event carries the session's tool pool and its result is the whole ordered list. The section
   is added last as `session` only when the pool holds `mcp__plugin_fabric_fabric__fabric_exec`,
   and a recompose that already holds the id is left alone. `prompt.section` rewrites one named section and carries
-  no pool, so it cannot gate on the tool. The text is capped at 900 chars (899 now) because every
-  turn pays for it and step 6 allows at most 10% more tokens than native code mode. Its tool names
+  no pool, so it cannot gate on the tool. The text is capped at 1000 chars (966 now) because every
+  turn pays for it and step 6 allows at most 10% more tokens than native code mode. The cap rose
+  from 900 to 1000 to add the sentence without rewording the measured text. Its tool names
   are generated from `providers/tools/names.ts`, a names-only list beside `TOOLS`: the hooks
   worker refuses the zod import every provider pulls in, so the mod cannot read `TOOLS` itself, and
   a test fails if the two lists drift. Dropped from upstream, because Claude Code has no surface for
