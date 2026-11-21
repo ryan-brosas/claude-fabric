@@ -15,3 +15,22 @@ function step(params, state, input) {
 }
 return { init, step };
 })();
+
+export const userSelection = /* @__PURE__ */ (() => {
+// Generated from the machine earlier user selection. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {"total": $n(params["total"], "param total")}, s = {};
+  return {scalars: {"phase": 0, "seen": 0, "kept": 0, "omitted": 0, "missedDistinct": 0, "missedRepeat": 0, "pickedRepeat": 0, "noticeRequired": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"total": $n(params["total"], "param total"), "op": $n(input["op"], "input op"), "index": $n(input["index"], "input index"), "selected": $n(input["selected"], "input selected"), "distinct": $n(input["distinct"], "input distinct"), "notice": $n(input["notice"], "input notice")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  const flag0 = ((s["phase"] === 0) && ($x($x(env["index"] + s["seen"]) + 1) === env["total"]) && (((env["total"] <= 64) || (!(env["index"] === 0))) || (env["selected"] === 1)) && (!((((env["selected"] === 1) && (env["distinct"] === 1)) && (!((64 < env["total"]) && (env["index"] === 0)))) && (0 < s["missedDistinct"]))) && (!((((env["selected"] === 1) && (!(env["distinct"] === 1))) && (!((64 < env["total"]) && (env["index"] === 0)))) && (0 < s["missedRepeat"]))) && ($x(s["kept"] + ((env["selected"] === 1) ? 1 : 0)) <= 64));
+  const flag1 = ((s["phase"] === 0) && ((s["seen"] === env["total"]) && ($x(s["kept"] + s["omitted"]) === env["total"])) && (s["kept"] === Math.min(env["total"], 64)) && ((s["missedDistinct"] === 0) || (s["pickedRepeat"] === 0)));
+  const flag2 = ((s["phase"] === 1) && ((s["noticeRequired"] === 0) || (env["notice"] === 1)));
+  const flag3 = ((64 < env["total"]) && (env["index"] === 0));
+  if (!((env["op"] < 3) && (env["selected"] <= 1) && (env["distinct"] <= 1) && (env["notice"] <= 1))) throw new RangeError("earlier user selection: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "phase": ((env["op"] === 0) ? (flag0 ? 0 : 2) : ((env["op"] === 1) ? (flag1 ? 1 : 2) : (flag2 ? 3 : 2))), "seen": ((env["op"] === 0) ? $x(s["seen"] + 1) : s["seen"]), "kept": (((env["op"] === 0) && (env["selected"] === 1)) ? $x(s["kept"] + 1) : s["kept"]), "omitted": (((env["op"] === 0) && (!(env["selected"] === 1))) ? $x(s["omitted"] + 1) : s["omitted"]), "missedDistinct": (((env["op"] === 0) && (!(env["selected"] === 1)) && (env["distinct"] === 1) && (!flag3)) ? $x(s["missedDistinct"] + 1) : s["missedDistinct"]), "missedRepeat": (((env["op"] === 0) && (!(env["selected"] === 1)) && (!(env["distinct"] === 1)) && (!flag3)) ? $x(s["missedRepeat"] + 1) : s["missedRepeat"]), "pickedRepeat": (((env["op"] === 0) && (env["selected"] === 1) && (!(env["distinct"] === 1)) && (!flag3)) ? $x(s["pickedRepeat"] + 1) : s["pickedRepeat"]), "noticeRequired": ((env["op"] === 1) ? ((0 < s["omitted"]) ? 1 : 0) : s["noticeRequired"])};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();

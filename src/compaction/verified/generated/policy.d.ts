@@ -2,3 +2,4 @@
 export interface MachineState { scalars: Record<string, number>; maps: Record<string, Map<number, number>>; defaults?: Record<string, number> }
 export interface Machine { init(params: object): MachineState; step(params: object, state: MachineState, input: object): MachineState }
 export declare const sampleWithin: Machine;
+export declare const userSelection: Machine;

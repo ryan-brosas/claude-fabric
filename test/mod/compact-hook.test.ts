@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { register } from "../../src/mod/index.ts";
+import { userSelection } from "../../src/compaction/verified/generated/policy.js";
 
 interface Event {
   trigger: "manual" | "auto" | "plugin" | "precompute";
@@ -65,6 +66,25 @@ const harness = (options: { logThrows?: boolean } = {}) => {
 };
 
 describe("the mod's session.compact hook", () => {
+  test("a missing required omission notice follows the existing hook fallback", () => {
+    const { run, calls, logs } = harness();
+    const messages = Array.from({ length: 70 }, (_, i) => ({ role: "user", text: `User ${i}`, toolUses: [], handle: `u-${i}` }));
+    messages.push({ role: "user", text: "x".repeat(79_990), toolUses: [], handle: "tail" });
+    const event: Event = { trigger: "manual", messages };
+    const original = userSelection.step;
+    try {
+      userSelection.step = (params, state, input) => {
+        const row = input as { op: number; notice: number };
+        return original(params, state, row.op === 2 ? { ...row, notice: 0 } : input);
+      };
+      expect(run(event)).toEqual({ messages: [{ role: "user", text: "core summary", toolUses: [] }] });
+      expect(calls).toEqual([event]);
+      expect(logs[0]?.line).toContain("earlier-user omission notice did not survive rendering");
+    } finally {
+      userSelection.step = original;
+    }
+  });
+
   test("precompute installs nothing and does not ask core", () => {
     const { run, calls } = harness();
     expect(run({ trigger: "precompute", messages: [{ role: "user", text: "Hello.", toolUses: [] }] }))
