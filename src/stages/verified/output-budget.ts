@@ -10,9 +10,11 @@ export interface BudgetFacts {
   text: number;
   /** The cap the model sees; at least one, or no proof covers the call. */
   max: number;
-  /** The hint and, when written, the line naming the saved file; 0 when the text fits. */
+  /** The hint and saved line on the saved path; 0 when the file was not saved. */
   suffix: number;
-  /** The length of the kernel's own cut at the remaining body budget; 0 when it did not run. */
+  /** The full hint length, even if the fallback leaves no room for it. */
+  hint: number;
+  /** The length of the kernel's own cut at the full cap; 0 when it did not run. */
   fallback: number;
   /** The whole text reached a file. */
   wrote: boolean;
@@ -28,6 +30,8 @@ export interface BudgetLengths {
   cut: number;
   /** The saved path's result after the cap takes its last word. */
   kept: number;
+  /** The hint length the machine chose for the fallback path. */
+  fallbackSuffix: number;
   /** The result's length. */
   out: number;
 }
@@ -39,6 +43,7 @@ export const budgetLengths = (facts: BudgetFacts): BudgetLengths => {
     text: facts.text,
     max: facts.max,
     suffix: facts.suffix,
+    hint: facts.hint,
     fallback: facts.fallback,
     wrote: bit(facts.wrote),
   });
@@ -48,6 +53,7 @@ export const budgetLengths = (facts: BudgetFacts): BudgetLengths => {
     bodyBudget: scalars["out.bodyBudget"],
     cut: scalars["out.cut"],
     kept: scalars["out.kept"],
+    fallbackSuffix: scalars["out.fallbackSuffix"],
     out: scalars["out.out"],
   };
 };

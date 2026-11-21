@@ -84,22 +84,32 @@ describe("the verified result budget", () => {
   const saved = savedLine(4000, "/tmp/fabric-result-1/result.txt").length;
 
   test("takes the untouched, saved and fallback paths from the machine's arithmetic", () => {
-    expect(budgetLengths({ text: 5, max: 10, suffix: 0, fallback: 0, wrote: false }).out).toBe(5);
-    expect(budgetLengths({ text: 4000, max: 100, suffix: saved, fallback: 0, wrote: true }).out).toBe(100);
-    expect(budgetLengths({ text: 4000, max: 100, suffix: 0, fallback: 50, wrote: false }).out).toBe(50);
-    expect(budgetLengths({ text: 4000, max: 100, suffix: 0, fallback: 300, wrote: false }).out).toBe(100);
+    expect(budgetLengths({ text: 5, max: 10, suffix: 0, hint: 0, fallback: 0, wrote: false }).out).toBe(5);
+    expect(budgetLengths({ text: 4000, max: 100, suffix: saved, hint: 0, fallback: 0, wrote: true }).out).toBe(100);
+    expect(budgetLengths({ text: 4000, max: 100, suffix: 0, hint: 0, fallback: 50, wrote: false }).out).toBe(50);
+    expect(budgetLengths({ text: 4000, max: 100, suffix: 0, hint: 0, fallback: 300, wrote: false }).out).toBe(100);
   });
 
   test("refuses a result the machine does not predict", () => {
-    const facts = { text: 4000, max: 100, suffix: saved, fallback: 0, wrote: true };
+    const facts = { text: 4000, max: 100, suffix: saved, hint: 0, fallback: 0, wrote: true };
     expect(acceptBudget(facts, budgetLengths(facts).out)).toBe(true);
     expect(acceptBudget(facts, budgetLengths(facts).out + 1)).toBe(false);
     expect(acceptBudget({ ...facts, text: 5 }, 4)).toBe(false);
   });
 
   test("refuses facts the machine cannot represent", () => {
-    expect(() => budgetLengths({ text: 4000, max: 100, suffix: -1, fallback: 0, wrote: true })).toThrow(RangeError);
-    expect(() => budgetLengths({ text: 4000, max: 0, suffix: 0, fallback: 0, wrote: false })).toThrow(RangeError);
+    expect(() => budgetLengths({ text: 4000, max: 100, suffix: -1, hint: 0, fallback: 0, wrote: true })).toThrow(RangeError);
+    expect(() => budgetLengths({ text: 4000, max: 0, suffix: 0, hint: 0, fallback: 0, wrote: false })).toThrow(RangeError);
+  });
+
+  test("checks the selected hint against the fallback and cap", () => {
+    const base = { text: 4000, max: 100, hint: 20, wrote: false };
+    const fits = { ...base, fallback: 80, suffix: 0 };
+    const tooLong = { ...base, fallback: 81, suffix: 0 };
+    expect(budgetLengths(fits)).toMatchObject({ out: 100, fallbackSuffix: 20 });
+    expect(budgetLengths(tooLong)).toMatchObject({ out: 81, fallbackSuffix: 0 });
+    expect(acceptBudget(fits, 80)).toBe(false);
+    expect(acceptBudget(tooLong, 101)).toBe(false);
   });
 
   test("every path the stage takes agrees with the machine, at every cap", async () => {

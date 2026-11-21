@@ -97,9 +97,23 @@ test("a failed save still tells the model to use top-level Read without claiming
     write: async () => { throw new Error("disk full"); },
   });
   expect(text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
-  expect(text.includes("Top-level Read returns full files; call it, not programs.")).toBe(true);
+  expect(text.includes("This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.")).toBe(true);
   expect(text).toContain("chars cut from the middle");
   expect(text).not.toContain("saved to:");
+});
+
+test("a 19943-character fallback fitting the cap is returned whole", async () => {
+  const fallbackText = "fallback-" + "f".repeat(19_934);
+  expect(fallbackText.length).toBe(19_943);
+  let requestedMax = 0;
+  const text = await outputBudget({
+    text: "x".repeat(31_000),
+    max: MAX_RESULT_CHARS,
+    fallback: (_text, max) => { requestedMax = max; return fallbackText; },
+    write: async () => { throw new Error("disk full"); },
+  });
+  expect(text === fallbackText).toBe(true);
+  expect(requestedMax).toBe(MAX_RESULT_CHARS);
 });
 
 test("a fallback that fits beside the hint stays whole", async () => {
@@ -109,7 +123,19 @@ test("a fallback that fits beside the hint stays whole", async () => {
     fallback: () => "short fallback",
     write: async () => { throw new Error("disk full"); },
   });
-  expect(text).toBe("short fallback\nTop-level Read returns full files; call it, not programs.");
+  expect(text).toBe("short fallback\nThis is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.");
+});
+
+test("the hint is included exactly when a fitting fallback leaves room", async () => {
+  const hint = "\nThis is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.";
+  for (const length of [MAX_RESULT_CHARS - hint.length, MAX_RESULT_CHARS - hint.length + 1, MAX_RESULT_CHARS]) {
+    const original = "f".repeat(length);
+    const result = await outputBudget({
+      text: "x".repeat(31_000), max: MAX_RESULT_CHARS, fallback: () => original,
+      write: async () => { throw new Error("disk full"); },
+    });
+    expect(result).toBe(original + (length + hint.length <= MAX_RESULT_CHARS ? hint : ""));
+  }
 });
 
 test("a long saved path and the Read hint both fit under the real result cap", async () => {
@@ -121,7 +147,7 @@ test("a long saved path and the Read hint both fit under the real result cap", a
     write: async () => path,
   });
   expect(text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
-  expect(text.includes("Top-level Read returns full files; call it, not programs.")).toBe(true);
+  expect(text.includes("This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.")).toBe(true);
   expect(text.endsWith(path + "]")).toBe(true);
 });
 

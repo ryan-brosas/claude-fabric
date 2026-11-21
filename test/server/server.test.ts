@@ -92,7 +92,7 @@ test("history calls cross the real server and expand the fixture token", async (
 });
 
 test("a cut Read result tells the model to use top-level Read for whole files", async () => {
-  const hint = "Top-level Read returns full files; call it, not programs.";
+  const hint = "This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.";
   const file = join(work, "long-guide.txt");
   await Bun.write(file, ("x".repeat(99) + "\n").repeat(310));
   const result = await call({ code: 'return await Read("long-guide.txt");' });
@@ -118,7 +118,7 @@ test("a cut command result points to a saved file for top-level Read", async () 
   try {
     expect(result.isError).toBe(false);
     expect(result.text.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
-    expect(result.text.includes("Top-level Read returns full files; call it, not programs.")).toBe(true);
+    expect(result.text.includes("This is fabric_exec's result limit; if you need full file text, call top-level Read directly instead of returning it through a program.")).toBe(true);
     expect(saved).toBeDefined();
     expect(await Bun.file(saved!).text()).toBe("x".repeat(31_000));
   } finally {
