@@ -1,7 +1,9 @@
 // Transcript JSONL rows use the same ClaudeMessage input as the hook and the compactor.
 import { transcriptChain, type TranscriptRow } from "../recall/transcript.ts";
 import { isFabricSummary } from "./compact.ts";
-import type { ClaudeMessage } from "./from-claude.ts";
+import { exitCodeOf, hasOutcome, inlineOutcome, normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "./from-claude.ts";
+import { outcomeRestoration } from "./verified/generated/outcome-restoration.js";
+import { outcomeConservationProblem } from "./outcome-conservation.ts";
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -33,6 +35,111 @@ export function fromTranscript(row: TranscriptRow): ClaudeMessage {
     ...(toolResults.length ? { toolResults } : {}), uuid: row.uuid };
 }
 
+const MISSING_OUTCOME = "missing tool outcome in rebuilt input";
+
+// Extra raw outcomes may precede restoration, but must not follow the first
+// restored outcome: they could change which failures an exact retry resolves.
+function sameRestoredSuffix(expected: readonly string[], actual: readonly string[], restored: ReadonlySet<string>): boolean {
+  const firstExpected = expected.findIndex((id) => restored.has(id));
+  const firstActual = actual.findIndex((id) => restored.has(id));
+  if (firstExpected < 0 || firstActual < 0) return false;
+  const suffix = expected.slice(firstExpected);
+  return suffix.length === actual.length - firstActual
+    && suffix.every((id, index) => id === actual[firstActual + index]);
+}
+
+// Current outcomes must appear in order, including an exact restored suffix.
+// The final conservation check also compares the outcome contents.
+function sameCurrentOrder(current: readonly ClaudeMessage[], rebuilt: readonly ClaudeMessage[], restored: ReadonlySet<string>): boolean {
+  const ids = (messages: readonly ClaudeMessage[]) => normalizeMessages(messages).flatMap((event) =>
+    event.kind === "toolResult" || event.kind === "bash" ? [event.toolCallId] : []);
+  const expected = ids(current), actual = ids(rebuilt);
+  let next = 0;
+  for (const id of actual) if (id === expected[next]) next++;
+  return next === expected.length && sameRestoredSuffix(expected, actual, restored);
+}
+
+// Count the effective outcomes the compactor sees, not duplicate inline/row copies.
+function outcomeCounts(messages: readonly ClaudeMessage[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const event of normalizeMessages(messages)) {
+    if (event.kind === "toolResult" || event.kind === "bash") {
+      counts.set(event.toolCallId, (counts.get(event.toolCallId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+// Compare the authoritative inline outcome with the row as the rebuilt call
+// will normalize it, including a Bash exit code that makes a result an error.
+function matchesInline(original: ClaudeToolUse | undefined, call: ClaudeToolUse, result: ClaudeToolResult): boolean {
+  if (!original || !hasOutcome(original)) return true;
+  const inline = inlineOutcome(original);
+  const isError = (error: boolean, value: unknown): boolean => {
+    const exit = original.tool === "Bash" ? exitCodeOf(value) : null;
+    return error || (exit !== null && exit !== 0);
+  };
+  return inline.text === result.text && inline.isError === result.isError
+    && isError(inline.isError, inline.result) === isError(result.isError, result.result ?? call.result);
+}
+/** Restore only whole sibling result rows from the terminal parallel group. */
+function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, join: number,
+  prefixLength: number, rebuilt: ClaudeMessage[], chain: TranscriptRow[]): ClaudeMessage[] {
+  if (outcomeConservationProblem(current, rebuilt) !== MISSING_OUTCOME || !prefixLength) return rebuilt;
+
+  const rows = new Map(chain.map((row) => [row.uuid, row]));
+  const messageId = (message: ClaudeMessage): string => string(object(rows.get(message.uuid)?.message).id);
+  const last = rebuilt[prefixLength - 1]!;
+  const id = last.role === "assistant" ? messageId(last) : "";
+  if (!id) return rebuilt;
+  let start = prefixLength - 1;
+  while (start > 0 && rebuilt[start - 1]!.role === "assistant" && messageId(rebuilt[start - 1]!) === id) start--;
+  if (prefixLength - start < 2) return rebuilt;
+  const calls = new Map<string, ClaudeToolUse>();
+  for (const use of rebuilt.slice(start, prefixLength).flatMap((message) => message.toolUses)) {
+    if (!use.tool_use_id || calls.has(use.tool_use_id)) return rebuilt;
+    calls.set(use.tool_use_id, use);
+  }
+  const joined = rebuilt[prefixLength]!;
+  if (joined.role !== "user" || !joined.toolResults?.some((result) => calls.has(result.tool_use_id))) return rebuilt;
+
+  const required = outcomeCounts(current), existing = outcomeCounts(rebuilt);
+  const deficits = new Set([...required].filter(([toolId, count]) => (existing.get(toolId) ?? 0) < count).map(([toolId]) => toolId));
+  const allUses = rebuilt.flatMap((message) => message.toolUses);
+  const currentUses = current.flatMap((message) => message.toolUses);
+  const addresses = new Map<string, number>();
+  for (const message of current) {
+    const address = message.handle ?? message.uuid;
+    if (address) addresses.set(address, (addresses.get(address) ?? 0) + 1);
+  }
+  const candidates = new Set<ClaudeMessage>();
+  for (const toolId of deficits) {
+    const call = calls.get(toolId);
+    if (!toolId || !call || allUses.filter((use) => use.tool_use_id === toolId).length !== 1) return rebuilt;
+    const originals = currentUses.filter((use) => use.tool_use_id === toolId);
+    if (originals.length > 1 || originals.some((use) => use.tool !== call.tool
+      || JSON.stringify(use.input) !== JSON.stringify(call.input))) return rebuilt;
+    const occurrences = current.flatMap((message, index) => (message.toolResults ?? [])
+      .filter((result) => result.tool_use_id === toolId).map((result) => ({ message, index, result })));
+    if (occurrences.length !== 1) return rebuilt;
+    const { message, index, result } = occurrences[0]!;
+    const address = message.handle ?? message.uuid;
+    if (index <= summary || index >= join || message.role !== "user" || message.text || message.toolUses.length
+      || !address || addresses.get(address) !== 1 || rebuilt.some((row) => (row.handle ?? row.uuid) === address)
+      || message.toolResults!.some((entry) => !deficits.has(entry.tool_use_id))) return rebuilt;
+    if (!matchesInline(originals[0], call, result)) return rebuilt;
+    const verdict = outcomeRestoration.step({}, outcomeRestoration.init({}), {
+      required: required.get(toolId)!, existing: existing.get(toolId) ?? 0, restored: 1,
+    });
+    if (verdict.scalars["out.admitted"] !== 1) return rebuilt;
+    candidates.add(message);
+  }
+  if (!candidates.size) return rebuilt;
+  const additions = current.slice(summary + 1, join).filter((message) => candidates.has(message));
+  const output = [...rebuilt.slice(0, prefixLength), ...additions, ...rebuilt.slice(prefixLength)];
+  return sameCurrentOrder(current, output, deficits) ? output : rebuilt;
+}
+
 /** Rebuild only before the first current handle found on the active chain. */
 export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
   const summary = messages.findIndex(isFabricSummary);
@@ -49,5 +156,6 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
     .filter((row) => row.type === "user" || row.type === "assistant")
     .map(fromTranscript)
     .filter((message) => !isFabricSummary(message));
-  return [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
+  const rebuilt = [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
+  return restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain);
 }
