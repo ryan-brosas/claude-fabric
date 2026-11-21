@@ -420,6 +420,34 @@ describe("compact: what the summary loses today", () => {
     expect(summary).toContain("[entry result-error] E4471 line 58");
   });
 
+  test("a noisy failed result keeps its error excerpt ahead of incidental paths", () => {
+    const paths = Array.from({ length: 300 }, (_, i) => `src/atrace_${String(i).padStart(4, "0")}.ts`).join("\n");
+    const messages: ClaudeMessage[] = [
+      prompt("Run validation."),
+      { role: "assistant", text: "Running.", toolUses: [toolCall("Bash", { command: "validate" }, "err")] },
+      { ...results({ tool_use_id: "err", text: `validation started\nE4471 line 58: missing column\n${paths}`, isError: true }), handle: "r" },
+      prompt("Continue."), reply("Done."),
+    ];
+    const section = summaryOf(messages).split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(section).toContain("[entry r] E4471 line 58: missing column");
+  });
+
+  test("error excerpts outrank failed-result paths without discarding the paths", () => {
+    for (const isError of [true, false]) {
+      const text = "E4471 line 58: missing column\nsrc/atrace_0000.ts\nsrc/atrace_0001.ts";
+      const row = { ...results({ tool_use_id: "err", text, isError }), handle: "row" };
+      const inline: ClaudeMessage = { role: "assistant", text: "", handle: "call", toolUses: [
+        { ...toolCall("Bash", {}, "err"), text, ...(isError ? { isError: true as const } : {}) },
+      ] };
+      for (const source of [row, inline]) {
+        const values = exactValues([source], 1).map(({ value }) => value);
+        expect(values[0]).toBe("E4471 line 58: missing column");
+        expect(values).toContain("src/atrace_0000.ts");
+        expect(values).toContain("src/atrace_0001.ts");
+      }
+    }
+  });
+
   test("keeps a created path and computed id from older assistant replies", () => {
     const messages = [prompt("Create and calculate."), reply("Created tools/migrate_v3_alpha.py.", "created-reply"),
       reply("Checksum: 174890-46690deac7", "checksum-reply")];

@@ -18,6 +18,7 @@ interface Candidate extends ExactValue {
   position: number;
   order: number;
   error: boolean;
+  errorCode: boolean;
   missingUser: boolean;
   userOrder: number;
   shown: boolean;
@@ -30,6 +31,7 @@ const PATH = /^(?:\.{0,2}\/)?(?:[A-Za-z0-9_.()[\]-]+\/)+[A-Za-z0-9_.()[\]-]+\.[A
 const HYPHENATED = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/;
 const HEX = /^[0-9a-f]{12,31}$/i;
 const ERROR_CODE = /^[A-Z][A-Z_]*\d{3,}$/;
+const ERROR_EXCERPT = /^[A-Z][A-Z_]*\d{3,}\b/;
 // Prefixes from the published Gitleaks and sec.versal secret-scanning lists:
 // https://github.com/gitleaks/gitleaks/blob/5f6ec56cfa6f8c67648d863582c7ae2f206d5c1c/config/gitleaks.toml
 // https://jsonversal.com/sec/tools/secret-scanner/
@@ -180,7 +182,7 @@ const carriedValues = (summary: string): ExactValue[] => {
  * summaryIndexes is the same Carry classification the compactor uses. */
 export const exactValues = (messages: readonly ClaudeMessage[], start: number, earlierSummary = "", summaryIndexes: ReadonlySet<number>, wholeUsers: ReadonlySet<string> = new Set(), protectedText = ""): ExactValue[] => {
   const candidates: Candidate[] = carriedValues(earlierSummary).map((value, order) => ({
-    ...value, position: -1, order, error: /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value.value),
+    ...value, position: -1, order, error: ERROR_EXCERPT.test(value.value), errorCode: ERROR_EXCERPT.test(value.value),
     missingUser: !valuesIn(value.value).includes(value.value), userOrder: order, shown: protectedText.includes(value.value),
   }));
   const resultTexts = new Map<string, Set<string>>();
@@ -193,7 +195,8 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
     (message.toolUses ?? []).filter(hasOutcome).map((use) => [use.tool_use_id, inlineOutcome(use)] as const)));
   const add = (values: readonly string[], entryId: string, position: number, error: boolean, missingUser = false) => {
     values.forEach((value, index) => candidates.push({ entryId, value, position, order: candidates.length,
-      error: error || /^\b[A-Z][A-Z_]*\d{3,}\b/.test(value), missingUser, userOrder: values.length - index - 1, shown: protectedText.includes(value) }));
+      error: error || ERROR_EXCERPT.test(value), errorCode: ERROR_EXCERPT.test(value),
+      missingUser, userOrder: values.length - index - 1, shown: protectedText.includes(value) }));
   };
   const addToolResults = (message: ClaudeMessage, entryId: string, position: number) => {
     for (const use of message.toolUses ?? []) {
@@ -224,7 +227,9 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
     return candidate.missingUser ? 2 : 3;
   };
   candidates.sort((a, b) => {
-    const rank = priority(a) - priority(b) || Number(echoed(b)) - Number(echoed(a))
+    // A failed log's incidental paths inherit its error status; the actual error
+    // excerpt must win before those paths can fill the bounded section.
+    const rank = priority(a) - priority(b) || Number(b.errorCode) - Number(a.errorCode) || Number(echoed(b)) - Number(echoed(a))
       || Number(b.error) - Number(a.error) || Number(b.missingUser) - Number(a.missingUser);
     if (rank) return rank;
     // One excerpt per source before a second: one long clipped message must not
