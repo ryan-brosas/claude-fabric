@@ -25,7 +25,7 @@ export type CompactResult =
   | { messages: ClaudeMessage[] }
   | { skip: string }
   /** A source-derived QA check refused the candidate summary. */
-  | { qa: string }
+  | { qa: string; candidate: ClaudeMessage[] }
   /** Over the budget with no prompt to cut at (one long turn): core's compactor, which can cut inside a turn, takes it. */
   | { core: string };
 
@@ -147,13 +147,11 @@ export const compact = (messages: readonly ClaudeMessage[], options: CompactOpti
     throw new Error("fabric: the earlier-user omission notice did not survive rendering");
   }
 
-  const checked = checkQa(rendered.summary, qaPlan(sourceEvents, sourceRetained, sections, literals, rendered.qaBudgets));
-  if (checked.reason) return { qa: `fabric: summary QA refused: ${checked.reason}` };
-
-  return {
-    messages: [
-      { role: "user", text: rendered.summary, toolUses: [] },
-      ...messages.slice(start),
-    ],
-  };
+  const checked = checkQa(rendered.summary, qaPlan(sourceEvents, sourceRetained, { messages, start, earlierSummary: earlierSummary ?? "", summaryIndexes }, rendered.qaBudgets, requestLines));
+  const candidate: ClaudeMessage[] = [
+    { role: "user", text: rendered.summary, toolUses: [] },
+    ...messages.slice(start),
+  ];
+  if (checked.reason) return { qa: `fabric: summary QA refused: ${checked.reason}`, candidate };
+  return { messages: candidate };
 };

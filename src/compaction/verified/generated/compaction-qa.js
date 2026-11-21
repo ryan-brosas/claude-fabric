@@ -37,6 +37,7 @@ const $wordDivisionValue = function wordDivisionValue(width, part, index, values
   }
   return Number(carry);
 };
+function $x(v) { if (v > 9007199254740991) throw new RangeError('a value passed 2^53 - 1, past which the proofs over the naturals no longer describe the run'); return v; }
 
 export const compactionQa = /* @__PURE__ */ (() => {
 // Generated from the machine compaction QA admission. step consumes its state: keep the one it returns (fork to branch).
@@ -47,6 +48,37 @@ function init(params) {
 function step(params, state, input) {
   const env = {"required": $n(input["required"], "input required"), "satisfied": $n(input["satisfied"], "input satisfied"), "footer": $n(input["footer"], "input footer")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
   const scalars = {...s, "out.admitted": ((((0 < env["required"]) && (env["footer"] === 1)) && (env["satisfied"] === env["required"])) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
+export const qaTally = /* @__PURE__ */ (() => {
+// Generated from the machine compaction QA tally. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"required": 0, "satisfied": 0, "footer": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"pass": $n(input["pass"], "input pass"), "isFooter": $n(input["isFooter"], "input isFooter")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["pass"] <= 1) && (env["isFooter"] <= 1))) throw new RangeError("compaction QA tally: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "required": $x(s["required"] + 1), "satisfied": ((env["pass"] === 1) ? $x(s["satisfied"] + 1) : s["satisfied"]), "footer": ((env["isFooter"] === 1) ? 1 : s["footer"])};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
+export const qaLatestModification = /* @__PURE__ */ (() => {
+// Generated from the machine latest successful modification. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"seen": 0, "chosen": 0, "chosenCall": 0, "latest": 0, "chosenSuccess": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"success": $n(input["success"], "input success"), "callIndex": $n(input["callIndex"], "input callIndex")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  const flag0 = (env["success"] === 1);
+  if (!(env["success"] <= 1)) throw new RangeError("latest successful modification: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "seen": $x(s["seen"] + 1), "chosen": (flag0 ? $x(s["seen"] + 1) : s["chosen"]), "chosenCall": (flag0 ? env["callIndex"] : s["chosenCall"]), "latest": ((env["success"] === 1) ? $x(s["seen"] + 1) : s["latest"]), "chosenSuccess": (flag0 ? 1 : s["chosenSuccess"])};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };

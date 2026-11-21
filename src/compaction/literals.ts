@@ -85,7 +85,7 @@ const addToken = (values: Set<string>, match: RegExpMatchArray, line: string): v
   }
 };
 
-const valuesIn = (text: string): string[] => {
+export const valuesIn = (text: string): string[] => {
   const values = new Set<string>();
   for (const line of safeLines(text)) {
     for (const match of line.matchAll(TOKEN)) addToken(values, match, line);
@@ -123,7 +123,7 @@ const userWindow = (line: string, start: number, end: number, shortLine: boolean
   return `${prefix}${match}${suffix}`.trim();
 };
 
-const userExcerpts = (text: string): string[] => {
+export const userExcerpts = (text: string): string[] => {
   const values = new Set<string>();
   for (const line of safeLines(text)) {
     const shortLine = utf8Bytes(line) <= MAX_VALUE_BYTES;
@@ -162,7 +162,7 @@ const userExcerpts = (text: string): string[] => {
   return [...values];
 };
 
-const carriedValues = (summary: string): ExactValue[] => {
+export const carriedValues = (summary: string): ExactValue[] => {
   const values: ExactValue[] = [];
   // Only the first outer block is ours. Later headings can be verbatim user text
   // or a nested earlier summary, neither of which may supply carried values.

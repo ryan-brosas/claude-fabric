@@ -50,10 +50,11 @@ export const register: Register = (on, options) => {
   on("session.compact", ($, e, next) => {
     if (e.trigger === "precompute") return { skip: "fabric: compaction is deterministic; nothing to precompute" };
     const carried = compact(e.messages, { instructions: e.instructions });
-    // Refuse a bad initial/carry candidate without delegating it to core.
+    // Preserve the previous initial/carry disposition even when QA reports a
+    // defect: automatic compaction must not lose compaction altogether.
     if ("qa" in carried) {
       try { $.ui.log(carried.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
-      return { skip: carried.qa };
+      return { messages: carried.candidate };
     }
     // One long turn has no prompt to cut at; core can cut inside it. An automatic
     // skip also goes to core: our text projection does not count media blocks.

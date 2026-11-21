@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as renderer from "../../src/compaction/render.ts";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -335,7 +336,26 @@ test("the active chain crosses a core boundary through logicalParentUuid", async
   });
 });
 
-test("a rebuilt candidate's QA refusal logs its reason and returns the carried summary", async () => {
+for (const carry of [false, true]) test(`G: auto compaction returns its genuinely wrong ${carry ? "carried" : "initial"} candidate`, async () => {
+  const original = renderer.renderSummaryWithMetadata;
+  const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+    const candidate = original(sections, options);
+    return { ...candidate, summary: candidate.summary.replace("Recover full context in fabric_exec with history.recall and history.expand.", "[missing footer]") };
+  });
+  try {
+    const prior = message("user", "[Fabric summary]\nEarlier.", "summary");
+    const first = message("user", "Original request.", "first");
+    const event: Event = { trigger: "auto", messages: [...(carry ? [prior] : []), first, message("user", `LAST ${"x".repeat(81000)}`, "last")] };
+    const h = hook("");
+    const result = await h.run(event);
+    expect(result.messages?.[0]?.text).toContain("[missing footer]");
+    expect(h.calls).toEqual([]);
+    expect(h.logs[0]).toContain("summary QA refused: recall footer");
+    expect(h.logTargets).toEqual(["debug"]);
+  } finally { spy.mockRestore(); }
+});
+
+test("E: a rebuilt failed edit with a clipped long path is admitted", async () => {
   await inProject(async (dir) => {
     const path = join(dir, "qa-refusal.jsonl");
     const first = message("user", "Original request.", "first");
@@ -353,11 +373,38 @@ test("a rebuilt candidate's QA refusal logs its reason and returns the carried s
     expect("messages" in carried).toBe(true);
     const h = hook(path);
     const result = await h.run(event);
-    expect(result).toEqual(carried);
+    expect(result.messages?.[0]?.text).toContain("Original request.");
+    expect(result.messages?.[0]?.text).toContain("- Edit src/");
+    expect(result.messages?.[0]?.text).not.toContain(longPath);
     expect(h.calls).toEqual([]);
-    expect(h.logs).toHaveLength(1);
-    expect(h.logs[0]).toContain("summary QA refused: last modification");
-    expect(h.logTargets).toEqual(["debug"]);
+    expect(h.logs).toEqual([]);
+  });
+});
+
+test("G: a genuinely wrong rebuilt candidate falls back to the carried summary", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "bad-rebuild.jsonl");
+    const first = message("user", "Original request.", "first");
+    const joinMessage = message("user", "Continue.", "join");
+    const last = message("user", `LAST ${"x".repeat(81000)}`, "last");
+    await writeRows(path, [row(first, null), row(joinMessage, "first"), row(last, "join")]);
+    const event: Event = { trigger: "auto", messages: [message("user", "[Fabric summary]\n\nPRESERVED CARRY", "summary"), joinMessage, last] };
+    const carried = compact(event.messages);
+    expect("messages" in carried).toBe(true);
+    const original = renderer.renderSummaryWithMetadata;
+    const spy = spyOn(renderer, "renderSummaryWithMetadata").mockImplementation((sections, options) => {
+      const candidate = original(sections, options);
+      return options.firstEntryId !== "first" ? candidate : { ...candidate, summary: candidate.summary.replace(
+        "Recover full context in fabric_exec with history.recall and history.expand.", "[missing footer]") };
+    });
+    try {
+      const h = hook(path);
+      const result = await h.run(event);
+      expect(result).toEqual(carried);
+      expect(h.calls).toEqual([]);
+      expect(h.logs[0]).toContain("summary QA refused: recall footer");
+      expect(h.logTargets).toEqual(["debug"]);
+    } finally { spy.mockRestore(); }
   });
 });
 

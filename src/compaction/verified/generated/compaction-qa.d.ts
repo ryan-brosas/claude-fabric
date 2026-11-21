@@ -2,3 +2,5 @@
 export interface MachineState { scalars: Record<string, number>; maps: Record<string, Map<number, number>>; defaults?: Record<string, number> }
 export interface Machine { init(params: object): MachineState; step(params: object, state: MachineState, input: object): MachineState }
 export declare const compactionQa: Machine;
+export declare const qaTally: Machine;
+export declare const qaLatestModification: Machine;
