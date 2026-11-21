@@ -37,7 +37,7 @@ const CREDENTIAL_PREFIXES = [
   "glpat-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xox",
   "akia", "asia", "sk_live_", "rk_live_", "aiza", "npm_", "eyj", "sk-",
 ];
-const hasCredential = (line: string): boolean => /key|token|secret|password|passwd|authorization|bearer|credential|cookie|session/i.test(line)
+const hasCredential = (line: string): boolean => /key|token|secret|password|passwd|passphrase|authorization|bearer|credential|cookie|session|(?:^|[^a-z0-9])(?:pin|otp)(?=$|[^a-z0-9])/i.test(line)
   || CREDENTIAL_PREFIXES.some((prefix) => line.toLowerCase().includes(prefix));
 // Longer hex runs can never fit as a complete value or error message.
 const AMBIGUOUS_HEX = new RegExp(`(?<![a-f\\d])[a-f\\d]{32,${MAX_VALUE_BYTES}}(?![a-f\\d])`, "i");

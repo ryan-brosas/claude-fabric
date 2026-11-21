@@ -297,8 +297,23 @@ describe("compact: what the summary loses today", () => {
     expect(exactValues([], 0, `[Exact values]\n- [entry old] ${safe}`).map(({ value }) => value)).toEqual([safe]);
   });
 
+  test("screens user-stated PINs, passphrases, and OTPs in fresh and carried excerpts", () => {
+    // Synthetic values only; exercise the user-binding extractor and Carry.
+    for (const excerpt of ["PIN is 493827.", "Passphrase is maple-493827.", "OTP is 493827.",
+      "user_pin=493827", "otp: 493827", "PASSPHRASE=maple-493827"]) {
+      expect(exactValues([prompt(excerpt, "user")], 1)).toEqual([]);
+      expect(exactValues([], 0, `[Exact values]\n- [entry user] ${excerpt}`)).toEqual([]);
+      const summary = summaryOf([prompt(`${"ordinary ".repeat(600)}\n${excerpt}`, "user"), reply("Done."), prompt("Next."), reply("Done.")]);
+      const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+      expect(section).not.toContain(excerpt);
+    }
+    for (const excerpt of ["Shipping is batch-1234.", "Pinpoint is region-1234."]) {
+      expect(exactValues([prompt(excerpt, "user")], 1).map(({ value }) => value)).toEqual([excerpt]);
+    }
+  });
+
   test("screens credential key words in fresh and carried excerpts", () => {
-    for (const key of ["key", "token", "secret", "password", "passwd", "authorization", "bearer", "credential", "cookie", "session"]) {
+    for (const key of ["key", "token", "secret", "password", "passwd", "passphrase", "PIN", "OTP", "authorization", "bearer", "credential", "cookie", "session"]) {
       const excerpt = `E4471: ${key} unavailable`;
       expect(exactValues([reply(excerpt, "source")], 1)).toEqual([]);
       expect(exactValues([], 0, `[Exact values]\n- [entry old] ${excerpt}`)).toEqual([]);
