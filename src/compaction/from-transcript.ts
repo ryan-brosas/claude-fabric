@@ -3,6 +3,7 @@ import { transcriptChain, type TranscriptRow } from "../recall/transcript.ts";
 import { isFabricSummary } from "./compact.ts";
 import { exitCodeOf, hasOutcome, inlineOutcome, normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "./from-claude.ts";
 import { outcomeRestoration } from "./verified/generated/outcome-restoration.js";
+import { acceptRestorePosition } from "./verified/restore-order.ts";
 import { outcomeConservationProblem } from "./outcome-conservation.ts";
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -37,26 +38,25 @@ export function fromTranscript(row: TranscriptRow): ClaudeMessage {
 
 const MISSING_OUTCOME = "missing tool outcome in rebuilt input";
 
-// Extra raw outcomes may precede restoration, but must not follow the first
-// restored outcome: they could change which failures an exact retry resolves.
-function sameRestoredSuffix(expected: readonly string[], actual: readonly string[], restored: ReadonlySet<string>): boolean {
-  const firstExpected = expected.findIndex((id) => restored.has(id));
-  const firstActual = actual.findIndex((id) => restored.has(id));
-  if (firstExpected < 0 || firstActual < 0) return false;
-  const suffix = expected.slice(firstExpected);
-  return suffix.length === actual.length - firstActual
-    && suffix.every((id, index) => id === actual[firstActual + index]);
-}
-
 // Current outcomes must appear in order, including an exact restored suffix.
-// The final conservation check also compares the outcome contents.
+// Extra raw outcomes may precede the suffix but cannot follow its first restored
+// outcome. The compiled gate checks each pair of positions and the suffix length;
+// this adapter checks ID equality and visits every current ID in order.
 function sameCurrentOrder(current: readonly ClaudeMessage[], rebuilt: readonly ClaudeMessage[], restored: ReadonlySet<string>): boolean {
   const ids = (messages: readonly ClaudeMessage[]) => normalizeMessages(messages).flatMap((event) =>
     event.kind === "toolResult" || event.kind === "bash" ? [event.toolCallId] : []);
   const expected = ids(current), actual = ids(rebuilt);
-  let next = 0;
-  for (const id of actual) if (id === expected[next]) next++;
-  return next === expected.length && sameRestoredSuffix(expected, actual, restored);
+  const expectedFirst = expected.findIndex((id) => restored.has(id)) + 1;
+  const actualFirst = actual.findIndex((id) => restored.has(id)) + 1;
+  if (!expected.length) return false;
+  let previous = 0;
+  for (let index = 0; index < expected.length; index++) {
+    const position = actual.indexOf(expected[index]!, previous) + 1;
+    if (!acceptRestorePosition({ previous, position, expectedPosition: index + 1, expectedFirst, actualFirst,
+      expectedLength: expected.length, actualLength: actual.length, matches: position > 0 && actual[position - 1] === expected[index] })) return false;
+    previous = position;
+  }
+  return true;
 }
 
 // Count the effective outcomes the compactor sees, not duplicate inline/row copies.
