@@ -15,3 +15,33 @@ function step(params, state, input) {
 }
 return { init, step };
 })();
+
+export const userPriority = /* @__PURE__ */ (() => {
+// Generated from the machine user sample priority. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"out.before": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"aDistinct": $n(input["aDistinct"], "input aDistinct"), "bDistinct": $n(input["bDistinct"], "input bDistinct"), "aIndex": $n(input["aIndex"], "input aIndex"), "bIndex": $n(input["bIndex"], "input bIndex")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["aDistinct"] <= 1) && (env["bDistinct"] <= 1))) throw new RangeError("user sample priority: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.before": ((((env["aDistinct"] === 1) && (!(env["bDistinct"] === 1))) || ((((env["aDistinct"] === 1) && (env["bDistinct"] === 1)) || ((!(env["aDistinct"] === 1)) && (!(env["bDistinct"] === 1)))) && (env["bIndex"] < env["aIndex"]))) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
+export const userShortSwap = /* @__PURE__ */ (() => {
+// Generated from the machine short user swap. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"out.swap": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"pressure": $n(input["pressure"], "input pressure"), "sameClass": $n(input["sameClass"], "input sameClass"), "candidateBytes": $n(input["candidateBytes"], "input candidateBytes"), "slotBytes": $n(input["slotBytes"], "input slotBytes")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["pressure"] <= 1) && (env["sameClass"] <= 1))) throw new RangeError("short user swap: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.swap": ((((env["pressure"] === 1) && (env["sameClass"] === 1)) && (env["candidateBytes"] < env["slotBytes"])) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();

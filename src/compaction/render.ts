@@ -15,7 +15,7 @@ export const EARLIER_SUMMARY_HEADER = "[Earlier summary]";
 
 // These are per-block ceilings, not reservations. Historical blocks share
 // the space left by actual protected content inside the global ceiling.
-// The user's words lead, oldest first: earlier messages, then recent exchanges.
+// The user's words lead, in chronological order: earlier messages, then recent exchanges.
 // Both are protected blocks that take bytes before any operational section.
 export const SUMMARY_SECTIONS: { key: keyof Sections; header: string; maxBytes: number }[] = [
   { key: "goal", header: EARLIER_USERS_HEADER, maxBytes: MAX_EARLIER_USERS_SECTION_BYTES },
@@ -204,7 +204,10 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
     const lines = sections[key];
     if (key === "goal") {
       if (lines.length > 0) {
-        dialogueOmittedBytes += protect(header, lines, goalBudget);
+        // The omission notice is framing, not expendable user text. Keep it
+        // even when the renderer must reduce the projected block again.
+        const marker = lines[0]?.startsWith("… omitted ") && lines[0].includes(" user messages; source entries ") ? lines[0] : "";
+        dialogueOmittedBytes += protect(marker ? `${header}\n${marker}` : header, marker ? lines.slice(1) : lines, goalBudget);
         goalBytes = utf8Bytes(newest[newest.length - 1]!);
       }
     } else if (key === "dialogue") {

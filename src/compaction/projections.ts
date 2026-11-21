@@ -2,6 +2,7 @@
 import { allocateProtectedRoom, boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, MAX_EARLIER_USERS_SECTION_BYTES, MAX_RENDERED_LINE_BYTES, omissionLine,
   protectedBudgets, recentDialogueBytes, requestSectionBytes, sampleAddressed, sampleAddressedFrom, utf8Bytes } from "./bounds.ts";
 import { foldFailureLedger } from "./verified/context.ts";
+import { acceptSampleAccounting, shortUserSwap, userBefore } from "./verified/policy.ts";
 import { earlierAssistantReplies, projectDialogue, recentDialogue } from "./dialogue.ts";
 import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
 
@@ -31,8 +32,8 @@ const MAX_EARLIER_USER = 80;
 const MAX_STATUS_LINE = 140;
 const MAX_TRANSCRIPT_LINE = 100;
 const MAX_TRANSCRIPT_CMD = 80;
-// Every earlier user message renders verbatim while it fits; the count bound
-// only matters for sessions with many messages, which then keep earliest and latest.
+// Every earlier user message renders verbatim while it fits. Above the count
+// bound, the newest copy of each distinct message wins, then newer repeats.
 export const MAX_EARLIER_USERS = 64;
 export const MAX_USER_MESSAGE_BYTES = 4096;
 export const MAX_FILES_PER_KIND = 24;
@@ -166,37 +167,43 @@ export const earlierUserItem = (user: { entryId: string; text: string }, maxByte
 // Earlier user messages are the user's own words, kept verbatim and in order.
 // They are evidence of what was asked, not an inferred active mandate.
 const projectGoal = (events: CompactionEvent[], protectedUsers: ReadonlySet<string>, maxBytes: number): ProjectedSection => {
-  const lines: string[] = [];
-  const users = new Map<number, Extract<CompactionEvent, { kind: "user" }>>();
-  function* historicalUsers(): Generator<Extract<CompactionEvent, { kind: "user" }>> {
-    for (const event of events) {
-      if (event.kind === "user" && !protectedUsers.has(event.entryId) && event.text.trim()) yield event;
-    }
+  const users = events.flatMap((event) => event.kind === "user" && !protectedUsers.has(event.entryId) && event.text.trim()
+    ? [{ event, bytes: utf8Bytes(event.text) }] : []);
+  const last = new Map(users.map(({ event }, index) => [event.text, index]));
+  const ranked = users.map((user, index) => ({ ...user, index, distinct: last.get(user.event.text) === index }));
+  ranked.sort((a, b) => userBefore(a.distinct, b.distinct, a.index, b.index) ? -1
+    : userBefore(b.distinct, a.distinct, b.index, a.index) ? 1 : 0);
+  const chosen = ranked.slice(0, MAX_EARLIER_USERS);
+  // Under byte pressure reserve one slot for a shorter omitted statement,
+  // without displacing a distinct message for a repeat.
+  const slot = chosen.at(-1);
+  if (slot && ranked.length > MAX_EARLIER_USERS) {
+    const candidate = ranked.slice(MAX_EARLIER_USERS).filter((item) => item.distinct === slot.distinct)
+      .reduce<(typeof ranked)[number] | undefined>((best, item) => !best || item.bytes < best.bytes ? item : best, undefined);
+    const pressure = chosen.reduce((sum, item) => sum + item.bytes, 0) > maxBytes;
+    if (candidate && shortUserSwap(pressure, true, candidate.bytes, slot.bytes)) chosen[chosen.length - 1] = candidate;
   }
-  const sampled = sampleAddressedFrom(historicalUsers(), MAX_EARLIER_USERS);
-  for (let index = 0; index < sampled.values.length; index++) {
-    if (sampled.omitted > 0 && index === sampled.splitIndex) {
-      lines.push(omissionLine(
-        sampled.omitted,
-        sampled.omittedFirstEntryId,
-        sampled.omittedLastEntryId,
-        "user messages",
-      ));
-    }
-    const user = sampled.values[index]!;
-    users.set(lines.length, user);
-    lines.push(earlierUserItem(user));
+  const kept = new Set(chosen.map(({ index }) => index));
+  const omitted = users.filter((_, index) => !kept.has(index));
+  if (!acceptSampleAccounting(users.length, kept.size, omitted.length, MAX_EARLIER_USERS)) {
+    throw new Error("User sample failed conservation/bound verification");
   }
-  // Re-clip each original message, not its rendered item, if the block is full.
-  if (utf8Bytes([EARLIER_USERS_HEADER, ...lines].join("\n\n")) > maxBytes) {
-    const budgets = protectedBudgets(EARLIER_USERS_HEADER, lines, maxBytes);
-    for (const [index, user] of users) {
-      if (utf8Bytes(lines[index]!) <= budgets[index]!) continue;
-      const bodyBytes = Math.max(0, budgets[index]! - utf8Bytes(earlierUserHeading(user.entryId)));
-      lines[index] = earlierUserItem(user, bodyBytes);
-    }
+  // Omitted entries can be interleaved with kept ones, so the endpoints name
+  // the range containing omissions, not a claim that every entry in it was lost.
+  const marker = omitted.length ? `${omissionLine(omitted.length, omitted[0]?.event.entryId, omitted.at(-1)?.event.entryId, "user messages")} (not necessarily consecutive); later directives may be omitted` : "";
+  const selected = users.filter((_, index) => kept.has(index));
+  const items = selected.map(({ event }) => earlierUserItem(event));
+  const header = marker ? `${EARLIER_USERS_HEADER}\n${marker}` : EARLIER_USERS_HEADER;
+  // Short items keep their full share; any surplus goes to newer long items.
+  if (utf8Bytes([header, ...items].join("\n\n")) > maxBytes) {
+    const budgets = protectedBudgets(header, [...items].reverse(), maxBytes).reverse();
+    selected.forEach(({ event }, index) => {
+      if (utf8Bytes(items[index]!) <= budgets[index]!) return;
+      const bodyBytes = Math.max(0, budgets[index]! - utf8Bytes(earlierUserHeading(event.entryId)));
+      items[index] = earlierUserItem(event, bodyBytes);
+    });
   }
-  return { lines, omitted: sampled.omitted };
+  return { lines: marker ? [marker, ...items] : items, omitted: omitted.length };
 };
 
 // [Files And Changes] uses only successful structural operations. Writes are
