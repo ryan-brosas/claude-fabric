@@ -599,6 +599,44 @@ describe("compact: what the summary loses today", () => {
     expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 
+  test("carried visible values do not crowd a fresh value out of exact values", () => {
+    const facts = Array.from({ length: 40 }, (_, i) => `Target is previous-environment-${String(i).padStart(2, "0")}.`);
+    const rows = facts.map((fact, i) => `- [entry u${String(i).padStart(2, "0")}] ${fact}`).join("\n");
+    const earlier = `[Fabric summary]\n\n[Exact values]\nUnverified excerpts.\n${rows}\n\n[Earlier user messages]\n${facts.join("\n")}`;
+    // The reviewer's all-a path is screened as ambiguous hex; use non-hex z
+    // so this fixture actually reaches the section-selection rule.
+    const screenedPath = `tools/${"a".repeat(120)}.ts`;
+    expect(exactValues([reply(`Created ${screenedPath}`, "fresh")], 1)).toEqual([]);
+    const path = `tools/${"z".repeat(120)}.ts`;
+    expect(exactValues([reply(`Created ${path}`, "fresh")], 1).map(({ value }) => value)).toContain(path);
+    const summary = summaryOf([prompt(earlier, "previous"), prompt("New task."), reply(`Created ${path}`, "fresh"), prompt("Next."), reply("Done.")]);
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(summary).toContain(`[Earlier summary]`);
+    const carry = summary.split("[Earlier summary]\n")[1] ?? "";
+    for (const fact of facts) expect(carry).toContain(fact);
+    expect(section).toContain(`[entry fresh] ${path}`);
+    for (const fact of facts) expect(section).not.toContain(fact);
+  });
+
+  test("a cut Carry removes only values still visible in its head or tail", () => {
+    const head = "Target is head-environment-01.";
+    const middle = "Target is middle-environment-02.";
+    const tail = "Target is tail-environment-03.";
+    const rows = [head, middle, tail].map((fact, i) => `- [entry u${i}] ${fact}`).join("\n");
+    const earlier = `[Fabric summary]\n\n[Exact values]\n${rows}\n\n[Earlier user messages]\n${head}\n${"界".repeat(12000)}\n${middle}\n${"界".repeat(12000)}\n${tail}`;
+    const summary = summaryOf([prompt(earlier, "previous"), prompt("Continue."), reply("Working."), prompt("Next."), reply("Done.")]);
+    const section = summary.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    const carry = summary.split("[Earlier summary]\n")[1] ?? "";
+    expect(carry).toContain("omitted");
+    expect(carry).toContain(head);
+    expect(carry).toContain(tail);
+    expect(carry).not.toContain(middle);
+    expect(section).not.toContain(head);
+    expect(section).not.toContain(tail);
+    expect(section).toContain(`[entry u1] ${middle}`);
+    expect(utf8Bytes(summary)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
+  });
+
   test("does not extract unbound user values, tool inputs or the kept tail", () => {
     const messages: ClaudeMessage[] = [
       prompt("Mention USER-a1b2c3d4e5 without a binding."),
@@ -692,11 +730,14 @@ describe("compact: what the summary loses today", () => {
     expect(position + fact!.value.length === source.length || /\s/.test(source[position + fact!.value.length]!)).toBe(true);
     expect(fact!.value).not.toContain("\uFFFD");
     const initial = summaryOf([prompt(source, "old-user"), reply("Noted."), ...Array.from({ length: 8 }, (_, i) => [prompt(`Step ${i}.`), reply("Done.")]).flat(), prompt("Next."), reply("Done.")]);
+    const initialSection = initial.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
+    expect(initialSection).toContain(`[entry old-user] ${fact!.value}`);
     const final = summaryOf([prompt(initial, "earlier-summary"), prompt("More."), reply("Done."), prompt("Next."), reply("Done.")]);
     const section = final.split("[Exact values]\n")[1]?.split("\n\n")[0] ?? "";
-    expect(section).toContain("[entry old-user]");
-    expect(section).toContain("violet-harbor");
-    expect(section).toContain("64927");
+    const carry = final.split("[Earlier summary]\n")[1] ?? "";
+    expect(carry).toContain("[entry old-user]");
+    expect(carry).toContain(fact!.value);
+    expect(section).not.toContain(fact!.value);
     expect(utf8Bytes(final)).toBeLessThanOrEqual(MAX_SUMMARY_BYTES);
   });
 

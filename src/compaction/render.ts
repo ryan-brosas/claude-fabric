@@ -262,11 +262,14 @@ export const renderSummaryWithMetadata = (sections: Sections, options: RenderOpt
   // Keep operational minima first, then exact values, then sampled history.
   const historyMinimum = Math.min(allocation.historyBytes, history.reduce((sum, block) => sum + historyCandidate(block).minimum, 0));
   const literalRoom = allocateSummaryCarry(allocation.historyBytes - historyMinimum, 0, literalDemand, 0, 0).newestBytes;
-  const literalBlock = renderExactValues(literals, literalRoom);
+  // A Carry can be cut in the middle: only its actual rendered text can
+  // replace an exact-value row without losing a value.
+  const carryBlock = earlierSummary !== undefined ? carriedBlock(earlierSummary, allocation.carryBytes) : "";
+  const literalBlock = renderExactValues(literals.filter(({ value }) => !carryBlock.includes(value)), literalRoom);
   const historyRoom = allocation.historyBytes - utf8Bytes(literalBlock);
   // The literal block must be first: later headings can belong to verbatim user text.
   const blocks: string[] = [SUMMARY_HEADER, literalBlock];
-  if (earlierSummary !== undefined) blocks.push(carriedBlock(earlierSummary, allocation.carryBytes));
+  blocks.push(carryBlock);
   blocks.push(...newest, ...boundedHistory(history, historyRoom), footerBlock);
   // A block with no allocation prints nothing; dropping it leaves no empty separators.
   const summary = `${blocks.filter((block) => block.length > 0).join("\n\n")}\n`;
