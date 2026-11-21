@@ -227,9 +227,9 @@ export const exactValues = (messages: readonly ClaudeMessage[], start: number, e
     return candidate.missingUser ? 2 : 3;
   };
   candidates.sort((a, b) => {
-    // A failed log's incidental paths inherit its error status; the actual error
-    // excerpt must win before those paths can fill the bounded section.
-    const rank = priority(a) - priority(b) || Number(b.errorCode) - Number(a.errorCode) || Number(echoed(b)) - Number(echoed(a))
+    // Preserve echoed values first. Among otherwise equal candidates, actual
+    // error excerpts beat the incidental paths in a failed log.
+    const rank = priority(a) - priority(b) || Number(echoed(b)) - Number(echoed(a)) || Number(b.errorCode) - Number(a.errorCode)
       || Number(b.error) - Number(a.error) || Number(b.missingUser) - Number(a.missingUser);
     if (rank) return rank;
     // One excerpt per source before a second: one long clipped message must not

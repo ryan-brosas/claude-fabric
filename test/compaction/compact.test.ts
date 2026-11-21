@@ -466,6 +466,21 @@ describe("compact: what the summary loses today", () => {
     expect(section).toContain("[entry r] E4471 line 58: missing column");
   });
 
+  test("keeps an echoed path when a failed result floods the exact-values budget with codes", () => {
+    const codes = Array.from({ length: 300 }, (_, i) => `E${1000 + i}`);
+    const messages: ClaudeMessage[] = [
+      { ...results({ tool_use_id: "path", text: "tools/important.ts", isError: false }), handle: "p" },
+      { ...results({ tool_use_id: "errors", text: codes.join("\n"), isError: true }), handle: "r" },
+      reply("Keep tools/important.ts for later.", "tail"),
+    ];
+    const values = exactValues(messages, 2);
+    expect(values).toHaveLength(301);
+    const section = renderExactValues(values, 2048);
+    expect(section).toContain("[entry p] tools/important.ts");
+    expect(section).toContain("[entry r] E1299");
+    expect(utf8Bytes(section)).toBeLessThanOrEqual(2048);
+  });
+
   test("error excerpts outrank failed-result paths without discarding the paths", () => {
     for (const isError of [true, false]) {
       const text = "E4471 line 58: missing column\nsrc/atrace_0000.ts\nsrc/atrace_0001.ts";
