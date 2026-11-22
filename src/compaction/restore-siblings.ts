@@ -1,7 +1,7 @@
 // Recover historical siblings only with transcript message, request, ancestry,
 // block index and result-source evidence. A compact boundary starts a new epoch.
 import type { TranscriptRow } from "../recall/transcript.ts";
-import { hasOutcome, type ClaudeMessage } from "./from-claude.ts";
+import { hasOutcome, inlineOutcome, type ClaudeMessage } from "./from-claude.ts";
 import { siblingGroup, siblingOrder, siblingOwner, siblingPair } from "./verified/generated/sibling-restoration.js";
 
 type Indexed = { row: TranscriptRow; position: number; epoch: number };
@@ -98,7 +98,8 @@ export function siblingGroupFacts(same: Indexed[], anchor: Indexed, active: Set<
 }
 
 function groupCandidates(ctx: Context, anchor: Indexed): { same: Indexed[]; bucket: Bucket } | undefined {
-  const bucket = ctx.epochs.get(anchor.epoch)!;
+  const bucket = ctx.epochs.get(anchor.epoch);
+  if (!bucket) return undefined;
   const same = bucket.groups.get(messageId(anchor.row)) ?? [];
   const off = same.some((item) => !ctx.active.has(item.row.uuid));
   const hasResult = same.some((item) => (bucket.sources.get(item.row.uuid) ?? []).some((r) => !ctx.active.has(r.row.uuid)));
@@ -106,8 +107,14 @@ function groupCandidates(ctx: Context, anchor: Indexed): { same: Indexed[]; buck
   return { same, bucket };
 }
 
+function indexedRow(byUuid: Map<unknown, Indexed>, row: TranscriptRow): Indexed {
+  const found = byUuid.get(row.uuid);
+  if (!found) return refusal();
+  return found;
+}
+
 function checkOrder(ctx: Context, candidate: Indexed, call: Indexed, result: Indexed): void {
-  const positions = ctx.prefix.map((row) => ctx.byUuid.get(row.uuid)!.position);
+  const positions = ctx.prefix.map((row) => indexedRow(ctx.byUuid, row).position);
   const firstLater = positions.findIndex((position) => position > candidate.position);
   const insertion = firstLater < 0 ? positions.length : firstLater;
   admitted(siblingOrder.step({}, siblingOrder.init({}), {
@@ -130,7 +137,7 @@ export function siblingPairFacts(ctx: Context, bucket: Bucket, item: Indexed, ca
 function planCall(ctx: Context, bucket: Bucket, item: Indexed, call: string): { insert: Indexed[]; result: TranscriptRow } | undefined {
   const matched = bucket.results.get(call) ?? [];
   const facts = siblingPairFacts(ctx, bucket, item, call);
-  const verdict = siblingPair.step({}, siblingPair.init({}), facts);
+  const verdict = siblingPair.step({}, siblingPair.init({}), { ...facts, owned: 1 });
   // The machine leaves an already-covered call to the joined tail.
   if (verdict.scalars["out.covered"] === 1) return undefined;
   admitted(verdict);
@@ -146,7 +153,7 @@ function merge(prefix: TranscriptRow[], additions: Indexed[], byUuid: Map<unknow
   const pending = additions.sort((a, b) => a.position - b.position);
   let next = 0;
   for (const row of prefix) {
-    const position = byUuid.get(row.uuid)!.position;
+    const position = indexedRow(byUuid, row).position;
     while (next < pending.length && pending[next]!.position < position) output.push(pending[next++]!.row);
     output.push(row);
   }
@@ -154,6 +161,88 @@ function merge(prefix: TranscriptRow[], additions: Indexed[], byUuid: Map<unknow
   return output;
 }
 
+// Establish the identity of every relevant call before any ID-keyed base or
+// outcome count can suppress its restoration. Result source links are claims too.
+function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket }[], tail: readonly ClaudeMessage[]): void {
+  const relevant = new Set(groups.flatMap((group) => group.same.flatMap((item) => uses(item.row))));
+  if (!relevant.size) return;
+  const possible = new Map<string, TranscriptRow[]>();
+  for (const item of ctx.byUuid.values()) for (const id of uses(item.row)) if (relevant.has(id)) {
+    const list = possible.get(id) ?? [];
+    list.push(item.row); possible.set(id, list);
+  }
+  const owners = new Map<string, string>();
+  const outcomes = new Map<string, string>();
+  const details = new Map<string, string>();
+  const inline = new Set(tail.flatMap((message) => message.toolUses.filter(hasOutcome).map((use) => use.tool_use_id)));
+  const compare = (map: Map<string, string>, id: string, signature: string): void => {
+    const prior = map.get(id);
+    admitted(siblingOwner.step({}, siblingOwner.init({}), {
+      seen: Number(prior !== undefined), same: Number(prior === signature),
+    }));
+    map.set(id, signature);
+  };
+  const signature = (row: TranscriptRow, id: string): string => JSON.stringify([messageId(row), row.requestRef, row.apiBlockIndex,
+    blocks(row).filter((block) => block.type === "tool_use" && block.id === id)]);
+  const claim = (row: TranscriptRow, id: string): void => {
+    if (relevant.has(id)) compare(owners, id, signature(row, id));
+  };
+  const claimOutcome = (id: string, text: string, isError: boolean, result: unknown): void => {
+    if (!relevant.has(id)) return;
+    compare(outcomes, id, JSON.stringify([text, isError]));
+    // A hook can omit structured metadata supplied by the transcript. Two
+    // present but different details still identify conflicting outcomes.
+    if (result != null) compare(details, id, JSON.stringify(result));
+  };
+  const claimRowOutcome = (row: TranscriptRow, id: string): void => {
+    for (const block of blocks(row)) if (block.type === "tool_result" && block.tool_use_id === id) {
+      const content = block.content;
+      const text = typeof content === "string" ? content : Array.isArray(content)
+        ? content.map(object).filter((part) => part.type === "text")
+          .map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";
+      claimOutcome(id, text, block.is_error === true, row.toolUseResult);
+    }
+  };
+  const claimSource = (row: TranscriptRow, id: string): void => {
+    if (!relevant.has(id) || typeof row.sourceToolAssistantUUID !== "string") return;
+    const source = ctx.byUuid.get(row.sourceToolAssistantUUID)?.row;
+    if (!source || !uses(source).includes(id)) return refusal();
+    claim(source, id);
+  };
+  for (const group of groups) for (const item of group.same) for (const id of uses(item.row)) {
+    claim(item.row, id);
+    for (const result of group.bucket.results.get(id) ?? []) {
+      if (result.row.sourceToolAssistantUUID === item.row.uuid) claimRowOutcome(result.row, id);
+    }
+  }
+  for (const row of ctx.prefix) {
+    for (const id of uses(row)) claim(row, id);
+    for (const id of results(row)) {
+      claimSource(row, id);
+      if (!inline.has(id)) claimRowOutcome(row, id);
+    }
+  }
+  for (const message of tail) {
+    const row = ctx.byUuid.get(message.handle ?? message.uuid)?.row;
+    for (const use of message.toolUses) {
+      if (!relevant.has(use.tool_use_id)) continue;
+      const matches = (candidate: TranscriptRow): boolean => blocks(candidate).some((block) =>
+        block.type === "tool_use" && block.id === use.tool_use_id && block.name === use.tool
+        && JSON.stringify(block.input ?? {}) === JSON.stringify(use.input ?? {}));
+      const candidates = row ? [row].filter(matches) : (possible.get(use.tool_use_id) ?? []).filter(matches);
+      if (!candidates.length || new Set(candidates.map((candidate) => signature(candidate, use.tool_use_id))).size !== 1) return refusal();
+      claim(candidates[0]!, use.tool_use_id);
+      if (hasOutcome(use)) {
+        const outcome = inlineOutcome(use);
+        claimOutcome(use.tool_use_id, outcome.text, outcome.isError, outcome.result);
+      }
+    }
+    for (const result of message.toolResults ?? []) {
+      if (row) claimSource(row, result.tool_use_id);
+      if (!inline.has(result.tool_use_id)) claimOutcome(result.tool_use_id, result.text, result.isError, result.result);
+    }
+  }
+}
 /** Insert uniquely attributable rows, retaining the relative order of the active chain. */
 export function restoreSiblings(chain: TranscriptRow[], rows: Map<string, TranscriptRow>, chainEnd: number,
   tail: readonly ClaudeMessage[]): { rows: TranscriptRow[]; pairs: Map<string, Map<string, TranscriptRow>> } {
@@ -162,8 +251,9 @@ export function restoreSiblings(chain: TranscriptRow[], rows: Map<string, Transc
   const pairs = new Map<string, Map<string, TranscriptRow>>();
   const owners = new Map<string, string>();
   const handled = new Set<string>();
+  const groups: { same: Indexed[]; bucket: Bucket }[] = [];
   for (const row of ctx.prefix) {
-    const anchor = ctx.byUuid.get(row.uuid)!;
+    const anchor = indexedRow(ctx.byUuid, row);
     const id = messageId(row);
     if (!id || !uses(row).length) continue;
     const key = anchor.epoch + ":" + id;
@@ -172,6 +262,10 @@ export function restoreSiblings(chain: TranscriptRow[], rows: Map<string, Transc
     const group = groupCandidates(ctx, anchor);
     if (!group) continue;
     admitted(siblingGroup.step({}, siblingGroup.init({}), siblingGroupFacts(group.same, anchor, ctx.active)));
+    groups.push(group);
+  }
+  establishOwners(ctx, groups, tail);
+  for (const group of groups) {
     for (const item of group.same) for (const call of uses(item.row)) {
       const plan = planCall(ctx, group.bucket, item, call);
       if (!plan) continue;

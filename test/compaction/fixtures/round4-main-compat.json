@@ -1,0 +1,75 @@
+{
+  "name": "forward-parent anchor after physical join",
+  "rows": [
+    {
+      "type": "user",
+      "uuid": "p",
+      "parentUuid": null,
+      "message": {
+        "content": "p"
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "joined",
+      "parentUuid": "a",
+      "message": {
+        "content": "joined"
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "compact_boundary",
+      "uuid": "boundary",
+      "parentUuid": "p"
+    },
+    {
+      "type": "assistant",
+      "uuid": "a",
+      "parentUuid": "boundary",
+      "requestRef": "request",
+      "apiBlockIndex": 0,
+      "message": {
+        "id": "msg",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call",
+            "name": "Read",
+            "input": {
+              "file_path": "a.txt"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "tail",
+      "parentUuid": "joined",
+      "message": {
+        "content": "tail"
+      }
+    }
+  ],
+  "current": [
+    {
+      "role": "user",
+      "text": "[Fabric summary]\nold",
+      "toolUses": [],
+      "handle": "summary"
+    },
+    {
+      "role": "user",
+      "text": "joined",
+      "toolUses": [],
+      "handle": "joined"
+    },
+    {
+      "role": "user",
+      "text": "tail",
+      "toolUses": [],
+      "handle": "tail"
+    }
+  ]
+}

@@ -402,6 +402,77 @@ test("round3 cross-epoch conflicting owners are refused rather than mispaired", 
   expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows))).toThrow("ambiguous");
 });
 
+for (const placement of ["joined-tail", "prefix-only"] as const) {
+  test(`round4 conflicting existing owner in ${placement} cannot suppress an off-chain call`, () => {
+    const a0 = { ...callRow("a0", "start", "anchor", "message0"), requestRef: "request0", apiBlockIndex: 0 };
+    const b0 = { ...callRow("b0", "a0", "shared", "message0"), requestRef: "request0", apiBlockIndex: 1 };
+    const rb0 = { ...resultRow("rb0", "b0", "shared", "OLD"), sourceToolAssistantUUID: "b0" };
+    const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+    const c1 = { ...callRow("c1", "boundary", "shared", "message1"), requestRef: "request1", apiBlockIndex: 0,
+      message: { id: "message1", content: [{ type: "tool_use", id: "shared", name: "Read", input: { file_path: "new.txt" } }] } };
+    const d1 = { ...callRow("d1", "c1", "other", "message1"), requestRef: "request1", apiBlockIndex: 1 };
+    const rd1 = { ...resultRow("rd1", "d1", "other", "D"), sourceToolAssistantUUID: "d1" };
+    const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+    const rc1 = { ...resultRow("rc1", "c1", "shared", "NEW"), sourceToolAssistantUUID: "c1" };
+    const rows = placement === "joined-tail"
+      ? [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, d1, rd1, { ...rc1, uuid: "joined" }]
+      : [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, rc1, promptRow("joined", "rc1")];
+    const current = placement === "joined-tail" ? [summary, resultMessage("joined", "shared", "NEW")]
+      : [summary, userMessage("joined", "after")];
+    expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+  });
+}
+test("round4 conflicting result source cannot suppress a historical outcome", () => {
+  const a = { ...callRow("a", "start", "anchor", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "shared", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const rb = { ...resultRow("rb", "b", "shared", "OLD"), sourceToolAssistantUUID: "b" };
+  const rogue = { ...callRow("rogue", "start", "shared", "other"), requestRef: "other", apiBlockIndex: 0,
+    message: { id: "other", content: [{ type: "tool_use", id: "shared", name: "Read", input: { file_path: "other.txt" } }] } };
+  const rr = { ...resultRow("rr", "a", "shared", "NEW"), sourceToolAssistantUUID: "rogue" };
+  const rows = [promptRow("start", null), a, b, rb, rogue, rr, promptRow("joined", "rr")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "after")], rowsText(rows))).toThrow("ambiguous");
+});
+test("round4 unique opaque tail call with matching outcome is preserved", () => {
+  const { rows, current } = siblingFixture();
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"), toolUses: [{ ...toolUse("call-b"), text: "B" }] };
+  const rebuilt = rebuildTranscript([...current, opaque], rowsText(rows));
+  expect(outcomeConservationProblem([...current, opaque], rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "call-b"))
+    .toMatchObject([{ text: "B" }]);
+});
+test("round4 opaque tail call with multiple possible recorded owners is refused", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(rows.length - 1, 0,
+    { ...callRow("retry", "prompt", "call-b", "other-message"), requestRef: "other-request", apiBlockIndex: 0 });
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"), toolUses: [{ ...toolUse("call-b"), text: "B" }] };
+  expect(() => rebuildTranscript([...current, opaque], rowsText(rows))).toThrow("ambiguous");
+});
+test("round4 copy with omitted structured result preserves the effective outcome", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "SAME"), sourceToolAssistantUUID: "b0", toolUseResult: { bytes: 4 } };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const c1 = { ...callRow("c1", "boundary", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const joined = { ...resultRow("joined", "c1", "shared", "SAME"), sourceToolAssistantUUID: "c1" };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined];
+  const current = [summary, resultMessage("joined", "shared", "SAME")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared")
+    .map((event) => event.kind === "toolResult" ? event.text : "")).toEqual(["SAME"]);
+});
+test("round4 covered copy with conflicting outcome cannot suppress historical outcome", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "OLD"), sourceToolAssistantUUID: "b0" };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const c1 = { ...callRow("c1", "boundary", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const joined = { ...resultRow("joined", "c1", "shared", "NEW"), sourceToolAssistantUUID: "c1" };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined];
+  expect(() => rebuildTranscript([summary, resultMessage("joined", "shared", "NEW")], rowsText(rows))).toThrow("ambiguous");
+});
 test("round3 identical cross-epoch physical copies are not refused", () => {
   const group = (epoch: number, parent: string) => {
     const a = `ca${epoch}`, b = `cb${epoch}`;

@@ -27,6 +27,14 @@ test("round3 every main-success #59 and new join fixture still rebuilds", () => 
     expect(outcomeConservationProblem(fixture.current, rebuilt)).toBeUndefined();
   }
 });
+test("round4 forward-parent main-success fixture still rebuilds", () => {
+  // Frozen after running main 433df8a, which returns and conserves this event.
+  const fixture: Fixture & { name: string } = JSON.parse(readFileSync(new URL("./fixtures/round4-main-compat.json", import.meta.url), "utf8"));
+  expect(fixture.name).toBe("forward-parent anchor after physical join");
+  const rebuilt = rebuildTranscript(fixture.current, text(fixture.rows));
+  expect(outcomeConservationProblem(fixture.current, rebuilt)).toBeUndefined();
+  expect(rebuilt.map((message) => message.uuid ?? message.handle)).toEqual(["p", "a", "joined", "tail"]);
+});
 test("indexed restoration matches the unindexed 91ffecb outputs on every recorded fixture", () => {
   const six: Fixture[] = JSON.parse(readFileSync(new URL("./fixtures/parallel-six-fallbacks.json", import.meta.url), "utf8"));
   const n3: Fixture = {
@@ -73,6 +81,14 @@ test("adapter machine facts match an independent occurrence recount of every rec
       if (row.type === "system" && row.subtype === "compact_boundary") epoch++;
       return { row, epoch };
     });
+    // Derive expected keys directly from physical rows, not from the index being checked.
+    const expectedEpochs = [...new Set(physical.map((item) => item.epoch))].sort((a, b) => a - b);
+    const expectedGroups = [...new Set(physical.filter((item) => ids(item.row, "tool_use").length > 0)
+      .map((item) => JSON.stringify([item.epoch, typeof (item.row.message as { id?: unknown })?.id === "string"
+        ? (item.row.message as { id: string }).id : ""])))].sort();
+    const actualGroups = [...ctx.epochs].flatMap(([e, bucket]) => [...bucket.groups.keys()].map((id) => JSON.stringify([e, id]))).sort();
+    expect([...ctx.epochs.keys()].sort((a, b) => a - b)).toEqual(expectedEpochs);
+    expect(actualGroups).toEqual(expectedGroups);
     const prefix = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant");
     const tailUses = tail.flatMap((message) => message.toolUses);
     const inline = tailUses.filter(hasOutcome).map((use) => use.tool_use_id);
