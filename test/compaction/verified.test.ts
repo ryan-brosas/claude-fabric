@@ -6,6 +6,60 @@ import { allocateSummaryCarry, foldFailureLedger } from "../../src/compaction/ve
 import { acceptSampleAccounting } from "../../src/compaction/verified/policy.ts";
 import { noCutVerdict } from "../../src/compaction/verified/no-cut.ts";
 import { acceptRestorePosition } from "../../src/compaction/verified/restore-order.ts";
+import { acceptAddressedSample, acceptBoundedText, checkedProtectedShare, checkedProtectedTotal, checkedSamplePosition, checkedTextPlan, protectedItemBytes, sectionBytes } from "../../src/compaction/verified/bounds.ts";
+
+describe("verified bounds machines", () => {
+  test("refuses a wrong text length or marker count", () => {
+    const facts = { source: 100, cap: 20, head: 5, tail: 5, marker: 10, omitted: 90,
+      markerCount: 90, output: 20, unchanged: false, marked: true };
+    expect(acceptBoundedText(facts)).toBe(true);
+    expect(acceptBoundedText({ ...facts, output: 18 })).toBe(true);
+    expect(acceptBoundedText({ ...facts, marker: 11 })).toBe(false);
+    expect(acceptBoundedText({ ...facts, output: 21 })).toBe(false);
+    expect(acceptBoundedText({ ...facts, markerCount: 89 })).toBe(false);
+  });
+
+  test("refuses wrong text-plan halves", () => {
+    const facts = { source: 100, cap: 20, marker: 4, head: 5, tail: 5, produced: 20, half: 8, lower: 10 };
+    expect(checkedTextPlan(facts)["out.other"]).toBe(8);
+    expect(() => checkedTextPlan({ ...facts, half: 9 })).toThrow("byte plan failed");
+  });
+
+  test("refuses an incorrect protected share", () => {
+    const facts = { cap: 21, header: 3, count: 3, quotient: 4, remainder: 0 };
+    expect(checkedProtectedShare(facts)["out.room"]).toBe(12);
+    expect(() => checkedProtectedShare({ ...facts, quotient: 5 })).toThrow("protected share failed");
+  });
+
+  test("refuses a protected total over room or demand", () => {
+    const facts = { room: 10, used: 4, amount: 5, demand: 6 };
+    expect(checkedProtectedTotal(facts)).toBe(9);
+    expect(() => checkedProtectedTotal({ ...facts, amount: 7, demand: 7 })).toThrow("protected total failed");
+    expect(() => checkedProtectedTotal({ ...facts, demand: 4 })).toThrow("protected total failed");
+  });
+
+  test("refuses a sample that keeps the wrong first or last counts", () => {
+    const facts = { total: 6, limit: 3, earliest: 2, latest: 1, omitted: 3, lower: 1, upper: 2 };
+    expect(acceptAddressedSample(facts)).toBe(true);
+    expect(acceptAddressedSample({ ...facts, earliest: 1, omitted: 4 })).toBe(false);
+    expect(acceptAddressedSample({ ...facts, latest: 0, omitted: 4 })).toBe(false);
+  });
+
+  test("refuses a sample position from outside the first or last half", () => {
+    const facts = { total: 6, first: 2, last: 1, position: 2, actual: 5 };
+    expect(checkedSamplePosition(facts)).toBe(true);
+    expect(checkedSamplePosition({ ...facts, actual: 4 })).toBe(false);
+    expect(checkedSamplePosition({ ...facts, position: 3 })).toBe(false);
+  });
+
+  test("section and protected-item machines refuse non-natural facts", () => {
+    expect(sectionBytes(15, 10)).toBe(10);
+    expect(() => sectionBytes(-1, 10)).toThrow(RangeError);
+    const item = protectedItemBytes(9, 3, 3, 4);
+    expect([item["out.initial"], item["out.budget"], item["out.remaining"]]).toEqual([3, 7, 0]);
+    expect(() => protectedItemBytes(9, 3, -1, 4)).toThrow(RangeError);
+  });
+});
 
 describe("verified restored ordering", () => {
   test("applies an admitted restoration position", () => {
