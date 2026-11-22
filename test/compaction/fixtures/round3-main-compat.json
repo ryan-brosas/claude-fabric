@@ -1,0 +1,578 @@
+[
+  {
+    "name": "existing #59 two outcomes",
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "sibling-a",
+        "toolResults": [
+          {
+            "tool_use_id": "a",
+            "text": "A",
+            "isError": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "joined",
+        "toolResults": [
+          {
+            "tool_use_id": "b",
+            "text": "B",
+            "isError": false
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "start",
+        "parentUuid": null,
+        "message": {
+          "content": "start"
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "call-a",
+        "parentUuid": "start",
+        "message": {
+          "id": "parallel",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "a",
+              "name": "Read",
+              "input": {
+                "file_path": "a.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "call-b",
+        "parentUuid": "call-a",
+        "message": {
+          "id": "parallel",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "b",
+              "name": "Read",
+              "input": {
+                "file_path": "b.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "sibling-a",
+        "parentUuid": "call-a",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "a",
+              "content": "A",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "joined",
+        "parentUuid": "call-b",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "b",
+              "content": "B",
+              "is_error": false
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "existing #59 three outcomes",
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "sibling-a",
+        "toolResults": [
+          {
+            "tool_use_id": "a",
+            "text": "A",
+            "isError": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "sibling-c",
+        "toolResults": [
+          {
+            "tool_use_id": "c",
+            "text": "C",
+            "isError": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "joined",
+        "toolResults": [
+          {
+            "tool_use_id": "b",
+            "text": "B",
+            "isError": false
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "start",
+        "parentUuid": null,
+        "message": {
+          "content": "start"
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "call-a",
+        "parentUuid": "start",
+        "message": {
+          "id": "parallel",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "a",
+              "name": "Read",
+              "input": {
+                "file_path": "a.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "call-c",
+        "parentUuid": "call-a",
+        "message": {
+          "id": "parallel",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "c",
+              "name": "Read",
+              "input": {
+                "file_path": "c.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "call-b",
+        "parentUuid": "call-c",
+        "message": {
+          "id": "parallel",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "b",
+              "name": "Read",
+              "input": {
+                "file_path": "b.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "sibling-a",
+        "parentUuid": "call-a",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "a",
+              "content": "A",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "sibling-c",
+        "parentUuid": "call-c",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "c",
+              "content": "C",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "joined",
+        "parentUuid": "call-b",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "b",
+              "content": "B",
+              "is_error": false
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "late historical result and #59",
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "result-c",
+        "toolResults": [
+          {
+            "tool_use_id": "call-c",
+            "text": "C",
+            "isError": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "result-d",
+        "toolResults": [
+          {
+            "tool_use_id": "call-d",
+            "text": "D",
+            "isError": false
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "prompt",
+        "parentUuid": null,
+        "message": {
+          "content": "prompt"
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "a",
+        "parentUuid": "prompt",
+        "message": {
+          "id": "pair",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-a",
+              "name": "Read",
+              "input": {
+                "file_path": "call-a.txt"
+              }
+            }
+          ]
+        },
+        "requestRef": "req",
+        "apiBlockIndex": 0
+      },
+      {
+        "type": "assistant",
+        "uuid": "b",
+        "parentUuid": "a",
+        "message": {
+          "id": "pair",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-b",
+              "name": "Read",
+              "input": {
+                "file_path": "call-b.txt"
+              }
+            }
+          ]
+        },
+        "requestRef": "req",
+        "apiBlockIndex": 1
+      },
+      {
+        "type": "user",
+        "uuid": "ra",
+        "parentUuid": "a",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-a",
+              "content": "A",
+              "is_error": false
+            }
+          ]
+        },
+        "sourceToolAssistantUUID": "a"
+      },
+      {
+        "type": "assistant",
+        "uuid": "c",
+        "parentUuid": "ra",
+        "message": {
+          "id": "terminal",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-c",
+              "name": "Read",
+              "input": {
+                "file_path": "call-c.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "d",
+        "parentUuid": "c",
+        "message": {
+          "id": "terminal",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-d",
+              "name": "Read",
+              "input": {
+                "file_path": "call-d.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "rb",
+        "parentUuid": "b",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-b",
+              "content": "B",
+              "is_error": false
+            }
+          ]
+        },
+        "sourceToolAssistantUUID": "b"
+      },
+      {
+        "type": "user",
+        "uuid": "result-c",
+        "parentUuid": "c",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-c",
+              "content": "C",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "uuid": "result-d",
+        "parentUuid": "d",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-d",
+              "content": "D",
+              "is_error": false
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "outcomes straddling join",
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "off",
+        "toolResults": [
+          {
+            "tool_use_id": "a",
+            "text": "A",
+            "isError": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "handle": "joined",
+        "toolResults": [
+          {
+            "tool_use_id": "b",
+            "text": "B",
+            "isError": false
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "start",
+        "parentUuid": null,
+        "message": {
+          "content": "start"
+        }
+      },
+      {
+        "type": "assistant",
+        "uuid": "a",
+        "parentUuid": "start",
+        "message": {
+          "id": "pair",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "a",
+              "name": "Read",
+              "input": {
+                "file_path": "a.txt"
+              }
+            }
+          ]
+        },
+        "requestRef": "req",
+        "apiBlockIndex": 0
+      },
+      {
+        "type": "assistant",
+        "uuid": "b",
+        "parentUuid": "a",
+        "message": {
+          "id": "pair",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "b",
+              "name": "Read",
+              "input": {
+                "file_path": "b.txt"
+              }
+            }
+          ]
+        },
+        "requestRef": "req",
+        "apiBlockIndex": 1
+      },
+      {
+        "type": "user",
+        "uuid": "off",
+        "parentUuid": "a",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "a",
+              "content": "A",
+              "is_error": false
+            }
+          ]
+        },
+        "sourceToolAssistantUUID": "a"
+      },
+      {
+        "type": "user",
+        "uuid": "joined",
+        "parentUuid": "b",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "b",
+              "content": "B",
+              "is_error": false
+            }
+          ]
+        },
+        "sourceToolAssistantUUID": "b"
+      }
+    ]
+  }
+]

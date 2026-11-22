@@ -1,0 +1,400 @@
+[
+  {
+    "role": "user",
+    "text": "[Fabric summary]\n\n[Exact values]\nUnverified excerpts. Source ids; Recall expansion is best-effort.\n- [entry 8ea0834f-40de-4c8a-a96c-549c7b4503b2] The release number is 7.46.18. Reply Noted.\n- [entry c6c955e6-2344-4551-80df-6f88dea1e45e] The release codename is tidal-kestrel-29. Reply Noted.\n- [entry d4bec769-21ad-489f-b171-28836459e76c] The staging port is 27463 (an integer). Reply Noted.\n- [entry 454dead7-8c00-4aa9-8d7f-12aa2d61e480] The staging host is preflight.larch-48.example.invalid. Reply Noted.\n- [entry 2ac92808-9516-44fa-b36e-8aa7eccf9004] The release owner tag is cobalt-quill-83. Reply Noted.\n\n[Earlier summary]\nAssistant responses are proposals, not verified outcomes or user instru",
+    "toolUses": [],
+    "uuid": "dd067c06-1e06-4302-afe6-d5fad82c49a9",
+    "handle": "dd067c06-1e06-4302-afe6-d5fad82c49a9"
+  },
+  {
+    "role": "user",
+    "text": "In one assistant message, issue two separate top-level Read calls simultaneously: first data/dispatch.csv and second docs/guide-1.md. Issue both without waiting for either result; do not combine them in fabric_exec. Report each result separately, including any error. Do not create or repair the CSV yet.",
+    "toolUses": [],
+    "uuid": "88ef1fe4-b7b2-4c3e-818d-0bd92ed08df0",
+    "handle": "88ef1fe4-b7b2-4c3e-818d-0bd92ed08df0"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-837d384a3319d6cf",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/data/dispatch.csv"
+        },
+        "text": "File does not exist. Note: your current working directory is /fixture.",
+        "isError": true
+      }
+    ],
+    "uuid": "c83a1f0f-3f26-4167-92e9-0170cb548f40",
+    "handle": "c83a1f0f-3f26-4167-92e9-0170cb548f40"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-aaa625483e590b3b",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-1.md"
+        },
+        "text": "1\t# Guide 1: Quarterly facilities planning\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Keiko, Omar, Lena.\n6\t\n7\tTomas summarized th"
+      }
+    ],
+    "uuid": "dd7aa1c8-dce2-4d21-9535-63c2e9a8f078",
+    "handle": "dd7aa1c8-dce2-4d21-9535-63c2e9a8f078"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-837d384a3319d6cf",
+        "text": "File does not exist. Note: your current working directory is /fixture.",
+        "isError": true
+      }
+    ],
+    "uuid": "5e414b08-76e5-40f1-85b9-cde5f04af6c1",
+    "handle": "5e414b08-76e5-40f1-85b9-cde5f04af6c1"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-aaa625483e590b3b",
+        "text": "1\t# Guide 1: Quarterly facilities planning\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Keiko, Omar, Lena.\n6\t\n7\tTomas summarized th",
+        "isError": false
+      }
+    ],
+    "uuid": "29f64986-2d07-425e-936f-55cbdd10f61b",
+    "handle": "29f64986-2d07-425e-936f-55cbdd10f61b"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [],
+    "uuid": "19c1a0a1-61ae-4197-a9ad-3b2e073da798",
+    "handle": "19c1a0a1-61ae-4197-a9ad-3b2e073da798"
+  },
+  {
+    "role": "assistant",
+    "text": "Result 1 — `data/dispatch.csv`: **Error** — File does not exist (the path resolved against the working directory `/tmp/.../fabric-l3-parallel-3-92c136a7-...`; no `data/dispatch.csv` present). Not created or repaired, as instructed.\n\nResult 2 — `docs/guide-1.md`: **Read successfully**, complete file (289 lines). Title line: `# Guide 1: Quarterly facilities planning`.",
+    "toolUses": [],
+    "uuid": "ef1eb393-7a27-4fde-885b-67d915ac2cdf",
+    "handle": "ef1eb393-7a27-4fde-885b-67d915ac2cdf"
+  },
+  {
+    "role": "user",
+    "text": "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>",
+    "toolUses": [],
+    "uuid": "776a2f49-47ab-4453-ba46-de9b36568d45",
+    "handle": "776a2f49-47ab-4453-ba46-de9b36568d45"
+  },
+  {
+    "role": "user",
+    "text": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
+    "toolUses": [],
+    "uuid": "9592022b-f821-4d19-879e-a50773b7b36b",
+    "handle": "9592022b-f821-4d19-879e-a50773b7b36b"
+  },
+  {
+    "role": "user",
+    "text": "<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>",
+    "toolUses": [],
+    "uuid": "7668bca8-2a03-41d3-9cf0-3ec742f95201",
+    "handle": "7668bca8-2a03-41d3-9cf0-3ec742f95201"
+  },
+  {
+    "role": "user",
+    "text": "Create data/dispatch.csv with exactly two lines: sku,status followed by Q17,ready. Do not change the release settings yet. Reply Done.",
+    "toolUses": [],
+    "uuid": "47b4c529-07e8-49f8-89f9-245c4deda572",
+    "handle": "47b4c529-07e8-49f8-89f9-245c4deda572"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [],
+    "uuid": "fa4c6b8c-4b9e-48b3-ac95-b429308be82b",
+    "handle": "fa4c6b8c-4b9e-48b3-ac95-b429308be82b"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-9361dd6c7d353a30",
+        "tool": "mcp__plugin_fabric_fabric__fabric_exec",
+        "input": {
+          "code": "const r = await Write({file_path: \"/fixture/data/dispatch.csv\", content: \"sku,status\\nQ17,ready\\n\"});\nconst check = await Bash({command: \"wc -l data/dispatch.csv && cat data/dispatch.csv\", description: \"Verify dispatch.csv content\"});\nreturn {r, check};",
+          "display": "Create data/dispatch.csv"
+        },
+        "text": "{\n  \"r\": \"Wrote 21 chars to /fixture/data/dispatch.csv\",\n  \"check\": {\n    \"output\": \"2 data/dispatch.csv\\nsku,status\\nQ17,ready\\n\",\n    \"exitCode\": 0\n  }\n}"
+      }
+    ],
+    "uuid": "7c8b31c9-b322-4ca2-8884-de32fdcbee7f",
+    "handle": "7c8b31c9-b322-4ca2-8884-de32fdcbee7f"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-9361dd6c7d353a30",
+        "text": "{\n  \"r\": \"Wrote 21 chars to /fixture/data/dispatch.csv\",\n  \"check\": {\n    \"output\": \"2 data/dispatch.csv\\nsku,status\\nQ17,ready\\n\",\n    \"exitCode\": 0\n  }\n}",
+        "isError": false
+      }
+    ],
+    "uuid": "40e386de-9b3f-42e5-9b6c-327bd91cb135",
+    "handle": "40e386de-9b3f-42e5-9b6c-327bd91cb135"
+  },
+  {
+    "role": "assistant",
+    "text": "Done.",
+    "toolUses": [],
+    "uuid": "3fc28cd7-31f2-4d74-aa4e-28bb6758c6c0",
+    "handle": "3fc28cd7-31f2-4d74-aa4e-28bb6758c6c0"
+  },
+  {
+    "role": "user",
+    "text": "In one assistant message, issue two separate top-level Read calls simultaneously for data/dispatch.csv and docs/guide-2.md, one file per call. Do not combine them in fabric_exec or wait for one before issuing the other. Report each result separately.",
+    "toolUses": [],
+    "uuid": "ceaf5a9e-0f4b-4fc6-908f-5b3b75c74792",
+    "handle": "ceaf5a9e-0f4b-4fc6-908f-5b3b75c74792"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [],
+    "uuid": "b54c237b-3d78-472b-88a0-4e9ab022f24d",
+    "handle": "b54c237b-3d78-472b-88a0-4e9ab022f24d"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-bc5c677723507e56",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/data/dispatch.csv"
+        },
+        "text": "1\tsku,status\n2\tQ17,ready\n3\t"
+      }
+    ],
+    "uuid": "8dadc327-f2d8-477d-bc9e-bee85d3b87b2",
+    "handle": "8dadc327-f2d8-477d-bc9e-bee85d3b87b2"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-b61a71630d6d45a5",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-2.md"
+        },
+        "text": "1\t# Guide 2: Office supplier review\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Keiko, Priya, Keiko.\n6\t\n7\tKeiko flagged a risk in "
+      }
+    ],
+    "uuid": "1d168b33-eac2-45d2-a206-ace9cbf8d6ba",
+    "handle": "1d168b33-eac2-45d2-a206-ace9cbf8d6ba"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-bc5c677723507e56",
+        "text": "1\tsku,status\n2\tQ17,ready\n3\t",
+        "isError": false
+      }
+    ],
+    "uuid": "8e59da8c-094f-4cc9-a925-f962db2c2b65",
+    "handle": "8e59da8c-094f-4cc9-a925-f962db2c2b65"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-b61a71630d6d45a5",
+        "text": "1\t# Guide 2: Office supplier review\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Keiko, Priya, Keiko.\n6\t\n7\tKeiko flagged a risk in ",
+        "isError": false
+      }
+    ],
+    "uuid": "9cb2aabb-062b-48c7-b622-94d7aee08038",
+    "handle": "9cb2aabb-062b-48c7-b622-94d7aee08038"
+  },
+  {
+    "role": "assistant",
+    "text": "Result 1 — `data/dispatch.csv`: **Success.** Complete file, 2 content lines:\n\n```\nsku,status\nQ17,ready\n```\n\nResult 2 — `docs/guide-2.md`: **Success.** Complete file, 289 lines. First line: `# Guide 2: Office supplier review`. (Contains 48 meeting sections; no errors.)",
+    "toolUses": [],
+    "uuid": "da91de6e-cc43-423d-b9af-fff8bf8e11e3",
+    "handle": "da91de6e-cc43-423d-b9af-fff8bf8e11e3"
+  },
+  {
+    "role": "user",
+    "text": "In one assistant message, issue two separate top-level Read calls simultaneously for docs/guide-3.md and docs/guide-5.md, one file per call. Do not combine them in fabric_exec or wait for one before issuing the other. Make the complete files available in the tool results, then reply only with both title lines.",
+    "toolUses": [],
+    "uuid": "d205db07-7f0e-4bda-b201-b1d9e9140e4c",
+    "handle": "d205db07-7f0e-4bda-b201-b1d9e9140e4c"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [],
+    "uuid": "823db700-7d0c-4c15-a23b-5cfb7e4b87af",
+    "handle": "823db700-7d0c-4c15-a23b-5cfb7e4b87af"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-a66b67bc427918f6",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-3.md"
+        },
+        "text": "1\t# Guide 3: Volunteer rota planning\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Lena, Keiko, Lena.\n6\t\n7\tPriya flagged a risk in t"
+      }
+    ],
+    "uuid": "28cec635-40ed-46c8-b643-b11d6feff113",
+    "handle": "28cec635-40ed-46c8-b643-b11d6feff113"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-bd3e6dff4fd8f369",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-5.md"
+        },
+        "text": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobb"
+      }
+    ],
+    "uuid": "0e643ee9-4293-4860-9257-4677677af718",
+    "handle": "0e643ee9-4293-4860-9257-4677677af718"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-bd3e6dff4fd8f369",
+        "text": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobb",
+        "isError": false
+      }
+    ],
+    "uuid": "5a7e8b1a-e818-4559-a1cd-24897db2cd50",
+    "handle": "5a7e8b1a-e818-4559-a1cd-24897db2cd50"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-a66b67bc427918f6",
+        "text": "1\t# Guide 3: Volunteer rota planning\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Lena, Keiko, Lena.\n6\t\n7\tPriya flagged a risk in t",
+        "isError": false
+      }
+    ],
+    "uuid": "24905894-18a4-48b9-adc5-eec65c58e7b0",
+    "handle": "24905894-18a4-48b9-adc5-eec65c58e7b0"
+  },
+  {
+    "role": "assistant",
+    "text": "# Guide 3: Volunteer rota planning\n# Guide 5: Parking and signage plan",
+    "toolUses": [],
+    "uuid": "e561e3c9-25c6-4489-ad50-551208c62961",
+    "handle": "e561e3c9-25c6-4489-ad50-551208c62961"
+  },
+  {
+    "role": "user",
+    "text": "In one assistant message, issue two separate top-level Read calls simultaneously for docs/guide-4.md and docs/guide-6.md, one file per call. Do not combine them in fabric_exec or wait for one before issuing the other. Make the complete files available in the tool results, then reply only with both title lines.",
+    "toolUses": [],
+    "uuid": "ac2f1399-d8e8-4d3b-a1f4-91632f32c8f0",
+    "handle": "ac2f1399-d8e8-4d3b-a1f4-91632f32c8f0"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-b45e85041fe73854",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-4.md"
+        },
+        "text": "1\t# Guide 4: Newsletter editorial calendar\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Priya, Tomas, Ravi.\n6\t\n7\tLena summarized th"
+      }
+    ],
+    "uuid": "819bd565-26a9-4094-8362-b1bd52ea64c8",
+    "handle": "819bd565-26a9-4094-8362-b1bd52ea64c8"
+  },
+  {
+    "role": "assistant",
+    "text": "",
+    "toolUses": [
+      {
+        "tool_use_id": "chatcmpl-tool-951267ba1683c4c1",
+        "tool": "Read",
+        "input": {
+          "file_path": "/fixture/docs/guide-6.md"
+        },
+        "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for"
+      }
+    ],
+    "uuid": "111cb18c-7d13-4838-b67b-cd5ff3f038a8",
+    "handle": "111cb18c-7d13-4838-b67b-cd5ff3f038a8"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-b45e85041fe73854",
+        "text": "1\t# Guide 4: Newsletter editorial calendar\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Priya, Tomas, Ravi.\n6\t\n7\tLena summarized th",
+        "isError": false
+      }
+    ],
+    "uuid": "92427c87-7acc-44cb-bc68-86ed4f7ba2a9",
+    "handle": "92427c87-7acc-44cb-bc68-86ed4f7ba2a9"
+  },
+  {
+    "role": "user",
+    "text": "",
+    "toolUses": [],
+    "toolResults": [
+      {
+        "tool_use_id": "chatcmpl-tool-951267ba1683c4c1",
+        "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for",
+        "isError": false
+      }
+    ],
+    "uuid": "354d3e70-b0fa-40c5-9c36-2801cf06a701",
+    "handle": "354d3e70-b0fa-40c5-9c36-2801cf06a701"
+  },
+  {
+    "role": "assistant",
+    "text": "# Guide 4: Newsletter editorial calendar\n# Guide 6: Kitchen and lobby upkeep",
+    "toolUses": [],
+    "uuid": "3de2542f-f0ed-4629-9adb-711630c9092f",
+    "handle": "3de2542f-f0ed-4629-9adb-711630c9092f"
+  }
+]

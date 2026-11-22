@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { compact } from "../../src/compaction/compact.ts";
 import { fromTranscript, rebuildTranscript } from "../../src/compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
-import { normalizeMessages } from "../../src/compaction/from-claude.ts";
+import { normalizeMessages, sameToolClaim } from "../../src/compaction/from-claude.ts";
+import { valuesIn } from "../../src/compaction/literals.ts";
 import { projectOutstanding } from "../../src/compaction/projections.ts";
+import { restoreSiblings } from "../../src/compaction/restore-siblings.ts";
 
 test("transcript rows preserve Claude text, tool uses, results and errors for the compactor", () => {
   const user = fromTranscript({ type: "user", uuid: "u1", message: { content: "Read the note." } });
@@ -355,6 +359,450 @@ test("ambiguous repeated raw result anchors cannot move a later failure before s
     resultRow("result-b2", "result-b1", "b", "OK"), resultRow("sibling-a", "call-a", "a", "FAILED", true),
     promptRow("joined", "result-b2"));
   expectSameOutcomesOrRefused(current, rebuildTranscript(current, text));
+});
+
+
+// Shape from the recorded run: each sibling records the same message/request,
+// consecutive block indexes, an ancestry link, and an attributed result.
+function siblingFixture(): { rows: Record<string, unknown>[]; current: ClaudeMessage[] } {
+  const a = { ...callRow("a", "prompt", "call-a", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "call-b", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  return { rows: [promptRow("prompt", null), a, b,
+    { ...resultRow("rb", "b", "call-b", "B"), sourceToolAssistantUUID: "b" },
+    { ...resultRow("ra", "a", "call-a", "A"), sourceToolAssistantUUID: "a" }, promptRow("joined", "ra")],
+    current: [userMessage("summary", "[Fabric summary]\nprior"), userMessage("joined", "after")] };
+}
+const rowsText = (rows: Record<string, unknown>[]): string => rows.map((row) => JSON.stringify(row)).join("\n");
+
+test("ambiguous same-message calls or outcomes are refused", () => {
+  for (const kind of ["duplicate-call", "duplicate-result", "orphan-result"] as const) {
+    const { rows, current } = siblingFixture();
+    const extra = kind === "duplicate-call"
+      ? { ...callRow("dup", "prompt", "call-b", "other"), requestRef: "other", apiBlockIndex: 0 }
+      : kind === "duplicate-result"
+        ? { ...resultRow("dup", "b", "call-b", "B"), sourceToolAssistantUUID: "b" }
+        : { ...resultRow("dup", "b", "no-call", "orphan"), sourceToolAssistantUUID: "b" };
+    rows.splice(rows.length - 1, 0, extra);
+    expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+  }
+});
+
+test("round3 cross-epoch conflicting owners are refused rather than mispaired", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `a${epoch}`, b = `b${epoch}`, ra = `ra${epoch}`, rb = `rb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, `message${epoch}`), requestRef: `req${epoch}`, apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", `message${epoch}`), requestRef: `req${epoch}`, apiBlockIndex: 1 },
+      { ...resultRow(rb, b, "shared", epoch ? "NEW" : "OLD"), sourceToolAssistantUUID: b },
+      { ...resultRow(ra, a, `anchor${epoch}`, `A${epoch}`), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" },
+    ...group(1, "boundary"), promptRow("joined", "ra1")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows))).toThrow("ambiguous");
+});
+
+for (const placement of ["joined-tail", "prefix-only"] as const) {
+  test(`round4 conflicting existing owner in ${placement} cannot suppress an off-chain call`, () => {
+    const a0 = { ...callRow("a0", "start", "anchor", "message0"), requestRef: "request0", apiBlockIndex: 0 };
+    const b0 = { ...callRow("b0", "a0", "shared", "message0"), requestRef: "request0", apiBlockIndex: 1 };
+    const rb0 = { ...resultRow("rb0", "b0", "shared", "OLD"), sourceToolAssistantUUID: "b0" };
+    const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+    const c1 = { ...callRow("c1", "boundary", "shared", "message1"), requestRef: "request1", apiBlockIndex: 0,
+      message: { id: "message1", content: [{ type: "tool_use", id: "shared", name: "Read", input: { file_path: "new.txt" } }] } };
+    const d1 = { ...callRow("d1", "c1", "other", "message1"), requestRef: "request1", apiBlockIndex: 1 };
+    const rd1 = { ...resultRow("rd1", "d1", "other", "D"), sourceToolAssistantUUID: "d1" };
+    const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+    const rc1 = { ...resultRow("rc1", "c1", "shared", "NEW"), sourceToolAssistantUUID: "c1" };
+    const rows = placement === "joined-tail"
+      ? [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, d1, rd1, { ...rc1, uuid: "joined" }]
+      : [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, rc1, promptRow("joined", "rc1")];
+    const current = placement === "joined-tail" ? [summary, resultMessage("joined", "shared", "NEW")]
+      : [summary, userMessage("joined", "after")];
+    expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+  });
+}
+test("round4 conflicting result source cannot suppress a historical outcome", () => {
+  const a = { ...callRow("a", "start", "anchor", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "shared", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const rb = { ...resultRow("rb", "b", "shared", "OLD"), sourceToolAssistantUUID: "b" };
+  const rogue = { ...callRow("rogue", "start", "shared", "other"), requestRef: "other", apiBlockIndex: 0,
+    message: { id: "other", content: [{ type: "tool_use", id: "shared", name: "Read", input: { file_path: "other.txt" } }] } };
+  const rr = { ...resultRow("rr", "a", "shared", "NEW"), sourceToolAssistantUUID: "rogue" };
+  const rows = [promptRow("start", null), a, b, rb, rogue, rr, promptRow("joined", "rr")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "after")], rowsText(rows))).toThrow("ambiguous");
+});
+test("round4 unique opaque tail call with matching outcome is preserved", () => {
+  const { rows, current } = siblingFixture();
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"), toolUses: [{ ...toolUse("call-b"), text: "B" }] };
+  const rebuilt = rebuildTranscript([...current, opaque], rowsText(rows));
+  expect(outcomeConservationProblem([...current, opaque], rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "call-b"))
+    .toMatchObject([{ text: "B" }]);
+});
+test("round5 opaque tail call with no matching identity is refused", () => {
+  const { rows, current } = siblingFixture();
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"),
+    toolUses: [{ tool_use_id: "call-b", tool: "Read", input: { file_path: "different.txt" }, text: "B" }] };
+  expect(() => rebuildTranscript([...current, opaque], rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round5 opaque tail call accepts matching physical copies as one identity", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(rows.length - 1, 0, { type: "system", subtype: "compact_boundary", uuid: "retry-boundary", parentUuid: "prompt" },
+    { ...callRow("retry", "retry-boundary", "call-b", "pair"), requestRef: "req", apiBlockIndex: 1 });
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"), toolUses: [{ ...toolUse("call-b"), text: "B" }] };
+  const rebuilt = rebuildTranscript([...current, opaque], rowsText(rows));
+  expect(outcomeConservationProblem([...current, opaque], rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "call-b"))
+    .toMatchObject([{ text: "B" }]);
+});
+test("round4 opaque tail call with multiple possible recorded owners is refused", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(rows.length - 1, 0,
+    { ...callRow("retry", "prompt", "call-b", "other-message"), requestRef: "other-request", apiBlockIndex: 0 });
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"), toolUses: [{ ...toolUse("call-b"), text: "B" }] };
+  expect(() => rebuildTranscript([...current, opaque], rowsText(rows))).toThrow("ambiguous");
+});
+test("round4 copy with omitted structured result preserves the effective outcome", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "SAME"), sourceToolAssistantUUID: "b0", toolUseResult: { bytes: 4 } };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const c1 = { ...callRow("c1", "boundary", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const joined = { ...resultRow("joined", "c1", "shared", "SAME"), sourceToolAssistantUUID: "c1" };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined];
+  const current = [summary, resultMessage("joined", "shared", "SAME")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared")
+    .map((event) => event.kind === "toolResult" ? event.text : "")).toEqual(["SAME"]);
+});
+function round9OpaqueResultFixture(conflicting: boolean): { rows: Record<string, unknown>[]; current: ClaudeMessage[] } {
+  const a = { ...callRow("a", "p", "anchor", "pair"), requestRef: "pair", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "shared", "pair"), requestRef: "pair", apiBlockIndex: 1,
+    message: { id: "pair", content: [
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "old.txt" } },
+    ] } };
+  const rb = { ...resultRow("rb", "b", "shared", "SAME"), sourceToolAssistantUUID: "b" };
+  const ra = { ...resultRow("ra", "a", "anchor", "A"), sourceToolAssistantUUID: "a" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "joined" };
+  const other = conflicting
+    ? { ...callRow("other", "boundary", "shared", "other-message"), requestRef: "other-request", apiBlockIndex: 0,
+      message: { id: "other-message", content: [
+        { type: "tool_use", id: "shared", name: "Read", input: { file_path: "new.txt" } },
+      ] } }
+    : { ...b, uuid: "other", parentUuid: "boundary" };
+  const rother = { ...resultRow("rother", "other", "shared", "SAME"), sourceToolAssistantUUID: "other" };
+  return { rows: [promptRow("p", null), a, b, rb, ra, promptRow("joined", "ra"), boundary, other, rother],
+    current: [summary, userMessage("joined", "after"), resultMessage("opaque-result", "shared", "SAME")] };
+}
+
+test("round9 opaque result refuses when two different caller identities could own it", () => {
+  const { rows, current } = round9OpaqueResultFixture(true);
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round9 opaque result accepts one caller identity with a cross-epoch copy", () => {
+  const { rows, current } = round9OpaqueResultFixture(false);
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.find((message) => message.uuid === "b")?.toolUses[0]?.input).toEqual({ file_path: "old.txt" });
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared"))
+    .toMatchObject([{ text: "SAME", isError: false }]);
+});
+test("round9 a source-bound result need not guess among other callers", () => {
+  const { rows, current } = round9OpaqueResultFixture(true);
+  current[2] = resultMessage("rb", "shared", "SAME");
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.find((message) => message.uuid === "b")?.toolUses[0]?.input).toEqual({ file_path: "old.txt" });
+});
+test("round6 successful Bash bodies with different protected paths cannot be suppressed", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const bash = (uuid: string, parentUuid: string) => ({ ...callRow(uuid, parentUuid, "shared", "same"),
+    requestRef: "req", apiBlockIndex: 1, message: { id: "same", content: [
+      { type: "tool_use", id: "shared", name: "Bash", input: { command: "cat receipt.txt" } },
+    ] } });
+  const b0 = bash("b0", "a0"), c1 = bash("c1", "boundary");
+  const old = "/tmp/old-receipt.json", next = "/tmp/new-receipt.json";
+  const rb0 = { ...resultRow("rb0", "b0", "shared", old), sourceToolAssistantUUID: "b0", toolUseResult: { exitCode: 0 } };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const joined = { ...resultRow("joined", "c1", "shared", next), sourceToolAssistantUUID: "c1", toolUseResult: { exitCode: 0 } };
+  const historical = [fromTranscript(b0), fromTranscript(rb0)], retained = [fromTranscript(c1), fromTranscript(joined)];
+  expect(normalizeMessages(historical)).toEqual(normalizeMessages(retained));
+  expect(valuesIn(old)).toContain(old);
+  expect(valuesIn(next)).toContain(next);
+  const current = [summary, { ...resultMessage("joined", "shared", next), toolResults: [
+    { tool_use_id: "shared", text: next, isError: false, result: { exitCode: 0 } },
+  ] }];
+  expect(() => rebuildTranscript(current, rowsText([promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined])))
+    .toThrow("ambiguous");
+  expect(sameToolClaim({ call: historical[0]!.toolUses[0]!, outcome: historical[1]!.toolResults![0]! },
+    { call: retained[0]!.toolUses[0]!, outcome: retained[1]!.toolResults![0]! })).toBe(false);
+});
+
+test("round6 explicit Bash flag remains distinct when exit status makes both effective errors", () => {
+  const call = { tool_use_id: "b", tool: "Bash", input: { command: "false" } };
+  const left = { call, outcome: { tool_use_id: "b", text: "", isError: false, result: { exitCode: 1 } } };
+  const right = { call, outcome: { tool_use_id: "b", text: "", isError: true, result: { exitCode: 1 } } };
+  expect(normalizeMessages([{ role: "assistant", text: "", toolUses: [call] },
+    { role: "user", text: "", toolUses: [], toolResults: [left.outcome] }]))
+    .toEqual(normalizeMessages([{ role: "assistant", text: "", toolUses: [call] },
+      { role: "user", text: "", toolUses: [], toolResults: [right.outcome] }]));
+  expect(sameToolClaim(left, right)).toBe(false);
+});
+test("round6 opaque attribution counts every duplicate-id occurrence in another epoch", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "B"), sourceToolAssistantUUID: "b0" };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "start" };
+  const rogue = { ...callRow("rogue", "boundary", "shared", "other"), requestRef: "other-req", apiBlockIndex: 0,
+    message: { id: "other", content: [
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "different.txt" } },
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "shared.txt" } },
+    ] } };
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "shared"), toolUses: [{ ...toolUse("shared"), text: "B" }] };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, rogue, promptRow("joined", "ra0")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "after"), opaque], rowsText(rows))).toThrow("ambiguous");
+});
+test("round5 omitted Bash exit cannot suppress a historical failure", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const bash = (uuid: string, parentUuid: string) => ({ ...callRow(uuid, parentUuid, "shared", "same"),
+    requestRef: "req", apiBlockIndex: 1, message: { id: "same", content: [
+      { type: "tool_use", id: "shared", name: "Bash", input: { command: "false" } },
+    ] } });
+  const b0 = bash("b0", "a0"), c1 = bash("c1", "boundary");
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "SAME"), sourceToolAssistantUUID: "b0", toolUseResult: { exitCode: 1 } };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const joined = { ...resultRow("joined", "c1", "shared", "SAME"), sourceToolAssistantUUID: "c1" };
+  const historical = normalizeMessages([fromTranscript(b0), fromTranscript(rb0)]).find((event) => event.kind === "bash");
+  const retained = normalizeMessages([fromTranscript(c1), resultMessage("joined", "shared", "SAME")]).find((event) => event.kind === "bash");
+  expect(historical).toMatchObject({ isError: true, exitCode: 1 });
+  expect(retained).toMatchObject({ isError: false, exitCode: null });
+  expect(() => rebuildTranscript([summary, resultMessage("joined", "shared", "SAME")],
+    rowsText([promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined]))).toThrow("ambiguous");
+});
+
+test("round7 copied wrapper and result keys are irrelevant but input key order is not", () => {
+  const group = (epoch: number, parent: string, tool: string, reorderInput: boolean) => {
+    const a = `ka${epoch}`, b = `kb${epoch}`;
+    const input = epoch && reorderInput ? { options: { second: 2, first: 1 }, file_path: "same.txt" }
+      : { file_path: "same.txt", options: { first: 1, second: 2 } };
+    const block = epoch ? { id: "shared", type: "tool_use", name: tool, input }
+      : { type: "tool_use", id: "shared", name: tool, input };
+    const result = epoch ? { beta: 2, alpha: 1 } : { alpha: 1, beta: 2 };
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", "same-message"), requestRef: "same-request", apiBlockIndex: 1,
+        message: { id: "same-message", content: [block] } },
+      { ...resultRow(`krb${epoch}`, b, "shared", "SAME"), sourceToolAssistantUUID: b, toolUseResult: result },
+      { ...resultRow(`kra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = (tool: string, reorderInput: boolean) => [promptRow("start", null), ...group(0, "start", tool, reorderInput),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "kra0" },
+    ...group(1, "boundary", tool, reorderInput), promptRow("joined", "kra1")];
+  for (const tool of ["Read", "MCP"]) {
+    const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, false)));
+    expect(rebuilt.find((message) => message.uuid === "kb0")?.toolUses[0]?.text).toBe("SAME");
+    expect(rebuilt.find((message) => message.uuid === "kb1")?.toolUses[0]?.text).toBe("SAME");
+    expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, true))))
+      .toThrow("ambiguous");
+  }
+});
+
+test("round4 covered copy with conflicting outcome cannot suppress historical outcome", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "OLD"), sourceToolAssistantUUID: "b0" };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const c1 = { ...callRow("c1", "boundary", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
+  const joined = { ...resultRow("joined", "c1", "shared", "NEW"), sourceToolAssistantUUID: "c1" };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined];
+  expect(() => rebuildTranscript([summary, resultMessage("joined", "shared", "NEW")], rowsText(rows))).toThrow("ambiguous");
+});
+test("round3 identical cross-epoch physical copies are not refused", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `ca${epoch}`, b = `cb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", "same-message"), requestRef: "same-request", apiBlockIndex: 1 },
+      { ...resultRow(`crb${epoch}`, b, "shared", "SAME"), sourceToolAssistantUUID: b },
+      { ...resultRow(`cra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "cra0" },
+    ...group(1, "boundary"), promptRow("joined", "cra1")];
+  const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows));
+  expect(rebuilt.find((message) => message.uuid === "cb0")?.toolUses[0]?.text).toBe("SAME");
+  expect(rebuilt.find((message) => message.uuid === "cb1")?.toolUses[0]?.text).toBe("SAME");
+});
+test("cross-epoch Read copies with different unrendered metadata have equal normalized events", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `sa${epoch}`, b = `sb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", "same-message"), requestRef: "same-request", apiBlockIndex: 1 },
+      { ...resultRow(`srb${epoch}`, b, "shared", "SAME"), sourceToolAssistantUUID: b, toolUseResult: { data: epoch } },
+      { ...resultRow(`sra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "sra0" },
+    ...group(1, "boundary"), promptRow("joined", "sra1")];
+  expect(normalizeMessages([fromTranscript(rows[2]!), fromTranscript(rows[3]!)]))
+    .toEqual(normalizeMessages([fromTranscript(rows[7]!), fromTranscript(rows[8]!)]));
+  const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows));
+  expect(rebuilt.find((message) => message.uuid === "sb0")?.toolUses[0]?.text).toBe("SAME");
+  expect(rebuilt.find((message) => message.uuid === "sb1")?.toolUses[0]?.text).toBe("SAME");
+});
+
+test("round5 Read copies with different effective text are refused", () => {
+  const { rows, current } = siblingFixture();
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "call-b"),
+    toolUses: [{ ...toolUse("call-b"), text: "different" }] };
+  expect(() => rebuildTranscript([...current, opaque], rowsText(rows))).toThrow("ambiguous");
+});
+test("round3 duplicate tool id twice in one off-chain row is refused", () => {
+  const { rows, current } = siblingFixture();
+  const message = rows[2]!.message as { content: object[] };
+  message.content.push({ ...message.content[0] });
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round3 late historical result does not disable terminal restoration", () => {
+  const { rows } = siblingFixture();
+  rows.pop();
+  rows.push(callRow("c", "ra", "call-c", "terminal"), callRow("d", "c", "call-d", "terminal"),
+    resultRow("result-c", "c", "call-c", "C"), resultRow("result-d", "d", "call-d", "D"));
+  rows.splice(rows.findIndex((r) => r.uuid === "result-c"), 0, rows.splice(rows.findIndex((r) => r.uuid === "rb"), 1)[0]!);
+  const current = [summary, resultMessage("result-c", "call-c", "C"), resultMessage("result-d", "call-d", "D")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(rebuilt.some((message) => message.uuid === "rb")).toBe(true);
+  expect(rebuilt.some((message) => message.handle === "result-c")).toBe(true);
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+});
+
+test("round3 outcomes straddling join still rebuild", () => {
+  const a = { ...callRow("a", "start", "a", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "b", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const off = { ...resultRow("off", "a", "a", "A"), sourceToolAssistantUUID: "a" };
+  const joined = { ...resultRow("joined", "b", "b", "B"), sourceToolAssistantUUID: "b" };
+  const current = [summary, resultMessage("off", "a", "A"), resultMessage("joined", "b", "B")];
+  const rebuilt = rebuildTranscript(current, transcript(promptRow("start", null), a, b, off, joined));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((x) => x.kind === "toolResult").map((x) => x.toolCallId)).toEqual(["a", "b"]);
+});
+
+test("round3 ten thousand ordinary calls avoid quadratic scanning", () => {
+  const count = 10_000;
+  const rows = Array.from({ length: count }, (_, i) =>
+    ({ ...callRow(`call${i}`, i ? `call${i - 1}` : "start", `id${i}`, `msg${i}`), requestRef: `req${i}`, apiBlockIndex: 0 }));
+  const chain = [promptRow("start", null), ...rows, promptRow("joined", `call${count - 1}`)];
+  const map = new Map(chain.map((row) => [row.uuid, row]));
+  const start = performance.now();
+  const restored = restoreSiblings(chain, map, chain.length - 1, [userMessage("joined", "next")]);
+  const elapsed = performance.now() - start;
+  expect(restored.rows).toEqual(chain.slice(0, -1));
+  expect(restored.pairs.size).toBe(0);
+  expect(elapsed).toBeLessThan(1000);
+}, 30000);
+
+test("sidechain and different-message abandoned branches are not imported", () => {
+  for (const kind of ["sidechain", "abandoned"] as const) {
+    const { rows, current } = siblingFixture();
+    const candidate = rows[2]!;
+    if (kind === "sidechain") { candidate.isSidechain = true; rows[3]!.isSidechain = true; }
+    else candidate.message = { ...candidate.message as object, id: "different" };
+    const rebuilt = rebuildTranscript(current, rowsText(rows));
+    expect(rebuilt.flatMap((message) => message.toolUses).some((use) => use.tool_use_id === "call-b")).toBe(false);
+  }
+});
+
+test("a uniquely sourced result for a single historical call is not silently dropped", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(2, rows.length - 2, rows[4]!, promptRow("joined", "a"));
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((entry) => entry.tool_use_id === "call-a")).toHaveLength(1);
+});
+
+test("two candidate rows claiming one response block are refused even if message and request ids match", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(rows.length - 1, 0,
+    { ...callRow("retry", "a", "call-retry", "pair"), requestRef: "req", apiBlockIndex: 1 },
+    { ...resultRow("retry-result", "retry", "call-retry", "other"), sourceToolAssistantUUID: "retry" });
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("a historical restore refuses when the final current-outcome conservation gate fails", () => {
+  const { rows } = siblingFixture();
+  const current = [summary, resultMessage("phantom", "missing", "MISSING"), userMessage("joined", "after")];
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("missing tool outcome in rebuilt input");
+});
+
+test("historical and terminal restoration cannot restore the same result twice", () => {
+  const { rows } = siblingFixture();
+  rows.pop();
+  rows.push(callRow("c", "ra", "call-c", "terminal"), callRow("d", "c", "call-d", "terminal"),
+    resultRow("result-c", "c", "call-c", "C"), resultRow("result-d", "d", "call-d", "D"));
+  const current = [summary, resultMessage("result-c", "call-c", "C"), resultMessage("result-d", "call-d", "D")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  for (const id of ["call-b", "call-c", "call-d"]) {
+    expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((result) => result.tool_use_id === id)).toHaveLength(1);
+  }
+  expect(rebuilt.some((message) => message.uuid === "rb")).toBe(true);
+  expect(rebuilt.some((message) => message.handle === "result-c")).toBe(true);
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+});
+
+test("six recorded fallback groups conserve their current outcome", () => {
+  const fixtures: { n: number; id: string; rows: Record<string, unknown>[]; current: ClaudeMessage[] }[] =
+    JSON.parse(readFileSync(new URL("./fixtures/parallel-six-fallbacks.json", import.meta.url), "utf8"));
+  expect(fixtures).toHaveLength(6);
+  for (const fixture of fixtures) {
+    const rebuilt = rebuildTranscript(fixture.current, rowsText(fixture.rows));
+    expect(outcomeConservationProblem(fixture.current, rebuilt)).toBeUndefined();
+    expect(rebuilt.flatMap((message) => message.toolUses).filter((use) => use.tool_use_id === fixture.id)).toHaveLength(1);
+    expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((result) => result.tool_use_id === fixture.id)).toHaveLength(1);
+  }
+});
+
+test("recorded off-chain parallel calls and results survive later rebuilds", () => {
+  // Run n=3, prefix before its third compaction; paths and long bodies were shortened.
+  const prefix = readFileSync(new URL("./fixtures/parallel-n3-prefix.jsonl", import.meta.url), "utf8");
+  const current: ClaudeMessage[] = JSON.parse(readFileSync(new URL("./fixtures/parallel-n3-event.json", import.meta.url), "utf8"));
+  const rebuilt = rebuildTranscript(current, prefix);
+  const ids = ["chatcmpl-tool-871c3ee2fc63d5f1", "chatcmpl-tool-9703492ccb533c33",
+    "chatcmpl-tool-bec7e2578b97278a", "chatcmpl-tool-b0853e60ebb6e630",
+    "chatcmpl-tool-80de3626d1e386af", "chatcmpl-tool-8d23f3ca4192179e"];
+  const calls = rebuilt.flatMap((message) => message.toolUses.map((use) => use.tool_use_id));
+  const results = normalizeMessages(rebuilt).flatMap((event) => event.kind === "toolResult" ? [event.toolCallId] : []);
+  for (const id of ids) { expect(calls.filter((call) => call === id)).toHaveLength(1); expect(results.filter((result) => result === id)).toHaveLength(1); }
+  // The first compaction read the in-memory messages: call A, result A, call B, result B.
+  const ordered = normalizeMessages(rebuilt).flatMap((event) =>
+    (event.kind === "toolCall" || event.kind === "toolResult") && ids.includes(event.toolCallId)
+      ? [event.kind + ":" + event.toolCallId] : []);
+  expect(ordered).toEqual(ids.flatMap((id) => ["toolCall:" + id, "toolResult:" + id]));
+  const last = userMessage("final-tail", "Continue.");
+  const answer = compact([...rebuilt, last], { keepRecentTokens: 20 });
+  if (!("messages" in answer)) throw new Error("the rebuilt fixture did not compact");
+  const text = answer.messages[0]!.text;
+  const files = text.split("[Files And Changes]\n")[1]!.split("\n[")[0]!;
+  for (const [path, id] of [["guide-2.md", "a8bb53de-504f-4d9c-9e91-7345bc72f417"],
+    ["guide-4.md", "56e228c8-d5f1-43db-a391-e5dd19c7285b"], ["guide-6.md", "0cbc5fd2-b1c8-4980-80e9-1c1bb7df7aeb"]]) {
+    expect(files).toContain(path + " [entry " + id + "]");
+  }
+  for (const id of ["151b9b66-fbf6-4512-972c-de832e150969", "f6c965f7-6215-4da9-b0eb-80abe0e23113", "c15f594e-6b7f-4b21-9ca6-67424a11cf5c"]) {
+    expect(text).toContain("Read:2 [entry " + id + "]");
+  }
 });
 
 test("the converter rejects a row that cannot be addressed", () => {

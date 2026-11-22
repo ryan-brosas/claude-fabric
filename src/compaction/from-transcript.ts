@@ -5,37 +5,13 @@ import { exitCodeOf, hasOutcome, inlineOutcome, normalizeMessages, type ClaudeMe
 import { outcomeRestoration } from "./verified/generated/outcome-restoration.js";
 import { acceptRestorePosition } from "./verified/restore-order.ts";
 import { outcomeConservationProblem } from "./outcome-conservation.ts";
+import { restoreSiblings } from "./restore-siblings.ts";
+import { fromTranscript } from "./transcript-row.ts";
+export { fromTranscript } from "./transcript-row.ts";
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const string = (value: unknown): string => typeof value === "string" ? value : "";
-const textOf = (value: unknown): string => {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return "";
-  return value.map(object).filter((part) => part.type === "text").map((part) => string(part.text)).join("\n");
-};
-
-/** Convert one user or assistant transcript row to the compactor's message shape. */
-export function fromTranscript(row: TranscriptRow): ClaudeMessage {
-  if ((row.type !== "user" && row.type !== "assistant") || typeof row.uuid !== "string" || !row.uuid) {
-    throw new Error("fabric: transcript conversation row has no role or uuid");
-  }
-  const content = object(row.message).content;
-  const parts = Array.isArray(content) ? content.map(object) : [];
-  const toolUses: ClaudeMessage["toolUses"] = [];
-  const toolResults: NonNullable<ClaudeMessage["toolResults"]> = [];
-  for (const block of parts) {
-    if (block.type === "tool_use") {
-      toolUses.push({ tool_use_id: string(block.id), tool: string(block.name), input: object(block.input) });
-    } else if (block.type === "tool_result") {
-      toolResults.push({ tool_use_id: string(block.tool_use_id), text: textOf(block.content),
-        isError: block.is_error === true, ...(row.toolUseResult === undefined ? {} : { result: row.toolUseResult }) });
-    }
-  }
-  return { role: row.type, text: textOf(content), toolUses,
-    ...(toolResults.length ? { toolResults } : {}), uuid: row.uuid };
-}
-
 const MISSING_OUTCOME = "missing tool outcome in rebuilt input";
 
 // Current outcomes must appear in order, including an exact restored suffix.
@@ -84,19 +60,21 @@ function matchesInline(original: ClaudeToolUse | undefined, call: ClaudeToolUse,
 }
 /** Restore only whole sibling result rows from the terminal parallel group. */
 function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, join: number,
-  prefixLength: number, rebuilt: ClaudeMessage[], chain: TranscriptRow[]): ClaudeMessage[] {
+  prefixLength: number, rebuilt: ClaudeMessage[], chain: TranscriptRow[], originalPrefix: TranscriptRow[]): ClaudeMessage[] {
   if (outcomeConservationProblem(current, rebuilt) !== MISSING_OUTCOME || !prefixLength) return rebuilt;
 
   const rows = new Map(chain.map((row) => [row.uuid, row]));
   const messageId = (message: ClaudeMessage): string => string(object(rows.get(message.uuid)?.message).id);
-  const last = rebuilt[prefixLength - 1]!;
-  const id = last.role === "assistant" ? messageId(last) : "";
+  const byUuid = new Map(rebuilt.slice(0, prefixLength).map((message) => [message.uuid, message]));
+  const original = originalPrefix.map((row) => byUuid.get(string(row.uuid))).filter((message): message is ClaudeMessage => !!message);
+  const last = original[original.length - 1];
+  const id = last?.role === "assistant" ? messageId(last) : "";
   if (!id) return rebuilt;
-  let start = prefixLength - 1;
-  while (start > 0 && rebuilt[start - 1]!.role === "assistant" && messageId(rebuilt[start - 1]!) === id) start--;
-  if (prefixLength - start < 2) return rebuilt;
+  let start = original.length - 1;
+  while (start > 0 && original[start - 1]!.role === "assistant" && messageId(original[start - 1]!) === id) start--;
+  if (original.length - start < 2) return rebuilt;
   const calls = new Map<string, ClaudeToolUse>();
-  for (const use of rebuilt.slice(start, prefixLength).flatMap((message) => message.toolUses)) {
+  for (const use of original.slice(start).flatMap((message) => message.toolUses)) {
     if (!use.tool_use_id || calls.has(use.tool_use_id)) return rebuilt;
     calls.set(use.tool_use_id, use);
   }
@@ -144,7 +122,7 @@ function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, joi
 export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
   const summary = messages.findIndex(isFabricSummary);
   if (summary < 0) throw new Error("fabric: no earlier Fabric summary to rebuild");
-  const { chain } = transcriptChain(text);
+  const { chain, rows } = transcriptChain(text);
   const positions = new Map<string, number>();
   chain.forEach((row, index) => {
     if ((row.type === "user" || row.type === "assistant") && typeof row.uuid === "string") positions.set(row.uuid, index);
@@ -152,10 +130,25 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
   const join = messages.findIndex((message, index) => index > summary && !!message.handle && positions.has(message.handle));
   if (join < 0) throw new Error("fabric: no current message handle joins the transcript chain");
   const chainEnd = positions.get(messages[join]!.handle!)!;
-  const prefix = chain.slice(0, chainEnd)
-    .filter((row) => row.type === "user" || row.type === "assistant")
-    .map(fromTranscript)
-    .filter((message) => !isFabricSummary(message));
+  const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join));
+  const prefix = historical.rows.map(fromTranscript).filter((message) => !isFabricSummary(message)).map((message) => ({
+    ...message, toolUses: message.toolUses.map((use) => {
+      const row = historical.pairs.get(message.uuid ?? "")?.get(use.tool_use_id);
+      if (!row) return use;
+      const outcome = fromTranscript(row).toolResults!.find((result) => result.tool_use_id === use.tool_use_id)!;
+      // Like the hook input, normalize each uniquely paired outcome beside its call.
+      // The result row stays in place and retains its own source address.
+      return { ...use, text: outcome.text, ...(outcome.isError ? { isError: true as const } : {}),
+        ...(outcome.result === undefined ? {} : { result: outcome.result }) };
+    }),
+  }));
   const rebuilt = [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
-  return restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain);
+  const originalPrefix = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant");
+  const output = restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain, originalPrefix);
+  const originalCount = originalPrefix.length;
+  if (historical.pairs.size || historical.rows.length > originalCount || output.length > rebuilt.length) {
+    const problem = outcomeConservationProblem(messages, output);
+    if (problem) throw new Error(problem);
+  }
+  return output;
 }
