@@ -9,6 +9,15 @@ import { entryText, transcriptChain, type TranscriptRow } from "../recall/transc
 export const READ_STUB_THRESHOLD = 16_384;
 export const READ_STUB_MAX_BYTES = 1_024;
 
+/** Decide whether a lower bound on a stub's byte length could fit the cap. */
+export function readStubMayFit(minBytes: number): boolean {
+  // Make the hypothetical original large enough that only the cap can reject.
+  const original = Math.max(minBytes, READ_STUB_THRESHOLD + 1);
+  const facts = { original, stub: minBytes, threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES,
+    namesPath: 0, namesBytes: 0, namesEntry: 0, namesDigest: 0, recoverable: 0, verifiedCall: 0 };
+  return keptReadStub.step({}, keptReadStub.init({}), facts).scalars["out.consider"] === 1;
+}
+
 type RecordValue = Record<string, unknown>;
 const obj = (value: unknown): RecordValue => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
 const blocks = (row: RecordValue): unknown[] => Array.isArray(obj(row.message).content) ? obj(row.message).content as unknown[] : [];

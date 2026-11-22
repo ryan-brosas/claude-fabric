@@ -211,19 +211,19 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
       row(padding, "22222222-2222-4222-8222-222222222222"), row(nextPrompt, "padding"), callRow("fresh-call", "next-prompt", "fresh-read", freshInput),
       resultRow("33333333-3333-4333-8333-333333333333", "fresh-call", "fresh-read", freshText), row(last, "33333333-3333-4333-8333-333333333333")]);
     const messages = [prior, copiedCall, copiedResult, padding, nextPrompt, freshCall, freshResult, last];
-    // A mid-session upgrade leaves the old public format without a content commitment.
-    const legacy = stub!.replace(/\nSHA-256: [a-f0-9]{64}/, "");
+    // Remove the digest from the current-format stub; it is not an older format.
+    const digestlessStub = stub!.replace(/\nSHA-256: [a-f0-9]{64}/, "");
     const recorded = await readFile(path, "utf8");
-    await writeFile(path, recorded.replaceAll(JSON.stringify(stub), JSON.stringify(legacy)));
-    const legacyMessages = [prior, { ...copiedCall, toolUses: [{ ...copiedCall.toolUses[0]!, text: legacy }] },
-      { ...copiedResult, toolResults: [{ ...copiedResult.toolResults![0]!, text: legacy }] }, padding, nextPrompt, freshCall, freshResult, last];
-    const upgrade = hook(path);
-    const upgraded = await upgrade.run({ trigger: "manual", messages: legacyMessages });
-    // Here the chain has no conflicting effective outcomes: the legacy stub stays
-    // plain text and the rebuilt summary can quote it without a fallback.
-    expect(upgrade.logs).toEqual([]);
-    expect(upgraded.messages?.[0]?.text).toContain(legacy.slice(0, 55));
-    expect(upgraded.messages?.[0]?.text).not.toContain("FIRST-ORIGINAL-CONTENT");
+    await writeFile(path, recorded.replaceAll(JSON.stringify(stub), JSON.stringify(digestlessStub)));
+    const digestlessMessages = [prior, { ...copiedCall, toolUses: [{ ...copiedCall.toolUses[0]!, text: digestlessStub }] },
+      { ...copiedResult, toolResults: [{ ...copiedResult.toolResults![0]!, text: digestlessStub }] }, padding, nextPrompt, freshCall, freshResult, last];
+    const unverified = hook(path);
+    const digestlessOutput = await unverified.run({ trigger: "manual", messages: digestlessMessages });
+    // With no conflicting effective outcomes, the digest-less text stays plain
+    // and the rebuilt summary can quote it without a fallback.
+    expect(unverified.logs).toEqual([]);
+    expect(digestlessOutput.messages?.[0]?.text).toContain(digestlessStub.slice(0, 55));
+    expect(digestlessOutput.messages?.[0]?.text).not.toContain("FIRST-ORIGINAL-CONTENT");
     await writeFile(path, recorded);
     const next = hook(path);
     const output = await next.run({ trigger: "manual", messages });
@@ -337,7 +337,7 @@ test("a genuine rebuild conflict carries the unchanged result without stubbing",
     const earlier = message("user", "[Fabric summary]\nEarlier still.", "earlier-summary");
     const first = message("user", "Original request.", "first");
     const oldText = "old guide text\n".repeat(2200);
-    const oldStub = buildKeptReadStub("docs/old.md", "old-result", "x".repeat(33_000)).replace(/\nSHA-256: [a-f0-9]{64}/, "");
+    const digestlessStub = buildKeptReadStub("docs/old.md", "old-result", "x".repeat(33_000)).replace(/\nSHA-256: [a-f0-9]{64}/, "");
     const oldInput = { file_path: "docs/old.md" };
     const padding = message("user", `Earlier work ${"x".repeat(70000)}`, "padding");
     const prompt = message("user", "Read the next guide in full.", "prompt");
@@ -357,7 +357,7 @@ test("a genuine rebuild conflict carries the unchanged result without stubbing",
       resultRow("old-result", "old-call", "old-read", oldText),
       { type: "system", subtype: "compact_boundary", uuid: "boundary-1", parentUuid: null, logicalParentUuid: "old-result", compactMetadata: {} },
       row(earlier, "boundary-1"),
-      callRow("copy-call", "earlier-summary", "old-read", oldInput), resultRow("copy-result", "copy-call", "old-read", oldStub),
+      callRow("copy-call", "earlier-summary", "old-read", oldInput), resultRow("copy-result", "copy-call", "old-read", digestlessStub),
       { type: "system", subtype: "compact_boundary", uuid: "boundary-2", parentUuid: null, logicalParentUuid: "copy-result", compactMetadata: {} },
       row(prior, "boundary-2"), row(padding, "summary"), row(prompt, "padding"), callRow("call", "prompt", "fresh-read", input),
       resultRow("result", "call", "fresh-read", text), row(last, "result")]);

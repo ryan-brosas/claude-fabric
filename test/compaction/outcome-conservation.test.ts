@@ -1,13 +1,58 @@
 import { expect, test } from "bun:test";
 import { normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { outcomeConservationProblem, outcomeResolver, resolveMessageOutcomes } from "../../src/compaction/outcome-conservation.ts";
-import { buildKeptReadStub, stubKeptReads } from "../../src/compaction/kept-read.ts";
+import { buildKeptReadStub, READ_STUB_MAX_BYTES, stubKeptReads } from "../../src/compaction/kept-read.ts";
 import type { TranscriptRow } from "../../src/recall/transcript.ts";
 
 const assistant = (...toolUses: ClaudeToolUse[]): ClaudeMessage => ({ role: "assistant", text: "", toolUses });
 const user = (...toolResults: ClaudeToolResult[]): ClaudeMessage => ({ role: "user", text: "", toolUses: [], toolResults });
 const use = (id: string, text?: string): ClaudeToolUse => ({ tool_use_id: id, tool: "Read", input: {}, ...(text === undefined ? {} : { text }) });
 const result = (id: string, text: string, isError = false): ClaudeToolResult => ({ tool_use_id: id, text, isError });
+
+test("oversized outcomes are left unchanged before stub matching", () => {
+  const text = "[" + ": 1 UTF-8 bytes.".repeat(12_500);
+  const resolve = outcomeResolver(new Map(), []);
+  const exec = RegExp.prototype.exec;
+  let matches = 0;
+  // A string's UTF-16 length never exceeds its UTF-8 byte count. Therefore a
+  // length above the byte cap cannot be a stub the writer could have emitted.
+  RegExp.prototype.exec = function (input: string) {
+    if (input === text) matches++;
+    return exec.call(this, input);
+  };
+  let resolved: ReturnType<typeof resolve>;
+  try { resolved = resolve("id", text); } finally { RegExp.prototype.exec = exec; }
+  expect(resolved).toEqual({ original: text });
+  expect(matches).toBe(0);
+});
+
+test("the stub byte cap accepts the boundary and refuses one byte over", () => {
+  const original = "x".repeat(32_000), id = "read-id", entry = "original";
+  const initial = buildKeptReadStub("x", entry, original);
+  const path = "x".repeat(READ_STUB_MAX_BYTES - Buffer.byteLength(initial) + 1);
+  const check = (filePath: string) => {
+    const stub = buildKeptReadStub(filePath, entry, original);
+    const rows = new Map<string, TranscriptRow>([
+      ["call", { type: "assistant", uuid: "call", message: { content: [
+        { type: "tool_use", id, name: "Read", input: { file_path: filePath } },
+      ] } }],
+      [entry, { type: "user", uuid: entry, toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+        message: { content: [{ type: "tool_result", tool_use_id: id, content: original }] } }],
+    ]);
+    return { stub, resolved: outcomeResolver(rows, [])(id, stub) };
+  };
+  const exact = check(path);
+  expect(Buffer.byteLength(exact.stub)).toBe(READ_STUB_MAX_BYTES);
+  expect(exact.resolved).toEqual({ original, entryId: entry });
+  const over = check(path + "x");
+  expect(Buffer.byteLength(over.stub)).toBe(READ_STUB_MAX_BYTES + 1);
+  expect(over.resolved).toEqual({ original: over.stub });
+  // The character-length precheck must leave multibyte text to the compiled byte-cap decision.
+  const unicode = check("é" + path.slice(1));
+  expect(unicode.stub.length).toBe(READ_STUB_MAX_BYTES);
+  expect(Buffer.byteLength(unicode.stub)).toBe(READ_STUB_MAX_BYTES + 1);
+  expect(unicode.resolved).toEqual({ original: unicode.stub });
+});
 
 test("only an exact stub with the original non-sidechain result resolves", () => {
   const original = "multi-byte é\n".repeat(2_000), path = "docs/a\"quoted.md", id = "a", entry = "source";
@@ -34,7 +79,7 @@ test("only an exact stub with the original non-sidechain result resolves", () =>
     ["sidechain entry", stub, rows(row(original, id, true))],
     ["wrong tool use id", stub, rows(row(original, "other"))],
     ["altered stub", stub + "!", rows(row(original))],
-    ["digest-less legacy stub", stub.replace(/\nSHA-256: [a-f0-9]{64}/, ""), rows(row(original))],
+    ["digest-less current-format stub", stub.replace(/\nSHA-256: [a-f0-9]{64}/, ""), rows(row(original))],
     ["ambiguous call row", stub, new Map([[entry, row(original)], ["call", { ...callRow, message: { content: [
       { type: "tool_use", id, name: "Read", input: { file_path: path } },
       { type: "tool_use", id, name: "Read", input: { file_path: path } },

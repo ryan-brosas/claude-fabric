@@ -2,7 +2,7 @@
 // gives an inline tool-use outcome precedence over result rows with the same id.
 import { exitCodeOf, hasOutcome, inlineOutcome, type ClaudeMessage, type ClaudeToolUse } from "./from-claude.ts";
 import { outcomeConservation } from "./verified/generated/outcome-conservation.js";
-import { buildKeptReadStub, eligibleKeptRead, readDigest, textOf, wholeReadPath } from "./kept-read.ts";
+import { buildKeptReadStub, eligibleKeptRead, readDigest, readStubMayFit, textOf, wholeReadPath } from "./kept-read.ts";
 import { utf8Bytes } from "./bounds.ts";
 import type { TranscriptRow } from "../recall/transcript.ts";
 
@@ -39,7 +39,7 @@ export function outcomeResolver(rows: ReadonlyMap<string, TranscriptRow>, messag
   }
   return (id, text, isError = false) => {
     const unchanged = { original: text };
-    if (isError) return unchanged;
+    if (isError || !readStubMayFit(text.length)) return unchanged;
     // Captures are only lookup hints. Acceptance compares the complete rebuilt string.
     const match = /^\[[^\n]*: (\d+) UTF-8 bytes\.[^\n]*\]\nFile: (.+)\nTranscript entry: ([^\r\n]+)\nSHA-256: ([a-f0-9]{64})\n/.exec(text);
     if (!match) return unchanged;
