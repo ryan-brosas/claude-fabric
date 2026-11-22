@@ -12,6 +12,7 @@ import { COMPACTION_QA_BUGS, compactionQaKernels } from "./compaction-qa.ts";
 import { cutKernels, CUT_BUGS } from "./cut.ts";
 import { GATE_BUGS, gateKernels } from "./gate.ts";
 import { JOB_RECEIPT_BUGS, jobReceiptKernels } from "./job-receipt.ts";
+import { KEPT_READ_STUB_BUGS, keptReadStubKernels } from "./kept-read-stub.ts";
 import type { Kernel } from "./kernel.ts";
 import { MCP_ACCESS_BUGS, mcpAccessKernels } from "./mcp-access.ts";
 import { NO_CUT_BUGS, noCutKernels } from "./no-cut.ts";
@@ -55,6 +56,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "outcome-restoration", source: "proofs/outcome-restoration.ts", out: compaction, kernels: outcomeRestorationKernels as any, bugs: OUTCOME_RESTORATION_BUGS },
   { stem: "restore-order", source: "proofs/restore-order.ts", out: compaction, kernels: restoreOrderKernels as any, bugs: RESTORE_ORDER_BUGS },
   { stem: "sibling-restoration", source: "proofs/sibling-restoration.ts", out: compaction, kernels: siblingRestorationKernels as any, bugs: SIBLING_RESTORATION_BUGS },
+  { stem: "kept-read-stub", source: "proofs/kept-read-stub.ts", out: compaction, kernels: keptReadStubKernels as any, bugs: KEPT_READ_STUB_BUGS },
   { stem: "compaction-qa", source: "proofs/compaction-qa.ts", out: compaction, kernels: compactionQaKernels as any, bugs: COMPACTION_QA_BUGS },
   { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
