@@ -23,6 +23,7 @@ import { policyKernels, POLICY_BUGS } from "./policy.ts";
 import { RECALL_BUGS, recallKernels } from "./recall.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
 import { RESTORE_ORDER_BUGS, restoreOrderKernels } from "./restore-order.ts";
+import { SIBLING_RESTORATION_BUGS, siblingRestorationKernels } from "./sibling-restoration.ts";
 import { STORE_BUGS, storeLimitKernels } from "./store-limits.ts";
 import { TOOL_VISIBILITY_BUGS, toolVisibilityKernels } from "./tool-visibility.ts";
 
@@ -53,6 +54,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "outcome-conservation", source: "proofs/outcome-conservation.ts", out: compaction, kernels: outcomeConservationKernels as any, bugs: OUTCOME_CONSERVATION_BUGS },
   { stem: "outcome-restoration", source: "proofs/outcome-restoration.ts", out: compaction, kernels: outcomeRestorationKernels as any, bugs: OUTCOME_RESTORATION_BUGS },
   { stem: "restore-order", source: "proofs/restore-order.ts", out: compaction, kernels: restoreOrderKernels as any, bugs: RESTORE_ORDER_BUGS },
+  { stem: "sibling-restoration", source: "proofs/sibling-restoration.ts", out: compaction, kernels: siblingRestorationKernels as any, bugs: SIBLING_RESTORATION_BUGS },
   { stem: "compaction-qa", source: "proofs/compaction-qa.ts", out: compaction, kernels: compactionQaKernels as any, bugs: COMPACTION_QA_BUGS },
   { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },

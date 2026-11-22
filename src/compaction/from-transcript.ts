@@ -5,6 +5,7 @@ import { exitCodeOf, hasOutcome, inlineOutcome, normalizeMessages, type ClaudeMe
 import { outcomeRestoration } from "./verified/generated/outcome-restoration.js";
 import { acceptRestorePosition } from "./verified/restore-order.ts";
 import { outcomeConservationProblem } from "./outcome-conservation.ts";
+import { restoreSiblings } from "./restore-siblings.ts";
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -144,7 +145,7 @@ function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, joi
 export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
   const summary = messages.findIndex(isFabricSummary);
   if (summary < 0) throw new Error("fabric: no earlier Fabric summary to rebuild");
-  const { chain } = transcriptChain(text);
+  const { chain, rows } = transcriptChain(text);
   const positions = new Map<string, number>();
   chain.forEach((row, index) => {
     if ((row.type === "user" || row.type === "assistant") && typeof row.uuid === "string") positions.set(row.uuid, index);
@@ -152,10 +153,24 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
   const join = messages.findIndex((message, index) => index > summary && !!message.handle && positions.has(message.handle));
   if (join < 0) throw new Error("fabric: no current message handle joins the transcript chain");
   const chainEnd = positions.get(messages[join]!.handle!)!;
-  const prefix = chain.slice(0, chainEnd)
-    .filter((row) => row.type === "user" || row.type === "assistant")
-    .map(fromTranscript)
-    .filter((message) => !isFabricSummary(message));
+  const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join));
+  const prefix = historical.rows.map(fromTranscript).filter((message) => !isFabricSummary(message)).map((message) => ({
+    ...message, toolUses: message.toolUses.map((use) => {
+      const row = historical.pairs.get(use.tool_use_id);
+      if (!row) return use;
+      const outcome = fromTranscript(row).toolResults!.find((result) => result.tool_use_id === use.tool_use_id)!;
+      // Like the hook input, normalize each uniquely paired outcome beside its call.
+      // The result row stays in place and retains its own source address.
+      return { ...use, text: outcome.text, ...(outcome.isError ? { isError: true as const } : {}),
+        ...(outcome.result === undefined ? {} : { result: outcome.result }) };
+    }),
+  }));
   const rebuilt = [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
-  return restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain);
+  const output = restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain);
+  const originalCount = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant").length;
+  if (historical.pairs.size || historical.rows.length > originalCount || output.length > rebuilt.length) {
+    const problem = outcomeConservationProblem(messages, output);
+    if (problem) throw new Error(problem);
+  }
+  return output;
 }

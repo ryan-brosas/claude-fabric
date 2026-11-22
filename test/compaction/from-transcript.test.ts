@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { compact } from "../../src/compaction/compact.ts";
 import { fromTranscript, rebuildTranscript } from "../../src/compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
@@ -355,6 +357,121 @@ test("ambiguous repeated raw result anchors cannot move a later failure before s
     resultRow("result-b2", "result-b1", "b", "OK"), resultRow("sibling-a", "call-a", "a", "FAILED", true),
     promptRow("joined", "result-b2"));
   expectSameOutcomesOrRefused(current, rebuildTranscript(current, text));
+});
+
+
+// Shape from the recorded run: each sibling records the same message/request,
+// consecutive block indexes, an ancestry link, and an attributed result.
+function siblingFixture(): { rows: Record<string, unknown>[]; current: ClaudeMessage[] } {
+  const a = { ...callRow("a", "prompt", "call-a", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "call-b", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  return { rows: [promptRow("prompt", null), a, b,
+    { ...resultRow("rb", "b", "call-b", "B"), sourceToolAssistantUUID: "b" },
+    { ...resultRow("ra", "a", "call-a", "A"), sourceToolAssistantUUID: "a" }, promptRow("joined", "ra")],
+    current: [userMessage("summary", "[Fabric summary]\nprior"), userMessage("joined", "after")] };
+}
+const rowsText = (rows: Record<string, unknown>[]): string => rows.map((row) => JSON.stringify(row)).join("\n");
+
+test("ambiguous same-message calls or outcomes are refused", () => {
+  for (const kind of ["duplicate-call", "duplicate-result", "orphan-result"] as const) {
+    const { rows, current } = siblingFixture();
+    const extra = kind === "duplicate-call"
+      ? { ...callRow("dup", "prompt", "call-b", "other"), requestRef: "other", apiBlockIndex: 0 }
+      : kind === "duplicate-result"
+        ? { ...resultRow("dup", "b", "call-b", "B"), sourceToolAssistantUUID: "b" }
+        : { ...resultRow("dup", "b", "no-call", "orphan"), sourceToolAssistantUUID: "b" };
+    rows.splice(rows.length - 1, 0, extra);
+    expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+  }
+});
+
+test("sidechain and different-message abandoned branches are not imported", () => {
+  for (const kind of ["sidechain", "abandoned"] as const) {
+    const { rows, current } = siblingFixture();
+    const candidate = rows[2]!;
+    if (kind === "sidechain") { candidate.isSidechain = true; rows[3]!.isSidechain = true; }
+    else candidate.message = { ...candidate.message as object, id: "different" };
+    const rebuilt = rebuildTranscript(current, rowsText(rows));
+    expect(rebuilt.flatMap((message) => message.toolUses).some((use) => use.tool_use_id === "call-b")).toBe(false);
+  }
+});
+
+test("a uniquely sourced result for a single historical call is not silently dropped", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(2, rows.length - 2, rows[4]!, promptRow("joined", "a"));
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((entry) => entry.tool_use_id === "call-a")).toHaveLength(1);
+});
+
+test("two candidate rows claiming one response block are refused even if message and request ids match", () => {
+  const { rows, current } = siblingFixture();
+  rows.splice(rows.length - 1, 0,
+    { ...callRow("retry", "a", "call-retry", "pair"), requestRef: "req", apiBlockIndex: 1 },
+    { ...resultRow("retry-result", "retry", "call-retry", "other"), sourceToolAssistantUUID: "retry" });
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("a historical restore refuses when the final current-outcome conservation gate fails", () => {
+  const { rows } = siblingFixture();
+  const current = [summary, resultMessage("phantom", "missing", "MISSING"), userMessage("joined", "after")];
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("missing tool outcome in rebuilt input");
+});
+
+test("historical and terminal restoration cannot restore the same result twice", () => {
+  const { rows } = siblingFixture();
+  rows.pop();
+  rows.push(callRow("c", "ra", "call-c", "terminal"), callRow("d", "c", "call-d", "terminal"),
+    resultRow("result-c", "c", "call-c", "C"), resultRow("result-d", "d", "call-d", "D"));
+  const current = [summary, resultMessage("result-c", "call-c", "C"), resultMessage("result-d", "call-d", "D")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  for (const id of ["call-b", "call-c", "call-d"]) {
+    expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((result) => result.tool_use_id === id)).toHaveLength(1);
+  }
+  expect(rebuilt.some((message) => message.uuid === "rb")).toBe(true);
+  expect(rebuilt.some((message) => message.handle === "result-c")).toBe(true);
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+});
+
+test("six recorded fallback groups conserve their current outcome", () => {
+  const fixtures: { n: number; id: string; rows: Record<string, unknown>[]; current: ClaudeMessage[] }[] =
+    JSON.parse(readFileSync(new URL("./fixtures/parallel-six-fallbacks.json", import.meta.url), "utf8"));
+  expect(fixtures).toHaveLength(6);
+  for (const fixture of fixtures) {
+    const rebuilt = rebuildTranscript(fixture.current, rowsText(fixture.rows));
+    expect(outcomeConservationProblem(fixture.current, rebuilt)).toBeUndefined();
+    expect(rebuilt.flatMap((message) => message.toolUses).filter((use) => use.tool_use_id === fixture.id)).toHaveLength(1);
+    expect(rebuilt.flatMap((message) => message.toolResults ?? []).filter((result) => result.tool_use_id === fixture.id)).toHaveLength(1);
+  }
+});
+
+test("recorded off-chain parallel calls and results survive later rebuilds", () => {
+  // Run n=3, prefix before its third compaction; paths and long bodies were shortened.
+  const prefix = readFileSync(new URL("./fixtures/parallel-n3-prefix.jsonl", import.meta.url), "utf8");
+  const current: ClaudeMessage[] = JSON.parse(readFileSync(new URL("./fixtures/parallel-n3-event.json", import.meta.url), "utf8"));
+  const rebuilt = rebuildTranscript(current, prefix);
+  const ids = ["chatcmpl-tool-871c3ee2fc63d5f1", "chatcmpl-tool-9703492ccb533c33",
+    "chatcmpl-tool-bec7e2578b97278a", "chatcmpl-tool-b0853e60ebb6e630",
+    "chatcmpl-tool-80de3626d1e386af", "chatcmpl-tool-8d23f3ca4192179e"];
+  const calls = rebuilt.flatMap((message) => message.toolUses.map((use) => use.tool_use_id));
+  const results = normalizeMessages(rebuilt).flatMap((event) => event.kind === "toolResult" ? [event.toolCallId] : []);
+  for (const id of ids) { expect(calls.filter((call) => call === id)).toHaveLength(1); expect(results.filter((result) => result === id)).toHaveLength(1); }
+  // The first compaction read the in-memory messages: call A, result A, call B, result B.
+  const ordered = normalizeMessages(rebuilt).flatMap((event) =>
+    (event.kind === "toolCall" || event.kind === "toolResult") && ids.includes(event.toolCallId)
+      ? [event.kind + ":" + event.toolCallId] : []);
+  expect(ordered).toEqual(ids.flatMap((id) => ["toolCall:" + id, "toolResult:" + id]));
+  const last = userMessage("final-tail", "Continue.");
+  const answer = compact([...rebuilt, last], { keepRecentTokens: 20 });
+  if (!("messages" in answer)) throw new Error("the rebuilt fixture did not compact");
+  const text = answer.messages[0]!.text;
+  const files = text.split("[Files And Changes]\n")[1]!.split("\n[")[0]!;
+  for (const [path, id] of [["guide-2.md", "a8bb53de-504f-4d9c-9e91-7345bc72f417"],
+    ["guide-4.md", "56e228c8-d5f1-43db-a391-e5dd19c7285b"], ["guide-6.md", "0cbc5fd2-b1c8-4980-80e9-1c1bb7df7aeb"]]) {
+    expect(files).toContain(path + " [entry " + id + "]");
+  }
+  for (const id of ["151b9b66-fbf6-4512-972c-de832e150969", "f6c965f7-6215-4da9-b0eb-80abe0e23113", "c15f594e-6b7f-4b21-9ca6-67424a11cf5c"]) {
+    expect(text).toContain("Read:2 [entry " + id + "]");
+  }
 });
 
 test("the converter rejects a row that cannot be addressed", () => {

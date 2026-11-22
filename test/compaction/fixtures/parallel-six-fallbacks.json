@@ -1,0 +1,800 @@
+[
+  {
+    "n": 3,
+    "id": "chatcmpl-tool-8d23f3ca4192179e",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_86f81e199647474e95696ee0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-80de3626d1e386af",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "45e18885-bb74-4b3a-b95f-a89a36a7211e",
+        "type": "assistant",
+        "uuid": "302a829e-75f8-4c08-a21d-ffae8b4cbb77"
+      },
+      {
+        "parentUuid": "302a829e-75f8-4c08-a21d-ffae8b4cbb77",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_86f81e199647474e95696ee0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-8d23f3ca4192179e",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "45e18885-bb74-4b3a-b95f-a89a36a7211e",
+        "type": "assistant",
+        "uuid": "0cbc5fd2-b1c8-4980-80e9-1c1bb7df7aeb"
+      },
+      {
+        "parentUuid": "0cbc5fd2-b1c8-4980-80e9-1c1bb7df7aeb",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-8d23f3ca4192179e",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "e58364cf-0042-412a-a868-63c8207bd08b",
+        "sourceToolAssistantUUID": "0cbc5fd2-b1c8-4980-80e9-1c1bb7df7aeb"
+      },
+      {
+        "parentUuid": "302a829e-75f8-4c08-a21d-ffae8b4cbb77",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-80de3626d1e386af",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "25eae59c-24e5-4d93-90c2-413152b70c12",
+        "sourceToolAssistantUUID": "302a829e-75f8-4c08-a21d-ffae8b4cbb77"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "25eae59c-24e5-4d93-90c2-413152b70c12",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-8d23f3ca4192179e",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "02f4d029-460c-4147-a622-7264146d4ec3",
+        "handle": "02f4d029-460c-4147-a622-7264146d4ec3"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  },
+  {
+    "n": 2,
+    "id": "chatcmpl-tool-84d4369f97d25fe7",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_8bfd8371309d4fb4ab1d0ad1",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-97f61554cc97d9d5",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "5d3c3349-ed25-46b2-8df0-a2a839279974",
+        "type": "assistant",
+        "uuid": "38b8b9cf-dc69-440e-a66b-139cfea21abc"
+      },
+      {
+        "parentUuid": "38b8b9cf-dc69-440e-a66b-139cfea21abc",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_8bfd8371309d4fb4ab1d0ad1",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-84d4369f97d25fe7",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "5d3c3349-ed25-46b2-8df0-a2a839279974",
+        "type": "assistant",
+        "uuid": "911d3e6d-10e1-4694-baaf-9b84b62529b8"
+      },
+      {
+        "parentUuid": "911d3e6d-10e1-4694-baaf-9b84b62529b8",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-84d4369f97d25fe7",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "b29a3153-f5a6-47a9-a71f-910d73f746ce",
+        "sourceToolAssistantUUID": "911d3e6d-10e1-4694-baaf-9b84b62529b8"
+      },
+      {
+        "parentUuid": "38b8b9cf-dc69-440e-a66b-139cfea21abc",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-97f61554cc97d9d5",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "b7a47b7f-01f9-497b-931e-ba92515b8157",
+        "sourceToolAssistantUUID": "38b8b9cf-dc69-440e-a66b-139cfea21abc"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "b7a47b7f-01f9-497b-931e-ba92515b8157",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-84d4369f97d25fe7",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "68fcc99b-8502-4309-b820-26b4a051362b",
+        "handle": "68fcc99b-8502-4309-b820-26b4a051362b"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  },
+  {
+    "n": 4,
+    "id": "chatcmpl-tool-ba9de3ae393c3a14",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_f376fd78f61345d7be3acf48",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-831c0654188faa0d",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "5e6772f4-8b8a-4af9-9e36-c8e48b869f99",
+        "type": "assistant",
+        "uuid": "eb98d3c3-e6d7-4b8c-9634-b468327dfffe"
+      },
+      {
+        "parentUuid": "eb98d3c3-e6d7-4b8c-9634-b468327dfffe",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_f376fd78f61345d7be3acf48",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-ba9de3ae393c3a14",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "5e6772f4-8b8a-4af9-9e36-c8e48b869f99",
+        "type": "assistant",
+        "uuid": "4f9e2b74-bfc7-44db-b543-7e0a3f3bc1f0"
+      },
+      {
+        "parentUuid": "4f9e2b74-bfc7-44db-b543-7e0a3f3bc1f0",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-ba9de3ae393c3a14",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "7a8b0e13-c94c-4e15-8710-da3ca10e3554",
+        "sourceToolAssistantUUID": "4f9e2b74-bfc7-44db-b543-7e0a3f3bc1f0"
+      },
+      {
+        "parentUuid": "eb98d3c3-e6d7-4b8c-9634-b468327dfffe",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-831c0654188faa0d",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "d93be2cc-f38b-4bdf-8d37-742354cfa090",
+        "sourceToolAssistantUUID": "eb98d3c3-e6d7-4b8c-9634-b468327dfffe"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "d93be2cc-f38b-4bdf-8d37-742354cfa090",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-ba9de3ae393c3a14",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "23eeecff-2b64-4499-9308-58627f33730d",
+        "handle": "23eeecff-2b64-4499-9308-58627f33730d"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  },
+  {
+    "n": 1,
+    "id": "chatcmpl-tool-85b6203578bba378",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_5e9bbd7286a24e59930ca287",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-87f2af8f14177942",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "ff2a0162-a64c-4d87-ab03-754540a29be6",
+        "type": "assistant",
+        "uuid": "03e3830f-2ded-45f4-8802-7776fcd1a266"
+      },
+      {
+        "parentUuid": "03e3830f-2ded-45f4-8802-7776fcd1a266",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_5e9bbd7286a24e59930ca287",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-85b6203578bba378",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "ff2a0162-a64c-4d87-ab03-754540a29be6",
+        "type": "assistant",
+        "uuid": "8cdc1acd-ee07-4bc4-bbd0-cc2bdd16868a"
+      },
+      {
+        "parentUuid": "8cdc1acd-ee07-4bc4-bbd0-cc2bdd16868a",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-85b6203578bba378",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "5bb792b3-3f5d-4c6e-847d-e560fa3829d9",
+        "sourceToolAssistantUUID": "8cdc1acd-ee07-4bc4-bbd0-cc2bdd16868a"
+      },
+      {
+        "parentUuid": "03e3830f-2ded-45f4-8802-7776fcd1a266",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-87f2af8f14177942",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "28e397c9-dc22-47b4-8ba7-fa87ed5e8562",
+        "sourceToolAssistantUUID": "03e3830f-2ded-45f4-8802-7776fcd1a266"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "28e397c9-dc22-47b4-8ba7-fa87ed5e8562",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-85b6203578bba378",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "16287b69-6c66-4601-a8a3-d26c1c75d760",
+        "handle": "16287b69-6c66-4601-a8a3-d26c1c75d760"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  },
+  {
+    "n": 8,
+    "id": "chatcmpl-tool-b9caaeb226f37a0b",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_c438e28813294e3081ca45f0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-980043ac576a5a76",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "84bdff69-bd8d-4d4e-b6d8-12dbb93369e0",
+        "type": "assistant",
+        "uuid": "aefff630-e219-4d80-9097-20691017adf0"
+      },
+      {
+        "parentUuid": "aefff630-e219-4d80-9097-20691017adf0",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_c438e28813294e3081ca45f0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-b9caaeb226f37a0b",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "84bdff69-bd8d-4d4e-b6d8-12dbb93369e0",
+        "type": "assistant",
+        "uuid": "b9898c22-c247-4cea-913b-c0b261e0e0f8"
+      },
+      {
+        "parentUuid": "b9898c22-c247-4cea-913b-c0b261e0e0f8",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-b9caaeb226f37a0b",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "dee124ea-2748-4962-8efb-b254e66ff90e",
+        "sourceToolAssistantUUID": "b9898c22-c247-4cea-913b-c0b261e0e0f8"
+      },
+      {
+        "parentUuid": "aefff630-e219-4d80-9097-20691017adf0",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-980043ac576a5a76",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "ed307b69-fd48-4390-b581-fab56ac45d9d",
+        "sourceToolAssistantUUID": "aefff630-e219-4d80-9097-20691017adf0"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "ed307b69-fd48-4390-b581-fab56ac45d9d",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-b9caaeb226f37a0b",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "3876e66e-825a-497d-8e96-395d14e1cffd",
+        "handle": "3876e66e-825a-497d-8e96-395d14e1cffd"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  },
+  {
+    "n": 7,
+    "id": "chatcmpl-tool-be9cd7a47bdfea59",
+    "rows": [
+      {
+        "type": "user",
+        "uuid": "p",
+        "parentUuid": null,
+        "message": {
+          "content": "read"
+        }
+      },
+      {
+        "parentUuid": "p",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_93e0a911181544928d54f4b2",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-898508395a714a0b",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-5.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 0,
+        "requestRef": "4c20e069-f0ce-416e-b16d-5c29a28389d0",
+        "type": "assistant",
+        "uuid": "85d8f4ae-97fb-4602-9fab-b75010a934dc"
+      },
+      {
+        "parentUuid": "85d8f4ae-97fb-4602-9fab-b75010a934dc",
+        "isSidechain": false,
+        "message": {
+          "id": "msg_93e0a911181544928d54f4b2",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "chatcmpl-tool-be9cd7a47bdfea59",
+              "name": "Read",
+              "input": {
+                "file_path": "/fixture/docs/guide-6.md"
+              }
+            }
+          ]
+        },
+        "apiBlockIndex": 1,
+        "requestRef": "4c20e069-f0ce-416e-b16d-5c29a28389d0",
+        "type": "assistant",
+        "uuid": "d4b291af-b4b4-4514-a012-58ad2f7e034e"
+      },
+      {
+        "parentUuid": "d4b291af-b4b4-4514-a012-58ad2f7e034e",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-be9cd7a47bdfea59",
+              "type": "tool_result",
+              "content": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl"
+            }
+          ]
+        },
+        "uuid": "506f919d-7611-4ff2-b523-1f15a680a29b",
+        "sourceToolAssistantUUID": "d4b291af-b4b4-4514-a012-58ad2f7e034e"
+      },
+      {
+        "parentUuid": "85d8f4ae-97fb-4602-9fab-b75010a934dc",
+        "isSidechain": false,
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "chatcmpl-tool-898508395a714a0b",
+              "type": "tool_result",
+              "content": "1\t# Guide 5: Parking and signage plan\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Ravi, Keiko, Omar.\n6\t\n7\tLena summarized the lobby plants and asked for a second opinion. Dmitri circulated a draft of the volunt"
+            }
+          ]
+        },
+        "uuid": "37a5cb15-46b4-4c1b-ba43-a0675b97c3c3",
+        "sourceToolAssistantUUID": "85d8f4ae-97fb-4602-9fab-b75010a934dc"
+      },
+      {
+        "type": "user",
+        "uuid": "join",
+        "parentUuid": "37a5cb15-46b4-4c1b-ba43-a0675b97c3c3",
+        "message": {
+          "content": "joined"
+        }
+      }
+    ],
+    "current": [
+      {
+        "role": "user",
+        "text": "[Fabric summary]\nold",
+        "toolUses": [],
+        "handle": "summary"
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "chatcmpl-tool-be9cd7a47bdfea59",
+            "text": "1\t# Guide 6: Kitchen and lobby upkeep\n2\t\n3\t## Meeting 1\n4\t\n5\tAttendees: Jon, Omar, Priya.\n6\t\n7\tPriya compared quotes for the kitchen rota before the next planning cycle. Ravi summarized the parking pl",
+            "isError": false,
+            "result": {
+              "type": "text"
+            }
+          }
+        ],
+        "uuid": "113bbff4-0a6e-4a11-8e71-e1de418b1004",
+        "handle": "113bbff4-0a6e-4a11-8e71-e1de418b1004"
+      },
+      {
+        "role": "user",
+        "text": "joined",
+        "toolUses": [],
+        "handle": "join"
+      }
+    ]
+  }
+]
