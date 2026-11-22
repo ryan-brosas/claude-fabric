@@ -137,10 +137,10 @@ test("kept whole-file Read result is a recoverable stub without changing its sum
 
 test("the compiled decision requires each emitted and verified fact", () => {
   const facts = { original: 32000, stub: 200, threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES,
-    namesPath: 1, namesBytes: 1, namesEntry: 1, recoverable: 1, verifiedCall: 1 };
+    namesPath: 1, namesBytes: 1, namesEntry: 1, namesDigest: 1, recoverable: 1, verifiedCall: 1 };
   const decide = (input: typeof facts) => keptReadStub.step({}, keptReadStub.init({}), input).scalars["out.replace"];
   expect(decide(facts)).toBe(1);
-  for (const key of ["namesPath", "namesBytes", "namesEntry", "recoverable", "verifiedCall"] as const) {
+  for (const key of ["namesPath", "namesBytes", "namesEntry", "namesDigest", "recoverable", "verifiedCall"] as const) {
     expect(decide({ ...facts, [key]: 0 })).toBe(0);
   }
 });
@@ -210,6 +210,20 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
       row(padding, "22222222-2222-4222-8222-222222222222"), row(nextPrompt, "padding"), callRow("fresh-call", "next-prompt", "fresh-read", freshInput),
       resultRow("33333333-3333-4333-8333-333333333333", "fresh-call", "fresh-read", freshText), row(last, "33333333-3333-4333-8333-333333333333")]);
     const messages = [prior, copiedCall, copiedResult, padding, nextPrompt, freshCall, freshResult, last];
+    // A mid-session upgrade leaves the old public format without a content commitment.
+    const legacy = stub!.replace(/\nSHA-256: [a-f0-9]{64}/, "");
+    const recorded = await readFile(path, "utf8");
+    await writeFile(path, recorded.replaceAll(JSON.stringify(stub), JSON.stringify(legacy)));
+    const legacyMessages = [prior, { ...copiedCall, toolUses: [{ ...copiedCall.toolUses[0]!, text: legacy }] },
+      { ...copiedResult, toolResults: [{ ...copiedResult.toolResults![0]!, text: legacy }] }, padding, nextPrompt, freshCall, freshResult, last];
+    const upgrade = hook(path);
+    const upgraded = await upgrade.run({ trigger: "manual", messages: legacyMessages });
+    // Here the chain has no conflicting effective outcomes: the legacy stub stays
+    // plain text and the rebuilt summary can quote it without a fallback.
+    expect(upgrade.logs).toEqual([]);
+    expect(upgraded.messages?.[0]?.text).toContain("Whole-file Read text removed");
+    expect(upgraded.messages?.[0]?.text).not.toContain("FIRST-ORIGINAL-CONTENT");
+    await writeFile(path, recorded);
     const next = hook(path);
     const output = await next.run({ trigger: "manual", messages });
     expect(next.logs).toEqual([]);
@@ -296,7 +310,7 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
 });
 
 test("a genuine fallback honestly summarizes a stub before transcript resolution", async () => {
-  const stub = buildKeptReadStub("docs/old.md", "original-result", 33000);
+  const stub = buildKeptReadStub("docs/old.md", "original-result", "x".repeat(33_000));
   const call: ClaudeMessage = { ...message("assistant", "", "copied-call"), toolUses: [
     { tool_use_id: "old-read", tool: "Read", input: { file_path: "docs/old.md" }, text: stub },
   ] };
@@ -311,7 +325,7 @@ test("a genuine fallback honestly summarizes a stub before transcript resolution
   expect(fallback).toEqual(carried);
   expect(h.logs[0]).toContain("no transcript path");
   expect(fallback.messages![0]!.text.split("\n").find((line) => line.includes("Whole-file Read text removed")))
-    .toBe("[entry copied-result] → ok: [Whole-file Read text removed: 33000 UTF-8 bytes] [3 lines, 163 chars cut; history.expand]");
+    .toBe("[entry copied-result] → ok: [Whole-file Read text removed: 33000 UTF-8 bytes] [4 lines, 237 chars cut; history.expand]");
 });
 
 test("a genuine rebuild conflict carries the unchanged result without stubbing", async () => {

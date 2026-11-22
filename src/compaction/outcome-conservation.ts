@@ -2,40 +2,46 @@
 // gives an inline tool-use outcome precedence over result rows with the same id.
 import { exitCodeOf, hasOutcome, inlineOutcome, type ClaudeMessage, type ClaudeToolUse } from "./from-claude.ts";
 import { outcomeConservation } from "./verified/generated/outcome-conservation.js";
-import { buildKeptReadStub, textOf } from "./kept-read.ts";
+import { buildKeptReadStub, eligibleKeptRead, readDigest, textOf, wholeReadPath } from "./kept-read.ts";
 import { utf8Bytes } from "./bounds.ts";
 import type { TranscriptRow } from "../recall/transcript.ts";
 
 type ResolvedText = { original: string; entryId?: string };
 type Resolver = (id: string, text: string, isError?: boolean) => ResolvedText;
-const emptyFacts = { required: 0, available: 0, entryFound: 0, sameId: 0, bytesEqual: 0, stubEqual: 0,
-  sameText: 0, verifiedLeft: 0, verifiedRight: 0, originalsEqual: 0 };
+const emptyFacts = { required: 0, available: 0, entryFound: 0, sameId: 0, bytesEqual: 0,
+  digestMatches: 0, stubEqual: 0, eligible: 0, sameText: 0 };
 const decide = (facts: Partial<typeof emptyFacts>) =>
   outcomeConservation.step({}, outcomeConservation.init({}), { ...emptyFacts, ...facts }).scalars;
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-/** Resolve only an exact stub backed by a non-sidechain transcript result and Read call. */
+// A forged stub can resolve only to the transcript's eligible whole-file outcome for
+// the same tool_use_id and committed bytes. Assuming the transcript is authoritative,
+// it cannot introduce text that the recorded call did not return. This is not an
+// authorship proof and cannot detect an attacker rewriting both transcript and stub.
 export function outcomeResolver(rows: ReadonlyMap<string, TranscriptRow>, messages: readonly ClaudeMessage[]): Resolver {
-  const paths = new Map<string, Set<string>>();
-  const addPath = (id: unknown, tool: unknown, input: unknown) => {
-    const path = object(input).file_path;
-    if (typeof id !== "string" || tool !== "Read" || typeof path !== "string") return;
-    const found = paths.get(id) ?? new Set<string>();
-    found.add(path); paths.set(id, found);
+  const calls = new Map<string, { use: ClaudeToolUse; transcript: boolean }[]>();
+  const add = (use: ClaudeToolUse, transcript: boolean) => {
+    const matches = calls.get(use.tool_use_id) ?? [];
+    matches.push({ use, transcript }); calls.set(use.tool_use_id, matches);
   };
-  for (const message of messages) for (const use of message.toolUses) addPath(use.tool_use_id, use.tool, use.input);
+  for (const message of messages) for (const use of message.toolUses) add(use, false);
   for (const row of rows.values()) {
-    if (row.type !== "assistant") continue;
+    if (row.type !== "assistant" || row.isSidechain === true) continue;
     const content = object(row.message).content;
     if (!Array.isArray(content)) continue;
-    for (const part of content.map(object)) if (part.type === "tool_use") addPath(part.id, part.name, part.input);
+    for (const part of content.map(object)) {
+      if (part.type !== "tool_use" || typeof part.id !== "string" || typeof part.name !== "string") continue;
+      const use: ClaudeToolUse = { tool_use_id: part.id, tool: part.name, input: object(part.input) };
+      // The writer verifies a unique matching tool-use block in its call row.
+      add(use, content.filter((item) => object(item).type === "tool_use" && object(item).id === part.id).length === 1);
+    }
   }
   return (id, text, isError = false) => {
     const unchanged = { original: text };
     if (isError) return unchanged;
-    // These captures are only lookup hints. Exact acceptance compares the whole rebuilt string.
-    const match = /^\[Whole-file Read text removed: (\d+) UTF-8 bytes\]\nFile: (.+)\nTranscript entry: ([^\r\n]+)\n/.exec(text);
+    // Captures are only lookup hints. Acceptance compares the complete rebuilt string.
+    const match = /^\[Whole-file Read text removed: (\d+) UTF-8 bytes\]\nFile: (.+)\nTranscript entry: ([^\r\n]+)\nSHA-256: ([a-f0-9]{64})\n/.exec(text);
     if (!match) return unchanged;
     let path: unknown;
     try { path = JSON.parse(match[2]!); } catch { return unchanged; }
@@ -48,9 +54,13 @@ export function outcomeResolver(rows: ReadonlyMap<string, TranscriptRow>, messag
     const sameId = block.tool_use_id === id;
     const count = Number(match[1]);
     const bytesEqual = original !== undefined && Number.isSafeInteger(count) && utf8Bytes(original) === count;
-    const stubEqual = typeof path === "string" && !!paths.get(id)?.has(path) && original !== undefined
-      && text === buildKeptReadStub(path, match[3]!, count);
-    const verdict = decide({ entryFound: Number(entryFound), sameId: Number(sameId), bytesEqual: Number(bytesEqual), stubEqual: Number(stubEqual) });
+    const digestMatches = original !== undefined && readDigest(original) === match[4];
+    const stubEqual = typeof path === "string" && original !== undefined && text === buildKeptReadStub(path, match[3]!, original);
+    const uses = calls.get(id) ?? [];
+    const eligible = original !== undefined && uses.some((call) => call.transcript) && uses.every(({ use }) =>
+      wholeReadPath(use) === path && eligibleKeptRead(use, row, match[3]!, original, text));
+    const verdict = decide({ entryFound: Number(entryFound), sameId: Number(sameId), bytesEqual: Number(bytesEqual),
+      digestMatches: Number(digestMatches), stubEqual: Number(stubEqual), eligible: Number(eligible) });
     return verdict["out.verified"] === 1 ? { original: original!, entryId: match[3]! } : unchanged;
   };
 }

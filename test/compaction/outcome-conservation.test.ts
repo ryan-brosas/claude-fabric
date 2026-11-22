@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { outcomeConservationProblem, outcomeResolver, resolveMessageOutcomes } from "../../src/compaction/outcome-conservation.ts";
-import { buildKeptReadStub } from "../../src/compaction/kept-read.ts";
+import { buildKeptReadStub, stubKeptReads } from "../../src/compaction/kept-read.ts";
 import type { TranscriptRow } from "../../src/recall/transcript.ts";
 
 const assistant = (...toolUses: ClaudeToolUse[]): ClaudeMessage => ({ role: "assistant", text: "", toolUses });
@@ -10,17 +10,21 @@ const use = (id: string, text?: string): ClaudeToolUse => ({ tool_use_id: id, to
 const result = (id: string, text: string, isError = false): ClaudeToolResult => ({ tool_use_id: id, text, isError });
 
 test("only an exact stub with the original non-sidechain result resolves", () => {
-  const original = "multi-byte é\n".repeat(30), path = "docs/a\"quoted.md", id = "a", entry = "source";
-  const byteCount = Buffer.byteLength(original);
-  const stub = buildKeptReadStub(path, entry, byteCount);
+  const original = "multi-byte é\n".repeat(2_000), path = "docs/a\"quoted.md", id = "a", entry = "source";
+  const stub = buildKeptReadStub(path, entry, original);
   const call = (text: string) => assistant({ tool_use_id: id, tool: "Read", input: { file_path: path }, text });
   const row = (text: string, toolId = id, sidechain = false): TranscriptRow => ({ type: "user", uuid: entry, isSidechain: sidechain,
+    toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
     message: { content: [{ type: "tool_result", tool_use_id: toolId, content: text }] } });
-  const rows = (value?: TranscriptRow) => new Map<string, TranscriptRow>(value ? [[entry, value]] : []);
+  const callRow: TranscriptRow = { type: "assistant", uuid: "call", message: { content: [{ type: "tool_use", id, name: "Read", input: { file_path: path } }] } };
+  const rows = (value?: TranscriptRow) => new Map<string, TranscriptRow>(value ? [[entry, value], ["call", callRow]] : [["call", callRow]]);
   const check = (left: ClaudeMessage[], right: ClaudeMessage[], transcript: Map<string, TranscriptRow>) => {
     const resolve = outcomeResolver(transcript, [...left, ...right]);
     return outcomeConservationProblem(resolveMessageOutcomes(left, resolve), resolveMessageOutcomes(right, resolve));
   };
+  const writerCall = { ...assistant({ tool_use_id: id, tool: "Read", input: { file_path: path } }), handle: "call" };
+  const writerResult = { ...user(result(id, original)), handle: entry };
+  expect(stubKeptReads([user(), writerCall, writerResult], rows(row(original)))[2]!.toolResults![0]!.text).toBe(stub);
   expect(check([call(stub)], [call(original)], rows(row(original)))).toBeUndefined();
   expect(check([call(original)], [call(stub)], rows(row(original)))).toBeUndefined();
   expect(check([], [assistant(...call(original).toolUses, ...call(stub).toolUses)], rows(row(original)))).toBeUndefined();
@@ -30,6 +34,11 @@ test("only an exact stub with the original non-sidechain result resolves", () =>
     ["sidechain entry", stub, rows(row(original, id, true))],
     ["wrong tool use id", stub, rows(row(original, "other"))],
     ["altered stub", stub + "!", rows(row(original))],
+    ["digest-less legacy stub", stub.replace(/\nSHA-256: [a-f0-9]{64}/, ""), rows(row(original))],
+    ["ambiguous call row", stub, new Map([[entry, row(original)], ["call", { ...callRow, message: { content: [
+      { type: "tool_use", id, name: "Read", input: { file_path: path } },
+      { type: "tool_use", id, name: "Read", input: { file_path: path } },
+    ] } }]])],
     ["different result", "a genuinely different result", rows(row(original))],
   ];
   for (const [name, candidate, transcript] of invalid) {
@@ -39,6 +48,38 @@ test("only an exact stub with the original non-sidechain result resolves", () =>
   const errorOriginal = assistant({ tool_use_id: id, tool: "Read", input: { file_path: path }, text: original, isError: true });
   expect(check([errorStub], [errorOriginal], rows(row(original)))).toBe("conflicting tool outcome id");
   expect(check([call(stub)], [call(original + "!")], rows(row(original))))
+    .toBe("conflicting tool outcome id");
+  const partial = assistant({ tool_use_id: id, tool: "Read", input: { file_path: path, offset: 1 }, text: stub });
+  expect(check([partial], [call(original)], rows(row(original)))).toBe("conflicting tool outcome id");
+});
+
+test("same-length rewritten transcript content cannot resolve an old stub", () => {
+  const original = "a".repeat(32_000), rewritten = "b".repeat(32_000), path = "guide.md", id = "t", entry = "r";
+  const stub = buildKeptReadStub(path, entry, original);
+  const call = assistant({ tool_use_id: id, tool: "Read", input: { file_path: path } });
+  const row: TranscriptRow = { type: "user", uuid: entry, toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: rewritten }] } };
+  const current = [call, user(result(id, stub))], rebuilt = [call, user(result(id, rewritten))];
+  const rawCall: TranscriptRow = { type: "assistant", uuid: "call", message: { content: [{ type: "tool_use", id, name: "Read", input: call.toolUses[0]!.input }] } };
+  const resolve = outcomeResolver(new Map([[entry, row], ["call", rawCall]]), current);
+  expect(outcomeConservationProblem(resolveMessageOutcomes(current, resolve), resolveMessageOutcomes(rebuilt, resolve)))
+    .toBe("conflicting tool outcome id");
+});
+
+test.each(["partial read", "under threshold", "missing metadata", "nested stub"])('a forged %s candidate cannot resolve', (kind) => {
+  const id = "t", entry = "r", path = "guide.md";
+  const original = kind === "under threshold" ? "a".repeat(100) : kind === "nested stub"
+    ? buildKeptReadStub(path, "earlier", "a".repeat(32_000)) : "a".repeat(32_000);
+  const input = kind === "partial read" ? { file_path: path, offset: 1 } : { file_path: path };
+  const stub = buildKeptReadStub(path, entry, original);
+  const call = assistant({ tool_use_id: id, tool: "Read", input });
+  const row: TranscriptRow = { type: "user", uuid: entry,
+    ...(kind === "missing metadata" ? {} : { toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } } }),
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: original }] } };
+  const current = [call, user(result(id, stub))], rebuilt = [call, user(result(id, original))];
+  const rawCall: TranscriptRow = { type: "assistant", uuid: "call", message: { content: [{ type: "tool_use", id, name: "Read", input: call.toolUses[0]!.input }] } };
+  const resolve = outcomeResolver(new Map([[entry, row], ["call", rawCall]]), current);
+  expect(outcomeConservationProblem(resolveMessageOutcomes(current, resolve), resolveMessageOutcomes(rebuilt, resolve)))
     .toBe("conflicting tool outcome id");
 });
 

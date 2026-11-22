@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
-import { READ_STUB_MAX_BYTES, READ_STUB_THRESHOLD, stubKeptReads } from "../../src/compaction/kept-read.ts";
+import { READ_STUB_MAX_BYTES, READ_STUB_THRESHOLD, readDigest, stubKeptReads } from "../../src/compaction/kept-read.ts";
 import { utf8Bytes } from "../../src/compaction/bounds.ts";
 
 type Options = { text?: string; tool?: string; input?: Record<string, unknown>; error?: boolean; resultContent?: unknown; resultMeta?: unknown; extraBlock?: unknown; resultId?: string; callInTail?: boolean };
@@ -21,6 +22,17 @@ const fixture = (options: Options = {}) => {
   return { text, messages, rows, transcript: rows.map((r) => JSON.stringify(r)).join("\n") };
 };
 
+test("portable SHA-256 matches known vectors and block boundaries", () => {
+  expect(readDigest("")).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  expect(readDigest("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  for (const length of [1, 55, 56, 63, 64, 65, 127, 128, 129, 16_384, 1_000_000]) {
+    const text = "x".repeat(length);
+    expect(readDigest(text)).toBe(createHash("sha256").update(text, "utf8").digest("hex"));
+  }
+  const unicode = "é🧪\ud800".repeat(83);
+  expect(readDigest(unicode)).toBe(createHash("sha256").update(unicode, "utf8").digest("hex"));
+});
+
 describe("stubbing a kept whole-file Read", () => {
   test("keeps the threshold boundary and replaces one byte above it", () => {
     for (const size of [READ_STUB_THRESHOLD - 1, READ_STUB_THRESHOLD]) {
@@ -37,6 +49,7 @@ describe("stubbing a kept whole-file Read", () => {
     expect(stub.text).toContain("docs/guide.md");
     expect(stub.text).toContain(String(READ_STUB_THRESHOLD + 1));
     expect(stub.text).toContain("result-uuid");
+    expect(stub.text).toContain(`SHA-256: ${createHash("sha256").update(f.text, "utf8").digest("hex")}`);
     expect(utf8Bytes(stub.text)).toBeLessThanOrEqual(READ_STUB_MAX_BYTES);
     expect(utf8Bytes(stub.text)).toBeLessThanOrEqual(utf8Bytes(f.text));
   });
@@ -48,7 +61,9 @@ describe("stubbing a kept whole-file Read", () => {
 
   test("uses UTF-8 bytes rather than characters for the decision", () => {
     const f = fixture({ text: "é".repeat(READ_STUB_THRESHOLD / 2 + 1) });
-    expect(stubKeptReads(f.messages, f.transcript)[2]!.toolResults![0]!.text).toContain("16386 UTF-8 bytes");
+    const stub = stubKeptReads(f.messages, f.transcript)[2]!.toolResults![0]!.text;
+    expect(stub).toContain("16386 UTF-8 bytes");
+    expect(stub).toContain(`SHA-256: ${createHash("sha256").update(f.text, "utf8").digest("hex")}`);
   });
 
   test.each([
