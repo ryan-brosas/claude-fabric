@@ -39,14 +39,15 @@ const $wordDivisionValue = function wordDivisionValue(width, part, index, values
 };
 
 export const keptReadStub = /* @__PURE__ */ (() => {
-// Generated from the machine kept Read size decision. step consumes its state: keep the one it returns (fork to branch).
+// Generated from the machine kept Read replacement decision. step consumes its state: keep the one it returns (fork to branch).
 function init(params) {
   const env = {}, s = {};
-  return {scalars: {"out.replace": 0}, maps: {}};
+  return {scalars: {"out.consider": 0, "out.replace": 0}, maps: {}};
 }
 function step(params, state, input) {
-  const env = {"original": $n(input["original"], "input original"), "stub": $n(input["stub"], "input stub"), "threshold": $n(input["threshold"], "input threshold"), "cap": $n(input["cap"], "input cap")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
-  const scalars = {...s, "out.replace": ((((env["threshold"] < env["original"]) && (env["stub"] <= env["original"])) && (env["stub"] <= env["cap"])) ? 1 : 0)};
+  const env = {"original": $n(input["original"], "input original"), "stub": $n(input["stub"], "input stub"), "threshold": $n(input["threshold"], "input threshold"), "cap": $n(input["cap"], "input cap"), "namesPath": $n(input["namesPath"], "input namesPath"), "namesBytes": $n(input["namesBytes"], "input namesBytes"), "namesEntry": $n(input["namesEntry"], "input namesEntry"), "recoverable": $n(input["recoverable"], "input recoverable"), "verifiedCall": $n(input["verifiedCall"], "input verifiedCall")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["namesPath"] <= 1) && (env["namesBytes"] <= 1) && (env["namesEntry"] <= 1) && (env["recoverable"] <= 1) && (env["verifiedCall"] <= 1))) throw new RangeError("kept Read replacement decision: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.consider": ((((env["threshold"] < env["original"]) && (env["stub"] <= env["original"])) && (env["stub"] <= env["cap"])) ? 1 : 0), "out.replace": (((((((((env["threshold"] < env["original"]) && (env["stub"] <= env["original"])) && (env["stub"] <= env["cap"])) && (env["namesPath"] === 1)) && (env["namesBytes"] === 1)) && (env["namesEntry"] === 1)) && (env["recoverable"] === 1)) && (env["verifiedCall"] === 1)) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };

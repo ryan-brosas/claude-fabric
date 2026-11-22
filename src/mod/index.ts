@@ -64,6 +64,7 @@ export const register: Register = (on, options) => {
     const needsStub = "messages" in fallback && hasKeptReadCandidate(fallback.messages);
     if (!rebuild && !needsStub) return fallback;
     return (async () => {
+      let transcript: string | undefined;
       try {
         // session.info names the main transcript, not a subagent's transcript.
         if (e.agentId) throw new Error("the compacting agent has no transcript path");
@@ -83,7 +84,7 @@ export const register: Register = (on, options) => {
           bytes.set(chunk, offset);
           offset += length;
         }
-        const transcript = new TextDecoder().decode(bytes);
+        transcript = new TextDecoder().decode(bytes);
         if (!rebuild) {
           if (!("messages" in fallback)) return fallback;
           return { messages: stubKeptReads(fallback.messages, transcript) };
@@ -106,6 +107,12 @@ export const register: Register = (on, options) => {
         try { $.ui.log(rebuild ? `fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`
           : `fabric: could not verify kept Read for stubbing: ${String(error)}`, { to: "debug" }); }
         catch { /* Logging must not stop compaction. */ }
+        // A failed rebuild does not invalidate an independently verified kept Read.
+        // Keep the carried summary unchanged and fail closed if verification throws.
+        if (rebuild && transcript !== undefined && needsStub && "messages" in fallback) {
+          try { return { messages: stubKeptReads(fallback.messages, transcript) }; }
+          catch { /* The unmodified carried result is safe. */ }
+        }
         return fallback;
       }
     })();

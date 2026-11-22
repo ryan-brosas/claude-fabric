@@ -19,7 +19,17 @@ const textOf = (content: unknown): string | undefined => {
   return content.map((item) => obj(item).text as string).join("\n");
 };
 
-interface Candidate { message: ClaudeMessage; use: ClaudeToolUse; callHandle: string; id: string; text: string }
+interface Candidate { message: ClaudeMessage; use: ClaudeToolUse; callHandle: string; id: string; path: string; original: number; text: string }
+
+function decision(candidate: Candidate, recoverable: boolean, verifiedCall: boolean) {
+  const { id, path, original, text } = candidate;
+  const facts = { original, stub: utf8Bytes(text), threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES,
+    namesPath: Number(text.includes(`\nFile: ${JSON.stringify(path)}\n`)),
+    namesBytes: Number(text.includes(`[Whole-file Read text removed: ${original} UTF-8 bytes]\n`)),
+    namesEntry: Number(text.includes(`\nTranscript entry: ${id}\n`)),
+    recoverable: Number(recoverable), verifiedCall: Number(verifiedCall) };
+  return keptReadStub.step({}, keptReadStub.init({}), facts).scalars;
+}
 
 /** Candidates come solely from the already-selected tail, not the summary. */
 function candidates(messages: readonly ClaudeMessage[]): Candidate[] {
@@ -47,9 +57,9 @@ function candidates(messages: readonly ClaudeMessage[]): Candidate[] {
       || ("allow_large" in use.input && typeof use.input.allow_large !== "boolean")) continue;
     const original = utf8Bytes(result.text);
     const text = `[Whole-file Read text removed: ${original} UTF-8 bytes]\nFile: ${JSON.stringify(path)}\nTranscript entry: ${message.handle}\nRead the file again with Read, or use history.expand with this entry id (get a binding from history.recall).`;
-    const facts = { original, stub: utf8Bytes(text), threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES };
-    if (keptReadStub.step({}, keptReadStub.init({}), facts).scalars["out.replace"] !== 1) continue;
-    found.push({ message, use, callHandle, id: message.handle, text });
+    const candidate = { message, use, callHandle, id: message.handle, path, original, text };
+    // Verification has not happened yet; only the size prefilter is read here.
+    if (decision(candidate, false, false)["out.consider"] === 1) found.push(candidate);
   }
   return found;
 }
@@ -74,19 +84,19 @@ export function stubKeptReads(messages: readonly ClaudeMessage[], transcript: st
   for (const candidate of planned) {
     const { id, callHandle, use, message, text } = candidate;
     const row = rows.get(id), call = rows.get(callHandle);
-    if (!row || !call || row.type !== "user" || call.type !== "assistant") continue;
-    const callBlocks = blocks(call).map(obj).filter((b) => b.type === "tool_use" && b.id === use.tool_use_id);
-    if (callBlocks.length !== 1 || callBlocks[0]!.name !== "Read" || JSON.stringify(callBlocks[0]!.input) !== JSON.stringify(use.input)) continue;
-    const contents = blocks(row);
-    if (contents.length !== 1) continue;
-    const block = obj(contents[0]), result = message.toolResults![0]!;
+    const callBlocks = blocks(call ?? {}).map(obj).filter((b) => b.type === "tool_use" && b.id === use.tool_use_id);
+    const verifiedCall = !!call && call.type === "assistant" && callBlocks.length === 1 && callBlocks[0]!.name === "Read"
+      && JSON.stringify(callBlocks[0]!.input) === JSON.stringify(use.input);
+    const contents = blocks(row ?? {}), block = obj(contents[0]), result = message.toolResults![0]!;
     const entry = parsed.byId.get(id);
-    if (entry?.kind !== "tool_result" || entry.text !== `toolResult: ${result.text}`) continue;
-    if (block.type !== "tool_result" || block.tool_use_id !== result.tool_use_id || block.is_error === true || textOf(block.content) !== result.text
-      || Object.keys(block).some((key) => !["type", "tool_use_id", "content", "is_error"].includes(key))) continue;
-    const record = obj(row.toolUseResult), file = obj(record.file);
-    if (record.type !== "text" || file.startLine !== 1 || typeof file.numLines !== "number" || file.numLines !== file.totalLines) continue;
-    replacements.set(message, text);
+    const record = obj(row?.toolUseResult), file = obj(record.file);
+    const recoverable = !!row && row.type === "user" && contents.length === 1
+      && entry?.kind === "tool_result" && entry.text === `toolResult: ${result.text}`
+      && block.type === "tool_result" && block.tool_use_id === result.tool_use_id && block.is_error !== true
+      && textOf(block.content) === result.text
+      && Object.keys(block).every((key) => ["type", "tool_use_id", "content", "is_error"].includes(key))
+      && record.type === "text" && file.startLine === 1 && typeof file.numLines === "number" && file.numLines === file.totalLines;
+    if (decision(candidate, recoverable, verifiedCall)["out.replace"] === 1) replacements.set(message, text);
   }
   return messages.map((message) => {
     const text = replacements.get(message);

@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compact } from "../../src/compaction/compact.ts";
+import { READ_STUB_MAX_BYTES, READ_STUB_THRESHOLD, stubKeptReads } from "../../src/compaction/kept-read.ts";
+import { keptReadStub } from "../../src/compaction/verified/generated/kept-read-stub.js";
 import type { ClaudeMessage, ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { register } from "../../src/mod/index.ts";
 import { expand, recall } from "../../src/recall/history.ts";
@@ -129,6 +131,89 @@ test("kept whole-file Read result is a recoverable stub without changing its sum
     const unchanged = await unavailable.run({ trigger: "manual", messages });
     expect(unchanged.messages).toEqual(baseline.messages);
     expect(unavailable.logs[0]).toContain("could not verify kept Read for stubbing");
+  });
+});
+
+test("the compiled decision requires each emitted and verified fact", () => {
+  const facts = { original: 32000, stub: 200, threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES,
+    namesPath: 1, namesBytes: 1, namesEntry: 1, recoverable: 1, verifiedCall: 1 };
+  const decide = (input: typeof facts) => keptReadStub.step({}, keptReadStub.init({}), input).scalars["out.replace"];
+  expect(decide(facts)).toBe(1);
+  for (const key of ["namesPath", "namesBytes", "namesEntry", "recoverable", "verifiedCall"] as const) {
+    expect(decide({ ...facts, [key]: 0 })).toBe(0);
+  }
+});
+
+test("stub verification requires the non-sidechain matching call and names an escaped path", () => {
+  const path = "docs/quote\"and\nnewline.md", text = "x".repeat(32000), input = { file_path: path };
+  const call: ClaudeMessage = { ...message("assistant", "", "call"), toolUses: [{ tool_use_id: "t1", tool: "Read", input, text }] };
+  const result: ClaudeMessage = { ...message("user", "", "result"), toolResults: [{ tool_use_id: "t1", text, isError: false }] };
+  const messages = [message("user", "[Fabric summary]", "summary"), call, result];
+  const callRow = { type: "assistant", uuid: "call", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input }] } };
+  const resultRow = { type: "user", uuid: "result", toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+    message: { content: [{ type: "tool_result", tool_use_id: "t1", content: text }] } };
+  const transcript = (rows: object[]) => rows.map((row) => JSON.stringify(row)).join("\n");
+  const stub = stubKeptReads(messages, transcript([callRow, resultRow]))[2]!.toolResults![0]!.text;
+  expect(stub).toContain(`\nFile: ${JSON.stringify(path)}\n`);
+  expect(stub).toContain(`removed: ${Buffer.byteLength(text)} UTF-8 bytes`);
+  expect(stub).toContain("\nTranscript entry: result\n");
+  expect(stubKeptReads(messages, transcript([resultRow]))).toEqual(messages);
+  expect(stubKeptReads(messages, transcript([{ ...callRow, isSidechain: true }, resultRow]))).toEqual(messages);
+  const wrong = { ...callRow, message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "elsewhere" } }] } };
+  expect(stubKeptReads(messages, transcript([wrong, resultRow]))).toEqual(messages);
+});
+
+test("a rebuild conflict still stubs a verified Read in the carried tail", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "recorded-conflict.jsonl");
+    const prior = message("user", "[Fabric summary]\nEarlier work.", "summary");
+    const earlier = message("user", "[Fabric summary]\nEarlier still.", "earlier-summary");
+    const first = message("user", "Original request.", "first");
+    const oldText = "old guide text\n".repeat(2200);
+    const oldStub = "[Whole-file Read text removed: 33000 UTF-8 bytes]\nFile: \"docs/old.md\"\nTranscript entry: old-result";
+    const oldInput = { file_path: "docs/old.md" };
+    const padding = message("user", `Earlier work ${"x".repeat(70000)}`, "padding");
+    const prompt = message("user", "Read the next guide in full.", "prompt");
+    const text = "fresh guide text\n".repeat(1900);
+    const input = { file_path: "docs/guide-2.md" };
+    const call: ClaudeMessage = { ...message("assistant", "", "call"),
+      toolUses: [{ tool_use_id: "fresh-read", tool: "Read", input, text }] };
+    const result: ClaudeMessage = { ...message("user", "", "result"),
+      toolResults: [{ tool_use_id: "fresh-read", text, isError: false }] };
+    const last = message("assistant", "Read it.", "last");
+    const callRow = (uuid: string, parentUuid: string, id: string, data: object): Row =>
+      ({ type: "assistant", uuid, parentUuid, message: { content: [{ type: "tool_use", id, name: "Read", input: data }] } });
+    const resultRow = (uuid: string, parentUuid: string, id: string, value: string): Row =>
+      ({ type: "user", uuid, parentUuid, toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+        message: { content: [{ type: "tool_result", tool_use_id: id, content: value }] } });
+    await writeRows(path, [row(first, null), callRow("old-call", "first", "old-read", oldInput),
+      resultRow("old-result", "old-call", "old-read", oldText),
+      { type: "system", subtype: "compact_boundary", uuid: "boundary-1", parentUuid: null, logicalParentUuid: "old-result", compactMetadata: {} },
+      row(earlier, "boundary-1"),
+      callRow("copy-call", "earlier-summary", "old-read", oldInput), resultRow("copy-result", "copy-call", "old-read", oldStub),
+      { type: "system", subtype: "compact_boundary", uuid: "boundary-2", parentUuid: null, logicalParentUuid: "copy-result", compactMetadata: {} },
+      row(prior, "boundary-2"), row(padding, "summary"), row(prompt, "padding"), callRow("call", "prompt", "fresh-read", input),
+      resultRow("result", "call", "fresh-read", text), row(last, "result")]);
+    const messages = [prior, padding, prompt, call, result, last];
+    const carried = compact(messages);
+    if (!("messages" in carried)) throw new Error("expected carried summary");
+    const h = hook(path);
+    const output = await h.run({ trigger: "manual", messages });
+    expect(h.logs[0]).toContain("conflicting tool outcome id");
+    expect(output.messages?.[0]?.text).toBe(carried.messages[0]!.text);
+    const kept = output.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "fresh-read");
+    expect(kept?.text).toContain("Transcript entry: result");
+    expect(kept?.text.length).toBeLessThan(1024);
+    const { binding } = await recall(path, { query: "guide" });
+    let args = { binding, entryIds: ["result"] };
+    let recovered = "";
+    for (;;) {
+      const page = await expand(path, args);
+      recovered += page.entries.map((entry) => entry.text).join("");
+      if (!page.next) break;
+      args = page.next as typeof args;
+    }
+    expect(recovered).toBe(`toolResult: ${text}`);
   });
 });
 
