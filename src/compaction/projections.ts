@@ -4,7 +4,7 @@ import { allocateProtectedRoom, boundedExcerpt, clipUtf8, EARLIER_USERS_HEADER, 
 import { foldFailureLedger } from "./verified/context.ts";
 import { checkUserSelection, type UserSelectionGate } from "./verified/policy.ts";
 import { earlierAssistantReplies, projectDialogue, recentDialogue } from "./dialogue.ts";
-import { firstLine, MAX_TRANSCRIPT_CMD, summarizeToolArgs, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
+import { firstLine, type CompactionEvent, type ToolCallEvent } from "./from-claude.ts";
 
 // Section folds: each projection is a pure function of the typed event stream.
 // Together they implement graded decay (principle 4): the oldest turns
@@ -31,6 +31,7 @@ const MODIFYING_TOOLS = new Set(["Edit", "Write"]);
 const MAX_EARLIER_USER = 80;
 const MAX_STATUS_LINE = 140;
 const MAX_TRANSCRIPT_LINE = 100;
+const MAX_TRANSCRIPT_CMD = 80;
 // Every earlier user message renders verbatim while it fits. Above the count
 // bound, reserve the opening and prefer newest distinct messages, then repeats.
 export const MAX_EARLIER_USERS = 64;
@@ -446,6 +447,19 @@ const projectStatus = (events: CompactionEvent[]): string[] => {
   return lines;
 };
 
+const summarizeArgs = (name: string, args: Record<string, unknown>): string => {
+  const primary =
+    name === "Bash" ? args.command ?? args.cmd ?? args.shell
+    : name === "Grep" ? args.pattern ?? args.query ?? args.regex
+    : name === "Glob" ? args.pattern
+    : pathOf(args);
+  if (typeof primary === "string" && primary.trim()) {
+    return truncate(firstLine(primary), MAX_TRANSCRIPT_CMD);
+  }
+  const entries = Object.entries(args).slice(0, 2);
+  return entries.map(([key, value]) => `${key}=${truncate(String(value), 40)}`).join(" ");
+};
+
 // Count source characters (Unicode code points), including line breaks and whitespace
 // removed when the first line is flattened. Give the marker room inside the line cap.
 const transcriptLine = (prefix: string, text: string, verbatim = false): string => {
@@ -496,7 +510,7 @@ const projectTranscript = (events: CompactionEvent[]): ProjectedSection => {
     } else if (e.kind === "assistantText") {
       lines.push(transcriptLine(`${ref} assistant: `, e.text));
     } else if (e.kind === "toolCall") {
-      lines.push(`${ref} ${e.name}(${summarizeToolArgs(e.name, e.args)})`);
+      lines.push(`${ref} ${e.name}(${summarizeArgs(e.name, e.args)})`);
     } else if (e.kind === "toolResult") {
       const status = e.isError ? "error" : "ok";
       lines.push(transcriptLine(`${ref} → ${status}: `, e.text, true));

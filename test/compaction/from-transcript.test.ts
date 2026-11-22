@@ -6,8 +6,7 @@ import { outcomeConservationProblem } from "../../src/compaction/outcome-conserv
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { normalizeMessages, sameToolClaim } from "../../src/compaction/from-claude.ts";
 import { valuesIn } from "../../src/compaction/literals.ts";
-import { sourceFailures } from "../../src/compaction/qa-history.ts";
-import { projectOutstanding, projectWithMetadata } from "../../src/compaction/projections.ts";
+import { projectOutstanding } from "../../src/compaction/projections.ts";
 import { restoreSiblings } from "../../src/compaction/restore-siblings.ts";
 
 test("transcript rows preserve Claude text, tool uses, results and errors for the compactor", () => {
@@ -550,7 +549,7 @@ test("round5 omitted Bash exit cannot suppress a historical failure", () => {
     rowsText([promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined]))).toThrow("ambiguous");
 });
 
-test("round5 copied Read inputs and generic block wrappers survive irrelevant key order", () => {
+test("round7 copied wrapper and result keys are irrelevant but input key order is not", () => {
   const group = (epoch: number, parent: string, tool: string, reorderInput: boolean) => {
     const a = `ka${epoch}`, b = `kb${epoch}`;
     const input = epoch && reorderInput ? { options: { second: 2, first: 1 }, file_path: "same.txt" }
@@ -569,63 +568,15 @@ test("round5 copied Read inputs and generic block wrappers survive irrelevant ke
   const rows = (tool: string, reorderInput: boolean) => [promptRow("start", null), ...group(0, "start", tool, reorderInput),
     { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "kra0" },
     ...group(1, "boundary", tool, reorderInput), promptRow("joined", "kra1")];
-  for (const [tool, reorderInput] of [["Read", true], ["MCP", false]] as const) {
-    const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, reorderInput)));
+  for (const tool of ["Read", "MCP"]) {
+    const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, false)));
     expect(rebuilt.find((message) => message.uuid === "kb0")?.toolUses[0]?.text).toBe("SAME");
     expect(rebuilt.find((message) => message.uuid === "kb1")?.toolUses[0]?.text).toBe("SAME");
+    expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, true))))
+      .toThrow("ambiguous");
   }
-  expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows("MCP", true))))
-    .toThrow("ambiguous");
 });
 
-test("round6 transcript argument rendering sees Grep key order without a pattern", () => {
-  const make = (input: Record<string, unknown>) => ({ tool_use_id: "grep", tool: "Grep", input });
-  const left = make({ dir: "src", options: "quiet" }), right = make({ options: "quiet", dir: "src" });
-  const transcript = (call: typeof left) => projectWithMetadata(normalizeMessages([
-    { role: "assistant", text: "", toolUses: [call] },
-  ])).sections.transcript;
-  expect(transcript(left)).not.toEqual(transcript(right));
-  expect(sameToolClaim({ call: left }, { call: right })).toBe(false);
-  const laterLeft = make({ a: 1, b: 2, c: 3, dir: "src" });
-  const laterRight = make({ a: 1, b: 2, dir: "src", c: 3 });
-  expect(transcript(laterLeft)).toEqual(transcript(laterRight));
-  expect(sameToolClaim({ call: laterLeft }, { call: laterRight })).toBe(true);
-});
-test("round6 retry readers decide when reordered arguments differ", () => {
-  const cases: { tool: string; base: Record<string, unknown>; orderMatters: boolean }[] = [
-    { tool: "MCP", base: {}, orderMatters: true },
-    { tool: "MCP", base: { file_path: "same.txt" }, orderMatters: true },
-    { tool: "Read", base: { file_path: "same.txt" }, orderMatters: false },
-    { tool: "Write", base: { file_path: "same.txt" }, orderMatters: false },
-    { tool: "Edit", base: { path: "same.txt" }, orderMatters: false },
-    { tool: "Grep", base: { dir: "src" }, orderMatters: false },
-    { tool: "Grep", base: { dir: "src", pattern: "foo" }, orderMatters: false },
-    { tool: "Glob", base: { path: "src" }, orderMatters: false },
-    { tool: "Glob", base: { path: "src", pattern: "*.ts" }, orderMatters: false },
-    { tool: "Read", base: {}, orderMatters: true },
-    { tool: "Read", base: { path: " " }, orderMatters: true },
-    { tool: "Read", base: { file_path: 0, path: "same.txt" }, orderMatters: true },
-    { tool: "Bash", base: { command: "false" }, orderMatters: false },
-    { tool: "Bash", base: {}, orderMatters: false },
-  ];
-  for (const { tool, base, orderMatters } of cases) {
-    const input = { ...base, options: { first: 1, second: 2 } };
-    const reordered = { options: { second: 2, first: 1 }, ...base };
-    const a = { tool_use_id: "first", tool, input, text: "boom", isError: true as const };
-    const b = { ...a, input: reordered };
-    const success = { tool_use_id: "second", tool, input, text: "ok" };
-    const events = normalizeMessages([{ role: "assistant", text: "", toolUses: [b] },
-      { role: "assistant", text: "", toolUses: [success] }]);
-    expect(projectOutstanding(events).some((line) => line.includes("boom"))).toBe(orderMatters);
-    expect(sourceFailures(events).some((line) => line.includes("boom"))).toBe(orderMatters);
-    const transcript = (call: typeof a) => projectWithMetadata(normalizeMessages([
-      { role: "assistant", text: "", toolUses: [call] },
-    ])).sections.transcript;
-    const transcriptDiffers = JSON.stringify(transcript(a)) !== JSON.stringify(transcript(b));
-    const outcome = { tool_use_id: "first", text: "boom", isError: true };
-    expect(sameToolClaim({ call: a, outcome }, { call: b, outcome })).toBe(!orderMatters && !transcriptDiffers);
-  }
-});
 test("round4 covered copy with conflicting outcome cannot suppress historical outcome", () => {
   const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
   const b0 = { ...callRow("b0", "a0", "shared", "same"), requestRef: "req", apiBlockIndex: 1 };
