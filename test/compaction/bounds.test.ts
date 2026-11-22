@@ -9,6 +9,24 @@ test("clipping preserves a surrogate pair formed across the suffix boundary", ()
   expect(clipUtf8("aa\uD800zzzzzz", 8, "\uDC00")).toBe("aa\uD800\uDC00");
 });
 
+test("protected room rejects a whole-number footer that exceeds the safe range", () => {
+  expect(() => allocateProtectedRoom(9_007_199_254_739_200, 0, 0, 0))
+    .toThrow("footer must be a safe natural, not 9007199254740992");
+});
+
+test("an unsafe sample limit consumes the source before refusing it", () => {
+  const seen: string[] = [];
+  function* entries() {
+    for (const entryId of ["a", "b"]) {
+      seen.push(entryId);
+      yield { entryId };
+    }
+  }
+  expect(() => sampleAddressedFrom(entries(), Number.MAX_SAFE_INTEGER + 1))
+    .toThrow("Addressed sample failed conservation/bound verification");
+  expect(seen).toEqual(["a", "b"]);
+});
+
 test("fractional byte caps are floored before bounding or distributing", () => {
   const excerpt = boundedExcerpt("x".repeat(150), 32.5, "src");
   expect(utf8Bytes(excerpt.text)).toBeLessThanOrEqual(32);

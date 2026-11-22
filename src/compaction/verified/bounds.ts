@@ -1,12 +1,13 @@
 // Runtime bridges to the byte arithmetic in proofs/bounds.ts. String identity,
 // UTF-8 measurement and marker spelling remain the string builder's job.
-import { addressedSample, boundedSection, boundedText, protectedItem, protectedShare, protectedTotal, samplePosition, textBytePlan } from "./generated/bounds.js";
+import { addressedSample, boundedText, protectedItem, protectedShare, protectedTotal, samplePosition, textBytePlan } from "./generated/bounds.js";
+import { allocateSummaryCarry } from "./context.ts";
 
 interface Machine { init(params: object): { scalars: Record<string, number>; maps: Record<string, Map<number, number>> }; step(params: object, state: { scalars: Record<string, number>; maps: Record<string, Map<number, number>> }, input: object): { scalars: Record<string, number> } }
 const run = (machine: Machine, input: object): Record<string, number> => machine.step({}, machine.init({}), input).scalars;
 
 /** A whole-byte cap is equivalent for UTF-8 output. Negative caps have no room. */
-export const byteCap = (cap: number): number => Number.isNaN(cap) ? 0 : Math.max(0, Math.min(Number.MAX_SAFE_INTEGER - 1, Math.floor(cap)));
+export const byteCap = (cap: number): number => Number.isNaN(cap) ? 0 : Math.max(0, Math.floor(cap));
 
 export interface TextPlanInput { source: number; cap: number; marker: number; head: number; tail: number; produced: number; half: number; lower: number }
 export function checkedTextPlan(input: TextPlanInput): Record<string, number> {
@@ -32,7 +33,8 @@ export const acceptAddressedSample = (facts: SampleFacts): boolean => run(addres
 export interface SamplePositionFacts { total: number; first: number; last: number; position: number; actual: number }
 export const checkedSamplePosition = (facts: SamplePositionFacts): boolean => run(samplePosition, facts)["out.accepted"] === 1;
 
-export const sectionBytes = (bytes: number, cap: number): number => run(boundedSection, { bytes, cap })["out.size"]!;
+// summaryCarry proves this allocation is min(bytes, cap) when the other demands are zero.
+export const sectionBytes = (bytes: number, cap: number): number => allocateSummaryCarry(cap, 0, bytes, 0, 0).newestBytes;
 
 export interface ShareFacts { cap: number; header: number; count: number; quotient: number; remainder: number }
 export function checkedProtectedShare(facts: ShareFacts): Record<string, number> {

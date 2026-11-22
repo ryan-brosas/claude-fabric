@@ -7,5 +7,4 @@ export declare const addressedSample: Machine;
 export declare const textBytePlan: Machine;
 export declare const protectedShare: Machine;
 export declare const boundedText: Machine;
-export declare const boundedSection: Machine;
 export declare const protectedItem: Machine;

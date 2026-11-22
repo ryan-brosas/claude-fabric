@@ -124,20 +124,6 @@ function step(params, state, input) {
 return { init, step };
 })();
 
-export const boundedSection = /* @__PURE__ */ (() => {
-// Generated from the machine bounded section. step consumes its state: keep the one it returns (fork to branch).
-function init(params) {
-  const env = {}, s = {};
-  return {scalars: {"out.size": 0}, maps: {}};
-}
-function step(params, state, input) {
-  const env = {"bytes": $n(input["bytes"], "input bytes"), "cap": $n(input["cap"], "input cap")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
-  const scalars = {...s, "out.size": Math.min(env["bytes"], env["cap"])};
-  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
-}
-return { init, step };
-})();
-
 export const protectedItem = /* @__PURE__ */ (() => {
 // Generated from the machine protected item allocation. step consumes its state: keep the one it returns (fork to branch).
 function init(params) {

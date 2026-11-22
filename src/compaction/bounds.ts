@@ -17,9 +17,8 @@ export const MAX_SUMMARY_FRAMING_BYTES = MAX_SUMMARY_FOOTER_BYTES + 256;
 /** Reserve framing, the request and recent dialogue, then give users room before old replies.
  * This is the same checked allocation as the summary, with no history demand. */
 export const allocateProtectedRoom = (recentBytes: number, requestBytes: number, userDemand: number, replyDemand: number) =>
-  allocateSummaryCarry(MAX_SUMMARY_BYTES, MAX_SUMMARY_FRAMING_BYTES + sectionBytes(byteCap(requestBytes), MAX_SUMMARY_BYTES)
-    + sectionBytes(byteCap(recentBytes), MAX_SUMMARY_BYTES), sectionBytes(byteCap(userDemand), MAX_SUMMARY_BYTES),
-    sectionBytes(byteCap(replyDemand), MAX_SUMMARY_BYTES), 0);
+  allocateSummaryCarry(MAX_SUMMARY_BYTES, MAX_SUMMARY_FRAMING_BYTES + byteCap(requestBytes) + byteCap(recentBytes),
+    byteCap(userDemand), byteCap(replyDemand), 0);
 
 export const recentDialogueBytes = (items: readonly string[]): number =>
   sectionBytes(items.length === 0 ? 0 : utf8Bytes([DIALOGUE_HEADER, ...items].join("\n\n")), MAX_DIALOGUE_SECTION_BYTES);
@@ -36,7 +35,8 @@ export const utf8Bytes = (text: string): number => encoder.encode(text).byteLeng
 const checkedText = (source: string, maxBytes: number, head: string, marker: string, tail: string,
   omitted: number, markerCount?: number): { text: string; omittedBytes: number } => {
   const text = `${head}${marker}${tail}`;
-  const facts = { source: utf8Bytes(source), cap: byteCap(maxBytes), head: utf8Bytes(head), tail: utf8Bytes(tail),
+  const sourceBytes = utf8Bytes(source);
+  const facts = { source: sourceBytes, cap: Math.min(byteCap(maxBytes), sourceBytes), head: utf8Bytes(head), tail: utf8Bytes(tail),
     marker: utf8Bytes(marker), omitted, markerCount: markerCount ?? 0, output: utf8Bytes(text),
     unchanged: text === source, marked: markerCount !== undefined };
   if (!acceptBoundedText(facts)) throw new Error("fabric: bounded text failed its verified check");
@@ -65,7 +65,15 @@ export const clipUtf8 = (text: string, maxBytes: number, suffix = "…"): string
 // Allocate the same protected-block room before message text loses its source handle.
 export const protectedBudgets = (header: string, items: readonly string[], maxBytes: number): number[] => {
   if (items.length === 0) return [];
-  const { room, share } = protectedRoom(byteCap(maxBytes), utf8Bytes(header), items.length);
+  let cap = byteCap(maxBytes);
+  const headerBytes = utf8Bytes(header);
+  if (!Number.isSafeInteger(cap)) {
+    // If every item fits, use the exact demand as an equivalent safe ceiling.
+    const full = items.reduce((total, item) => total + utf8Bytes(item), headerBytes + 2 * items.length);
+    if (!Number.isSafeInteger(full) || full > cap) throw new RangeError("protected demand exceeds safe arithmetic");
+    cap = full;
+  }
+  const { room, share } = protectedRoom(cap, headerBytes, items.length);
   let remaining = room;
   const budgets = items.map((item) => {
     const result = protectedItemBytes(utf8Bytes(item), share, 0, remaining);
@@ -109,8 +117,7 @@ const tailUtf8 = (text: string, maxBytes: number): string => {
 };
 
 // Formatting does no byte arithmetic, so keep finite integral counts even above the safe-integer range.
-const naturalCount = (count: number): number => Number.isNaN(count) ? 0
-  : count === Infinity ? Number.MAX_SAFE_INTEGER : Math.max(0, Math.floor(count));
+const naturalCount = (count: number): number => Number.isNaN(count) ? 0 : Math.max(0, Math.floor(count));
 
 export const earlierSummaryOmission = (omittedBytes: number): string =>
   `\n[omitted ${naturalCount(omittedBytes)} UTF-8 bytes from the middle of the earlier summary]\n`;
@@ -184,6 +191,11 @@ export const sampleAddressedFrom = <T extends AddressedValue>(
   maxValues: number,
 ): AddressedSample<T> => {
   maxValues = byteCap(maxValues);
+  if (!Number.isSafeInteger(maxValues)) {
+    // The old accounting gate refused an unsafe limit after consuming the source.
+    for (const _value of source) { /* preserve iteration errors and side effects */ }
+    throw new Error("Addressed sample failed conservation/bound verification");
+  }
   const split = textPlan(0, maxValues);
   const earliestLimit = split["out.upper"]!;
   const latestLimit = split["out.lower"]!;

@@ -7,7 +7,7 @@ import { all, bool, fun, min, nat, when, yes } from "gdp-wired";
 import type { Kernel } from "./kernel.ts";
 
 type BoundsBug = "allow over cap" | "change fitting text" | "lose byte accounting" | "wrong marker count"
-  | "refuse an exact cut" | "section over cap" | "section cut early" | "allocate past demand" | "allocate past remaining"
+  | "refuse an exact cut" | "allocate past demand" | "allocate past remaining"
   | "wrong room" | "wrong halves" | "wrong loss" | "wrong overflow" | "wrong sample split"
   | "wrong protected room" | "accept wrong share" | "refuse correct share" | "refuse correct halves"
   | "wrong sample halves" | "wrong sample earliest" | "wrong sample latest" | "wrong sample omission"
@@ -31,11 +31,6 @@ const textBound = (bug?: BoundsBug) => fun("bounded text")
       bug === "refuse fitting text" ? source.gt(cap) : yes);
     return { accepted };
   });
-
-const section = (bug?: BoundsBug) => fun("bounded section")
-  .inputs({ bytes: nat, cap: nat })
-  .returns(({ bytes, cap }) => ({ size: bug === "section over cap" ? bytes
-    : bug === "section cut early" ? min(bytes, cap.minus(1)) : min(bytes, cap) }));
 
 // One pass of protectedBudgets: give each item its share, then (in source
 // order) its unmet demand up to the remaining room.
@@ -116,7 +111,7 @@ const sample = (bug?: BoundsBug) => fun("addressed sample")
   });
 
 export const boundsKernels = (bug?: BoundsBug): Kernel[] => {
-  const t = textBound(bug), s = section(bug), a = allocation(bug), p = plan(bug), q = share(bug), v = sample(bug), z = protectedTotal(bug), j = samplePosition(bug);
+  const t = textBound(bug), a = allocation(bug), p = plan(bug), q = share(bug), v = sample(bug), z = protectedTotal(bug), j = samplePosition(bug);
   return [
     { id: "samplePosition", fun: j, decisions: [
       j.law("slot_bounds: accepted sample and slot counts are within the source", () => [],
@@ -126,8 +121,6 @@ export const boundsKernels = (bug?: BoundsBug): Kernel[] => {
       j.law("slot_last: an accepted last-half slot is the matching source suffix position", () => [],
         (o,e) => o.accepted.and(e.position.atLeast(e.first)).implies(
           e.actual.eq(e.total.minus(e.last).plus(e.position.minus(e.first))))),
-      j.law("slot_in_source: an accepted source position is below the source count", () => [],
-        (o,e) => o.accepted.implies(e.actual.lt(e.total))),
       j.law("slot_complete: every correctly positioned sample value is accepted", (e) => [all(
         e.first.plus(e.last).atMost(e.total), e.position.lt(e.first.plus(e.last)),
         when(e.position.lt(e.first), e.actual.eq(e.position),
@@ -202,15 +195,7 @@ export const boundsKernels = (bug?: BoundsBug): Kernel[] => {
         e.head.plus(e.tail).plus(e.marker).atMost(e.cap))],
         (o) => o.accepted),
     ] },
-    { id: "boundedSection", fun: s, decisions: [
-      s.law("section_capped: section size is never over the cap", () => [], (o, e) => o.size.atMost(e.cap)),
-      s.law("section_exact: section size is demand up to the cap", () => [], (o, e) => o.size.eq(min(e.bytes, e.cap))),
-    ] },
     { id: "protectedItem", fun: a, decisions: [
-      a.law("item_demand: an item never receives more than it asks", (e) => [e.base.atMost(e.demand)],
-        (o, e) => o.budget.atMost(e.demand)),
-      a.law("item_room: the extra allocation never exceeds the remaining room", () => [],
-        (o, e) => o.extra.atMost(e.remaining)),
       a.law("item_exact: each item receives its share then unmet demand up to remaining room", () => [],
         (o, e) => all(o.initial.eq(min(e.demand, e.share)), o.afterInitial.eq(e.remaining.minus(o.initial)), o.extra.eq(min(e.remaining, e.demand.minus(e.base))),
           o.budget.eq(e.base.plus(o.extra)), o.remaining.eq(e.remaining.minus(o.extra)))),
@@ -219,7 +204,7 @@ export const boundsKernels = (bug?: BoundsBug): Kernel[] => {
 };
 
 export const BOUNDS_BUGS: BoundsBug[] = ["allow over cap", "change fitting text", "lose byte accounting", "wrong marker count",
-  "refuse an exact cut", "section over cap", "section cut early", "allocate past demand", "allocate past remaining",
+  "refuse an exact cut", "allocate past demand", "allocate past remaining",
   "wrong room", "wrong halves", "wrong loss", "wrong overflow", "wrong sample split", "wrong protected room",
   "accept wrong share", "refuse correct share", "refuse correct halves", "wrong sample halves", "wrong sample earliest",
   "wrong sample latest", "wrong sample omission", "sample over limit", "refuse exact sample", "accept over budget",
