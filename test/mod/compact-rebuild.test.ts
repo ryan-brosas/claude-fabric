@@ -108,7 +108,8 @@ test("kept whole-file Read result is a recoverable stub without changing its sum
     expect(stub?.text).toContain("docs/guide.md");
     expect(stub?.text).toContain(String(text.length));
     expect(stub?.text).toContain("result-uuid");
-    expect(stub?.text).toContain("history.expand");
+    expect(stub?.text).not.toContain("history.expand");
+    expect(stub?.text).toContain("call Read on the file with no offset or limit");
     const id = /^Transcript entry: (.+)$/m.exec(stub!.text)?.[1];
     expect(id).toBe("result-uuid");
     const { binding } = await recall(path, { query: "guide" });
@@ -156,7 +157,7 @@ test("stub verification requires the non-sidechain matching call and names an es
   const transcript = (rows: object[]) => rows.map((row) => JSON.stringify(row)).join("\n");
   const stub = stubKeptReads(messages, transcript([callRow, resultRow]))[2]!.toolResults![0]!.text;
   expect(stub).toContain(`\nFile: ${JSON.stringify(path)}\n`);
-  expect(stub).toContain(`removed: ${Buffer.byteLength(text)} UTF-8 bytes`);
+  expect(stub).toContain(`whole file: ${Buffer.byteLength(text)} UTF-8 bytes`);
   expect(stub).toContain("\nTranscript entry: result\n");
   const parsedRows = new Map<string, Record<string, unknown>>([["call", callRow], ["result", resultRow]]);
   expect(stubKeptReads(messages, parsedRows)[2]!.toolResults![0]!.text).toBe(stub);
@@ -221,7 +222,7 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
     // Here the chain has no conflicting effective outcomes: the legacy stub stays
     // plain text and the rebuilt summary can quote it without a fallback.
     expect(upgrade.logs).toEqual([]);
-    expect(upgraded.messages?.[0]?.text).toContain("Whole-file Read text removed");
+    expect(upgraded.messages?.[0]?.text).toContain(legacy.slice(0, 55));
     expect(upgraded.messages?.[0]?.text).not.toContain("FIRST-ORIGINAL-CONTENT");
     await writeFile(path, recorded);
     const next = hook(path);
@@ -244,7 +245,7 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
     const expected = compact(rebuilt);
     if (!("messages" in expected)) throw new Error("expected rebuilt summary");
     expect(output.messages?.[0]?.text).toBe(expected.messages[0]!.text);
-    expect(output.messages?.[0]?.text).not.toContain("Whole-file Read text removed");
+    expect(output.messages?.[0]?.text).not.toContain(stub!.slice(0, 55));
     expect(output.messages?.[0]?.text).toContain("FIRST-ORIGINAL-CONTENT");
     // The copy contains only the stub; an excerpt must address the original row.
     expect(output.messages?.[0]?.text).not.toContain("[entry 22222222-2222-4222-8222-222222222222] → ok: FIRST-ORIGINAL-CONTENT");
@@ -303,7 +304,7 @@ test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcri
     if (!("messages" in main3)) throw new Error("expected third main summary");
     expect(output3.messages?.[0]?.text).toBe(main3.messages[0]!.text
       .replaceAll("22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111").replaceAll("44444444-4444-4444-8444-444444444444", "33333333-3333-4333-8333-333333333333"));
-    expect(output3.messages?.[0]?.text).not.toContain("Whole-file Read text removed");
+    expect(output3.messages?.[0]?.text).not.toContain(freshStub!.slice(0, 55));
     expect(output3.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "third-read")?.text)
       .toContain("Transcript entry: 55555555-5555-4555-8555-555555555555");
   });
@@ -324,8 +325,9 @@ test("a genuine fallback honestly summarizes a stub before transcript resolution
   const fallback = await h.run(event);
   expect(fallback).toEqual(carried);
   expect(h.logs[0]).toContain("no transcript path");
-  expect(fallback.messages![0]!.text.split("\n").find((line) => line.includes("Whole-file Read text removed")))
-    .toBe("[entry copied-result] → ok: [Whole-file Read text removed: 33000 UTF-8 bytes] [4 lines, 237 chars cut; history.expand]");
+  const preview = Array.from(stub.split("\n")[0]!).slice(0, 99).join("");
+  expect(fallback.messages![0]!.text.split("\n").find((line) => line.includes(preview)))
+    .toBe(`[entry copied-result] → ok: ${preview}… [4 lines, ${Array.from(stub).length - 99} chars cut; history.expand]`);
 });
 
 test("a genuine rebuild conflict carries the unchanged result without stubbing", async () => {
@@ -335,7 +337,7 @@ test("a genuine rebuild conflict carries the unchanged result without stubbing",
     const earlier = message("user", "[Fabric summary]\nEarlier still.", "earlier-summary");
     const first = message("user", "Original request.", "first");
     const oldText = "old guide text\n".repeat(2200);
-    const oldStub = "[Whole-file Read text removed: 33000 UTF-8 bytes]\nFile: \"docs/old.md\"\nTranscript entry: old-result";
+    const oldStub = buildKeptReadStub("docs/old.md", "old-result", "x".repeat(33_000)).replace(/\nSHA-256: [a-f0-9]{64}/, "");
     const oldInput = { file_path: "docs/old.md" };
     const padding = message("user", `Earlier work ${"x".repeat(70000)}`, "padding");
     const prompt = message("user", "Read the next guide in full.", "prompt");

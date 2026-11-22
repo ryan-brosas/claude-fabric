@@ -34,6 +34,15 @@ test("portable SHA-256 matches known vectors and block boundaries", () => {
 });
 
 describe("stubbing a kept whole-file Read", () => {
+  test("explains compaction, not Read truncation, and asks for a plain Read", () => {
+    const f = fixture();
+    const stub = stubKeptReads(f.messages, f.transcript)[2]!.toolResults![0]!.text;
+    expect(stub).toContain("Compaction removed this earlier Read result to save context.");
+    expect(stub).toContain("The Read had returned the whole file: 32000 UTF-8 bytes.");
+    expect(stub).toContain("Nothing was cut by the Read tool.");
+    expect(stub).toContain("call Read on the file with no offset or limit; it returns the whole file.");
+    expect(stub).not.toContain("history.expand");
+  });
   test("keeps the threshold boundary and replaces one byte above it", () => {
     for (const size of [READ_STUB_THRESHOLD - 1, READ_STUB_THRESHOLD]) {
       const f = fixture({ text: "x".repeat(size) });

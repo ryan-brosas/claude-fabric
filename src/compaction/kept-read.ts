@@ -68,7 +68,7 @@ export function readDigest(text: string): string {
 
 /** The exact public stub format, shared by the writer and transcript verifier. */
 export const buildKeptReadStub = (path: string, entryId: string, original: string): string =>
-  `[Whole-file Read text removed: ${utf8Bytes(original)} UTF-8 bytes]\nFile: ${JSON.stringify(path)}\nTranscript entry: ${entryId}\nSHA-256: ${readDigest(original)}\nRead the file again with Read, or use history.expand with this entry id (get a binding from history.recall).`;
+  `[Compaction removed this earlier Read result to save context. The Read had returned the whole file: ${utf8Bytes(original)} UTF-8 bytes. Nothing was cut by the Read tool.]\nFile: ${JSON.stringify(path)}\nTranscript entry: ${entryId}\nSHA-256: ${readDigest(original)}\nIf you need the text again, call Read on the file with no offset or limit; it returns the whole file.`;
 
 /** The writer and resolver accept exactly the same whole-file Read arguments. */
 export function wholeReadPath(use: ClaudeToolUse): string | undefined {
@@ -84,7 +84,7 @@ function decision(candidate: Pick<Candidate, "id" | "path" | "original" | "text"
   const { id, path, original, text } = candidate;
   const facts = { original, stub: utf8Bytes(text), threshold: READ_STUB_THRESHOLD, cap: READ_STUB_MAX_BYTES,
     namesPath: Number(text.includes(`\nFile: ${JSON.stringify(path)}\n`)),
-    namesBytes: Number(text.includes(`[Whole-file Read text removed: ${original} UTF-8 bytes]\n`)),
+    namesBytes: Number(text.includes(`whole file: ${original} UTF-8 bytes.`)),
     namesEntry: Number(text.includes(`\nTranscript entry: ${id}\n`)),
     namesDigest: Number(text.includes(`\nSHA-256: ${candidate.digest}\n`)),
     recoverable: Number(recoverable), verifiedCall: Number(verifiedCall) };
