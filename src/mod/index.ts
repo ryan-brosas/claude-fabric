@@ -1,5 +1,6 @@
 import type { Register } from "claude-code";
 import { compact, isFabricSummary } from "../compaction/compact.ts";
+import { hasKeptReadCandidate, stubKeptReads } from "../compaction/kept-read.ts";
 import { rebuildTranscript } from "../compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../compaction/outcome-conservation.ts";
 import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
@@ -55,11 +56,13 @@ export const register: Register = (on, options) => {
     if ("qa" in carried) {
       try { $.ui.log(carried.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
     }
-    const fallback = "qa" in carried ? { messages: carried.candidate } : carried;
     // One long turn has no prompt to cut at; core can cut inside it. An automatic
     // skip also goes to core: our text projection does not count media blocks.
     if ("core" in carried || (e.trigger === "auto" && "skip" in carried)) return next(e);
-    if (!e.messages.some(isFabricSummary)) return fallback;
+    const fallback = "qa" in carried ? { messages: carried.candidate } : carried;
+    const rebuild = e.messages.some(isFabricSummary);
+    const needsStub = "messages" in fallback && hasKeptReadCandidate(fallback.messages);
+    if (!rebuild && !needsStub) return fallback;
     return (async () => {
       try {
         // session.info names the main transcript, not a subagent's transcript.
@@ -80,7 +83,12 @@ export const register: Register = (on, options) => {
           bytes.set(chunk, offset);
           offset += length;
         }
-        const rebuilt = rebuildTranscript(e.messages, new TextDecoder().decode(bytes));
+        const transcript = new TextDecoder().decode(bytes);
+        if (!rebuild) {
+          if (!("messages" in fallback)) return fallback;
+          return { messages: stubKeptReads(fallback.messages, transcript) };
+        }
+        const rebuilt = rebuildTranscript(e.messages, transcript);
         const problem = outcomeConservationProblem(e.messages, rebuilt);
         if (problem) throw new Error(problem);
         const result = compact(rebuilt, { instructions: e.instructions });
@@ -93,9 +101,10 @@ export const register: Register = (on, options) => {
         // A row converted from the transcript has no engine handle, so core would rebuild it from
         // text and tool blocks only and lose an image. Keep such a tail out of the result.
         if (messages.slice(1).some((m) => !m.handle)) throw new Error("rebuilt result would retain messages without engine handles");
-        return { messages };
+        return { messages: stubKeptReads(messages, transcript) };
       } catch (error) {
-        try { $.ui.log(`fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`, { to: "debug" }); }
+        try { $.ui.log(rebuild ? `fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`
+          : `fabric: could not verify kept Read for stubbing: ${String(error)}`, { to: "debug" }); }
         catch { /* Logging must not stop compaction. */ }
         return fallback;
       }

@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { compact } from "../../src/compaction/compact.ts";
 import type { ClaudeMessage, ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { register } from "../../src/mod/index.ts";
+import { expand, recall } from "../../src/recall/history.ts";
 
 type Row = { type: string; uuid?: string; parentUuid?: string | null; logicalParentUuid?: string | null;
-  subtype?: string; compactMetadata?: object; isCompactSummary?: boolean; message?: { id?: string; content: unknown } };
+  subtype?: string; compactMetadata?: object; isCompactSummary?: boolean; toolUseResult?: unknown; message?: { id?: string; content: unknown } };
 type Event = { trigger: "manual" | "auto" | "plugin" | "precompute"; messages: ClaudeMessage[]; instructions?: string; agentId?: string };
 type Handler = (dollar: unknown, event: Event, next: (event: Event) => unknown) => unknown;
 
@@ -66,6 +67,70 @@ function hook(path: string) {
 
 const writeRows = async (path: string, rows: Row[]) =>
   writeFile(path, rows.map((item) => JSON.stringify(item)).join("\n") + "\n");
+
+test("kept whole-file Read result is a recoverable stub without changing its summary or call", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "read.jsonl");
+    const text = "text from the whole file\n".repeat(1400);
+    const first = message("user", `Original. ${"x".repeat(70000)}`, "first");
+    const prompt = message("user", "Read the guide.", "prompt");
+    const call: ClaudeMessage = { ...message("assistant", "", "call"), toolUses: [{ tool_use_id: "read-1", tool: "Read", input: { file_path: "docs/guide.md" }, text }] };
+    const result: ClaudeMessage = { ...message("user", "", "result-uuid"), toolResults: [{ tool_use_id: "read-1", text, isError: false }] };
+    const last = message("assistant", "Read it.", "last");
+    await writeRows(path, [row(first, null), row(prompt, "first"),
+      { type: "assistant", uuid: "call", parentUuid: "prompt", message: { content: [{ type: "tool_use", id: "read-1", name: "Read", input: { file_path: "docs/guide.md" } }] } },
+      { type: "user", uuid: "result-uuid", parentUuid: "call", toolUseResult: { type: "text", file: { startLine: 1, numLines: 1400, totalLines: 1400 } }, message: { content: [{ type: "tool_result", tool_use_id: "read-1", content: text }] } }, row(last, "result-uuid")]);
+    const messages = [first, prompt, call, result, last];
+    const baseline = compact(messages);
+    if (!("messages" in baseline)) throw new Error(JSON.stringify(baseline));
+    const output = await hook(path).run({ trigger: "manual", messages });
+    expect(output.messages?.[0]?.text).toBe(baseline.messages[0]!.text);
+    const keptCall = output.messages?.find((m) => m.handle === "call");
+    expect(keptCall).toEqual(call);
+    expect(output.messages).toHaveLength(baseline.messages.length);
+    for (let index = 1; index < baseline.messages.length; index++) {
+      const before = baseline.messages[index]!;
+      if (before !== result) expect(output.messages![index]).toBe(before);
+      else {
+        const { handle, toolResults, ...unchanged } = before;
+        expect(handle).toBe("result-uuid");
+        const { handle: newHandle, toolResults: newResults, ...after } = output.messages![index]!;
+        expect(newHandle).toBeUndefined();
+        expect(after).toEqual(unchanged);
+        expect({ ...newResults![0], text: toolResults![0]!.text }).toEqual(toolResults![0]);
+      }
+    }
+    const stub = output.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "read-1");
+    expect(stub?.text.length).toBeLessThan(1024);
+    expect(stub?.text).toContain("docs/guide.md");
+    expect(stub?.text).toContain(String(text.length));
+    expect(stub?.text).toContain("result-uuid");
+    expect(stub?.text).toContain("history.expand");
+    const id = /^Transcript entry: (.+)$/m.exec(stub!.text)?.[1];
+    expect(id).toBe("result-uuid");
+    const { binding } = await recall(path, { query: "guide" });
+    let args = { binding, entryIds: [id!] };
+    let recovered = "";
+    for (;;) {
+      const page = await expand(path, args);
+      recovered += page.entries.map((entry) => entry.text).join("");
+      if (!page.next) break;
+      args = page.next as typeof args;
+    }
+    expect(recovered).toBe(`toolResult: ${text}`);
+    const prior = { ...baseline.messages[0]!, handle: "prior-summary" };
+    const later = hook(path);
+    const rebuilt = await later.run({ trigger: "manual", messages: [prior, prompt, call, result, last] });
+    expect(later.logs).toEqual([]);
+    expect(rebuilt.messages?.[0]?.text).toBe(baseline.messages[0]!.text);
+    expect(rebuilt.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "read-1")?.text).toBe(stub?.text);
+    await rm(path);
+    const unavailable = hook(path);
+    const unchanged = await unavailable.run({ trigger: "manual", messages });
+    expect(unchanged.messages).toEqual(baseline.messages);
+    expect(unavailable.logs[0]).toContain("could not verify kept Read for stubbing");
+  });
+});
 
 test("later compaction rebuilds parallel sibling tool failures instead of carrying the summary", async () => {
   await inProject(async (dir) => {
