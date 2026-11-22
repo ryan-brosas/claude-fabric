@@ -1,7 +1,7 @@
 import type { Register } from "claude-code";
 import { compact, isFabricSummary } from "../compaction/compact.ts";
 import { hasKeptReadCandidate, stubKeptReads } from "../compaction/kept-read.ts";
-import { rebuildTranscript } from "../compaction/from-transcript.ts";
+import { rebuildTranscriptView } from "../compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../compaction/outcome-conservation.ts";
 import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
 import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
@@ -89,10 +89,10 @@ export const register: Register = (on, options) => {
           if (!("messages" in fallback)) return fallback;
           return { messages: stubKeptReads(fallback.messages, transcript) };
         }
-        const rebuilt = rebuildTranscript(e.messages, transcript);
-        const problem = outcomeConservationProblem(e.messages, rebuilt);
+        const rebuilt = rebuildTranscriptView(e.messages, transcript);
+        const problem = outcomeConservationProblem(rebuilt.current, rebuilt.messages);
         if (problem) throw new Error(problem);
-        const result = compact(rebuilt, { instructions: e.instructions });
+        const result = compact(rebuilt.messages, { instructions: e.instructions });
         if ("qa" in result) {
           if (!("qa" in carried)) throw new Error(result.qa);
           try { $.ui.log(result.qa, { to: "debug" }); } catch { /* Logging must not stop compaction. */ }
@@ -101,18 +101,16 @@ export const register: Register = (on, options) => {
         if (!messages) throw new Error("rebuilt input did not produce a summary");
         // A row converted from the transcript has no engine handle, so core would rebuild it from
         // text and tool blocks only and lose an image. Keep such a tail out of the result.
-        if (messages.slice(1).some((m) => !m.handle)) throw new Error("rebuilt result would retain messages without engine handles");
-        return { messages: stubKeptReads(messages, transcript) };
+        // Only current engine messages can be retained. A resolved view may cite an
+        // original transcript address rather than its physical engine handle.
+        const tail = messages.slice(1).map((message) => rebuilt.originals.get(message));
+        if (tail.some((message) => !message?.handle)) throw new Error("rebuilt result would retain messages without engine handles");
+        const retained = [messages[0]!, ...tail.filter((message) => message !== undefined)];
+        return { messages: stubKeptReads(retained, rebuilt.rows) };
       } catch (error) {
         try { $.ui.log(rebuild ? `fabric: transcript rebuild failed, carrying earlier summary: ${String(error)}`
           : `fabric: could not verify kept Read for stubbing: ${String(error)}`, { to: "debug" }); }
         catch { /* Logging must not stop compaction. */ }
-        // A failed rebuild does not invalidate an independently verified kept Read.
-        // Keep the carried summary unchanged and fail closed if verification throws.
-        if (rebuild && transcript !== undefined && needsStub && "messages" in fallback) {
-          try { return { messages: stubKeptReads(fallback.messages, transcript) }; }
-          catch { /* The unmodified carried result is safe. */ }
-        }
         return fallback;
       }
     })();

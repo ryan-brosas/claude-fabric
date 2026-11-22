@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compact } from "../../src/compaction/compact.ts";
-import { READ_STUB_MAX_BYTES, READ_STUB_THRESHOLD, stubKeptReads } from "../../src/compaction/kept-read.ts";
+import { rebuildTranscript } from "../../src/compaction/from-transcript.ts";
+import { buildKeptReadStub, READ_STUB_MAX_BYTES, READ_STUB_THRESHOLD, stubKeptReads } from "../../src/compaction/kept-read.ts";
 import { keptReadStub } from "../../src/compaction/verified/generated/kept-read-stub.js";
 import type { ClaudeMessage, ClaudeToolUse } from "../../src/compaction/from-claude.ts";
 import { register } from "../../src/mod/index.ts";
@@ -157,13 +158,163 @@ test("stub verification requires the non-sidechain matching call and names an es
   expect(stub).toContain(`\nFile: ${JSON.stringify(path)}\n`);
   expect(stub).toContain(`removed: ${Buffer.byteLength(text)} UTF-8 bytes`);
   expect(stub).toContain("\nTranscript entry: result\n");
+  const parsedRows = new Map<string, Record<string, unknown>>([["call", callRow], ["result", resultRow]]);
+  expect(stubKeptReads(messages, parsedRows)[2]!.toolResults![0]!.text).toBe(stub);
+  expect(stubKeptReads(messages, new Map<string, Record<string, unknown>>([["call", callRow], ["result", { ...resultRow, isSidechain: true }]]))).toEqual(messages);
   expect(stubKeptReads(messages, transcript([resultRow]))).toEqual(messages);
   expect(stubKeptReads(messages, transcript([{ ...callRow, isSidechain: true }, resultRow]))).toEqual(messages);
   const wrong = { ...callRow, message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "elsewhere" } }] } };
   expect(stubKeptReads(messages, transcript([wrong, resultRow]))).toEqual(messages);
 });
 
-test("a rebuild conflict still stubs a verified Read in the carried tail", async () => {
+test.each(["both", "copy-only"])("a stubbed Read survives the next full-transcript rebuild (%s)", async (shape) => {
+  await inProject(async (dir) => {
+    const path = join(dir, "two-compactions.jsonl");
+    const first = message("user", `Original request ${"x".repeat(70000)}`, "first");
+    const prompt = message("user", "Read the first guide.", "prompt");
+    const oldInput = { file_path: "docs/old.md" };
+    const oldText = "FIRST-ORIGINAL-CONTENT\n".repeat(1500);
+    const oldCall: ClaudeMessage = { ...message("assistant", "", "old-call"), toolUses: [{ tool_use_id: "old-read", tool: "Read", input: oldInput, text: oldText }] };
+    const oldResult: ClaudeMessage = { ...message("user", "", "11111111-1111-4111-8111-111111111111"), toolResults: [{ tool_use_id: "old-read", text: oldText, isError: false }] };
+    const done = message("assistant", "First read complete.", "old-done");
+    const callRow = (uuid: string, parentUuid: string, id: string, input: object): Row =>
+      ({ type: "assistant", uuid, parentUuid, message: { content: [{ type: "tool_use", id, name: "Read", input }] } });
+    const resultRow = (uuid: string, parentUuid: string, id: string, text: string): Row =>
+      ({ type: "user", uuid, parentUuid, toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+        message: { content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
+    const originalRows = [row(first, null), row(prompt, "first"), callRow("old-call", "prompt", "old-read", oldInput),
+      resultRow("11111111-1111-4111-8111-111111111111", "old-call", "old-read", oldText), row(done, "11111111-1111-4111-8111-111111111111")];
+    await writeRows(path, originalRows);
+    const n = hook(path);
+    const firstMessages = [first, prompt, oldCall, oldResult, done];
+    const firstOutput = await n.run({ trigger: "manual", messages: firstMessages });
+    const firstMain = compact(firstMessages);
+    if (!("messages" in firstMain)) throw new Error("expected first main summary");
+    expect(firstOutput.messages?.[0]?.text).toBe(firstMain.messages[0]!.text);
+    const stub = firstOutput.messages?.flatMap(m => m.toolResults ?? []).find(r => r.tool_use_id === "old-read")?.text;
+    expect(n.logs).toEqual([]);
+    expect(stub).toContain("Transcript entry: 11111111-1111-4111-8111-111111111111");
+    const prior = { ...firstOutput.messages![0]!, handle: "summary" };
+    const copiedCall: ClaudeMessage = { ...message("assistant", "", "copy-call"), toolUses: [{ tool_use_id: "old-read", tool: "Read", input: oldInput, text: stub! }] };
+    const copiedResult: ClaudeMessage = { ...message("user", "", "22222222-2222-4222-8222-222222222222"), toolResults: [{ tool_use_id: "old-read", text: stub!, isError: false }] };
+    const padding = message("user", `Intervening work ${"y".repeat(70000)}`, "padding");
+    const nextPrompt = message("user", "Read the next guide.", "next-prompt");
+    const freshInput = { file_path: "docs/new.md" }, freshText = "SECOND-ORIGINAL-CONTENT\n".repeat(1500);
+    const freshCall: ClaudeMessage = { ...message("assistant", "", "fresh-call"), toolUses: [{ tool_use_id: "fresh-read", tool: "Read", input: freshInput, text: freshText }] };
+    const freshResult: ClaudeMessage = { ...message("user", "", "33333333-3333-4333-8333-333333333333"), toolResults: [{ tool_use_id: "fresh-read", text: freshText, isError: false }] };
+    const last = message("assistant", "Second read complete.", "last");
+    await writeRows(path, [...originalRows,
+      { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: null, logicalParentUuid: "old-done", compactMetadata: {} },
+      row(prior, "boundary"), callRow("copy-call", "summary", "old-read", oldInput),
+      resultRow("22222222-2222-4222-8222-222222222222", shape === "both" ? "copy-call" : "old-call", "old-read", stub!),
+      row(padding, "22222222-2222-4222-8222-222222222222"), row(nextPrompt, "padding"), callRow("fresh-call", "next-prompt", "fresh-read", freshInput),
+      resultRow("33333333-3333-4333-8333-333333333333", "fresh-call", "fresh-read", freshText), row(last, "33333333-3333-4333-8333-333333333333")]);
+    const messages = [prior, copiedCall, copiedResult, padding, nextPrompt, freshCall, freshResult, last];
+    const next = hook(path);
+    const output = await next.run({ trigger: "manual", messages });
+    expect(next.logs).toEqual([]);
+    expect(output.messages?.[0]?.text).not.toContain("[Earlier summary]");
+    const rebuilt = rebuildTranscript(messages, await readFile(path, "utf8"));
+    const oldBodies = rebuilt.flatMap(m => [...m.toolUses.filter(u => u.tool_use_id === "old-read" && u.text !== undefined).map(u => u.text),
+      ...(m.toolResults ?? []).filter(r => r.tool_use_id === "old-read").map(r => r.text)]);
+    expect(oldBodies).toContain(oldText);
+    expect(oldBodies.includes(stub)).toBe(false);
+    const transcript = await readFile(path, "utf8");
+    const mainMessages = [prior, { ...copiedCall, toolUses: [{ ...copiedCall.toolUses[0]!, text: oldText }] },
+      { ...copiedResult, toolResults: [{ ...copiedResult.toolResults![0]!, text: oldText }] },
+      padding, nextPrompt, freshCall, freshResult, last];
+    const mainText = transcript.replace(JSON.stringify(stub), JSON.stringify(oldText));
+    const main = compact(rebuildTranscript(mainMessages, mainText));
+    if (!("messages" in main)) throw new Error("expected main summary");
+    expect(output.messages?.[0]?.text).toBe(main.messages[0]!.text.replaceAll("22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111"));
+    const expected = compact(rebuilt);
+    if (!("messages" in expected)) throw new Error("expected rebuilt summary");
+    expect(output.messages?.[0]?.text).toBe(expected.messages[0]!.text);
+    expect(output.messages?.[0]?.text).not.toContain("Whole-file Read text removed");
+    expect(output.messages?.[0]?.text).toContain("FIRST-ORIGINAL-CONTENT");
+    // The copy contains only the stub; an excerpt must address the original row.
+    expect(output.messages?.[0]?.text).not.toContain("[entry 22222222-2222-4222-8222-222222222222] → ok: FIRST-ORIGINAL-CONTENT");
+    expect(output.messages?.[0]?.text).toContain("[entry 11111111-1111-4111-8111-111111111111] → ok: FIRST-ORIGINAL-CONTENT");
+    const resultRows = rebuilt.filter((m) => m.toolResults?.some((r) => r.tool_use_id === "old-read"));
+    expect(resultRows).toHaveLength(shape === "both" ? 2 : 1);
+    expect(resultRows.map((m) => m.handle ?? m.uuid)).toEqual(shape === "both" ? ["11111111-1111-4111-8111-111111111111", "11111111-1111-4111-8111-111111111111"] : ["11111111-1111-4111-8111-111111111111"]);
+    const { binding } = await recall(path, { query: "old.md" });
+    let expandArgs = { binding, entryIds: ["11111111-1111-4111-8111-111111111111"] };
+    let expanded = "";
+    for (;;) {
+      const page = await expand(path, expandArgs);
+      expanded += page.entries.map((entry) => entry.text).join("");
+      if (!page.next) break;
+      expandArgs = page.next as typeof expandArgs;
+    }
+    expect(expanded).toBe(`toolResult: ${oldText}`);
+    const freshStub = output.messages?.flatMap(m => m.toolResults ?? []).find(r => r.tool_use_id === "fresh-read")?.text;
+    expect(freshStub).toContain("Transcript entry: 33333333-3333-4333-8333-333333333333");
+
+    // Feed the second output back through a second physical kept copy.
+    const prior2 = { ...output.messages![0]!, handle: "summary2" };
+    const copy2Call: ClaudeMessage = { ...message("assistant", "", "copy2-call"), toolUses: [
+      { tool_use_id: "fresh-read", tool: "Read", input: freshInput, text: freshStub! },
+    ] };
+    const copy2Result: ClaudeMessage = { ...message("user", "", "44444444-4444-4444-8444-444444444444"),
+      toolResults: [{ tool_use_id: "fresh-read", text: freshStub!, isError: false }] };
+    const padding2 = message("user", `More work ${"z".repeat(70000)}`, "padding2");
+    const thirdPrompt = message("user", "Read the third guide.", "prompt3");
+    const thirdInput = { file_path: "docs/third.md" }, thirdText = "THIRD-ORIGINAL-CONTENT\n".repeat(1500);
+    const thirdCall: ClaudeMessage = { ...message("assistant", "", "call3"), toolUses: [
+      { tool_use_id: "third-read", tool: "Read", input: thirdInput, text: thirdText },
+    ] };
+    const thirdResult: ClaudeMessage = { ...message("user", "", "55555555-5555-4555-8555-555555555555"),
+      toolResults: [{ tool_use_id: "third-read", text: thirdText, isError: false }] };
+    const last3 = message("assistant", "Third read complete.", "last3");
+    const moreRows = [
+      { type: "system", subtype: "compact_boundary", uuid: "boundary2", parentUuid: null, logicalParentUuid: "last", compactMetadata: {} },
+      row(prior2, "boundary2"), callRow("copy2-call", "summary2", "fresh-read", freshInput),
+      resultRow("44444444-4444-4444-8444-444444444444", shape === "both" ? "copy2-call" : "fresh-call", "fresh-read", freshStub!),
+      row(padding2, "44444444-4444-4444-8444-444444444444"), row(thirdPrompt, "padding2"), callRow("call3", "prompt3", "third-read", thirdInput),
+      resultRow("55555555-5555-4555-8555-555555555555", "call3", "third-read", thirdText), row(last3, "55555555-5555-4555-8555-555555555555"),
+    ];
+    const transcript3 = transcript + moreRows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+    await writeFile(path, transcript3);
+    const current3 = [prior2, copy2Call, copy2Result, padding2, thirdPrompt, thirdCall, thirdResult, last3];
+    const thirdHook = hook(path);
+    const output3 = await thirdHook.run({ trigger: "manual", messages: current3 });
+    expect(thirdHook.logs).toEqual([]);
+    const mainText3 = transcript3.replaceAll(JSON.stringify(stub), JSON.stringify(oldText))
+      .replaceAll(JSON.stringify(freshStub), JSON.stringify(freshText));
+    const mainMessages3 = [prior2, { ...copy2Call, toolUses: [{ ...copy2Call.toolUses[0]!, text: freshText }] },
+      { ...copy2Result, toolResults: [{ ...copy2Result.toolResults![0]!, text: freshText }] },
+      padding2, thirdPrompt, thirdCall, thirdResult, last3];
+    const main3 = compact(rebuildTranscript(mainMessages3, mainText3));
+    if (!("messages" in main3)) throw new Error("expected third main summary");
+    expect(output3.messages?.[0]?.text).toBe(main3.messages[0]!.text
+      .replaceAll("22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111").replaceAll("44444444-4444-4444-8444-444444444444", "33333333-3333-4333-8333-333333333333"));
+    expect(output3.messages?.[0]?.text).not.toContain("Whole-file Read text removed");
+    expect(output3.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "third-read")?.text)
+      .toContain("Transcript entry: 55555555-5555-4555-8555-555555555555");
+  });
+});
+
+test("a genuine fallback honestly summarizes a stub before transcript resolution", async () => {
+  const stub = buildKeptReadStub("docs/old.md", "original-result", 33000);
+  const call: ClaudeMessage = { ...message("assistant", "", "copied-call"), toolUses: [
+    { tool_use_id: "old-read", tool: "Read", input: { file_path: "docs/old.md" }, text: stub },
+  ] };
+  const result: ClaudeMessage = { ...message("user", "", "copied-result"),
+    toolResults: [{ tool_use_id: "old-read", text: stub, isError: false }] };
+  const event: Event = { trigger: "manual", messages: [message("user", "[Fabric summary]\nEarlier.", "summary"),
+    call, result, message("user", `New work ${"x".repeat(80000)}`, "last")] };
+  const carried = compact(event.messages);
+  if (!("messages" in carried)) throw new Error("expected carry");
+  const h = hook("");
+  const fallback = await h.run(event);
+  expect(fallback).toEqual(carried);
+  expect(h.logs[0]).toContain("no transcript path");
+  expect(fallback.messages![0]!.text.split("\n").find((line) => line.includes("Whole-file Read text removed")))
+    .toBe("[entry copied-result] → ok: [Whole-file Read text removed: 33000 UTF-8 bytes] [3 lines, 163 chars cut; history.expand]");
+});
+
+test("a genuine rebuild conflict carries the unchanged result without stubbing", async () => {
   await inProject(async (dir) => {
     const path = join(dir, "recorded-conflict.jsonl");
     const prior = message("user", "[Fabric summary]\nEarlier work.", "summary");
@@ -202,8 +353,8 @@ test("a rebuild conflict still stubs a verified Read in the carried tail", async
     expect(h.logs[0]).toContain("conflicting tool outcome id");
     expect(output.messages?.[0]?.text).toBe(carried.messages[0]!.text);
     const kept = output.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "fresh-read");
-    expect(kept?.text).toContain("Transcript entry: result");
-    expect(kept?.text.length).toBeLessThan(1024);
+    expect(kept?.text).toBe(text);
+    expect(kept?.text.length).toBeGreaterThan(1024);
     const { binding } = await recall(path, { query: "guide" });
     let args = { binding, entryIds: ["result"] };
     let recovered = "";

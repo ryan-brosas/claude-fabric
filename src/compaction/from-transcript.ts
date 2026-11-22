@@ -4,7 +4,7 @@ import { isFabricSummary } from "./compact.ts";
 import { exitCodeOf, hasOutcome, inlineOutcome, normalizeMessages, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "./from-claude.ts";
 import { outcomeRestoration } from "./verified/generated/outcome-restoration.js";
 import { acceptRestorePosition } from "./verified/restore-order.ts";
-import { outcomeConservationProblem } from "./outcome-conservation.ts";
+import { outcomeConservationProblem, outcomeResolver, resolveMessageOutcomes, resolveTranscriptOutcomes } from "./outcome-conservation.ts";
 import { restoreSiblings } from "./restore-siblings.ts";
 import { fromTranscript } from "./transcript-row.ts";
 export { fromTranscript } from "./transcript-row.ts";
@@ -118,11 +118,18 @@ function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, joi
   return sameCurrentOrder(current, output, deficits) ? output : rebuilt;
 }
 
-/** Rebuild only before the first current handle found on the active chain. */
-export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
+/** Rebuild before the first current handle on the active chain, resolving outcomes once. */
+export function rebuildTranscriptView(messages: readonly ClaudeMessage[], text: string): {
+  messages: ClaudeMessage[]; current: ClaudeMessage[]; originals: Map<ClaudeMessage, ClaudeMessage>; rows: ReadonlyMap<string, TranscriptRow>;
+} {
   const summary = messages.findIndex(isFabricSummary);
   if (summary < 0) throw new Error("fabric: no earlier Fabric summary to rebuild");
-  const { chain, rows } = transcriptChain(text);
+  const parsed = transcriptChain(text);
+  const resolve = outcomeResolver(parsed.rows, messages);
+  const { rows, addresses } = resolveTranscriptOutcomes(parsed.rows, resolve);
+  const chain = parsed.chain.map((row) => rows.get(string(row.uuid)) ?? row);
+  const current = resolveMessageOutcomes(messages, resolve);
+  const originals = new Map(current.map((message, index) => [message, messages[index]!]));
   const positions = new Map<string, number>();
   chain.forEach((row, index) => {
     if ((row.type === "user" || row.type === "assistant") && typeof row.uuid === "string") positions.set(row.uuid, index);
@@ -130,8 +137,11 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
   const join = messages.findIndex((message, index) => index > summary && !!message.handle && positions.has(message.handle));
   if (join < 0) throw new Error("fabric: no current message handle joins the transcript chain");
   const chainEnd = positions.get(messages[join]!.handle!)!;
-  const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join));
-  const prefix = historical.rows.map(fromTranscript).filter((message) => !isFabricSummary(message)).map((message) => ({
+  const historical = restoreSiblings(chain, rows, chainEnd, current.slice(join));
+  const prefix = historical.rows.map((row) => {
+    const message = fromTranscript(row), address = addresses.get(string(row.uuid));
+    return address ? { ...message, handle: address } : message;
+  }).filter((message) => !isFabricSummary(message)).map((message) => ({
     ...message, toolUses: message.toolUses.map((use) => {
       const row = historical.pairs.get(message.uuid ?? "")?.get(use.tool_use_id);
       if (!row) return use;
@@ -142,13 +152,16 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
         ...(outcome.result === undefined ? {} : { result: outcome.result }) };
     }),
   }));
-  const rebuilt = [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
+  const rebuilt = [...prefix, ...current.slice(join).filter((message) => !isFabricSummary(message))];
   const originalPrefix = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant");
-  const output = restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain, originalPrefix);
-  const originalCount = originalPrefix.length;
-  if (historical.pairs.size || historical.rows.length > originalCount || output.length > rebuilt.length) {
-    const problem = outcomeConservationProblem(messages, output);
+  const output = restoreOutcomes(current, summary, join, prefix.length, rebuilt, chain, originalPrefix);
+  if (historical.pairs.size || historical.rows.length > originalPrefix.length || output.length > rebuilt.length) {
+    const problem = outcomeConservationProblem(current, output);
     if (problem) throw new Error(problem);
   }
-  return output;
+  return { messages: output, current, originals, rows: parsed.rows };
+}
+
+export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
+  return rebuildTranscriptView(messages, text).messages;
 }

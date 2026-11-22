@@ -42,11 +42,12 @@ export const outcomeConservation = /* @__PURE__ */ (() => {
 // Generated from the machine outcome conservation. step consumes its state: keep the one it returns (fork to branch).
 function init(params) {
   const env = {}, s = {};
-  return {scalars: {"out.accepted": 0}, maps: {}};
+  return {scalars: {"out.accepted": 0, "out.verified": 0, "out.same": 0}, maps: {}};
 }
 function step(params, state, input) {
-  const env = {"required": $n(input["required"], "input required"), "available": $n(input["available"], "input available")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
-  const scalars = {...s, "out.accepted": ((env["required"] <= env["available"]) ? 1 : 0)};
+  const env = {"required": $n(input["required"], "input required"), "available": $n(input["available"], "input available"), "entryFound": $n(input["entryFound"], "input entryFound"), "sameId": $n(input["sameId"], "input sameId"), "bytesEqual": $n(input["bytesEqual"], "input bytesEqual"), "stubEqual": $n(input["stubEqual"], "input stubEqual"), "sameText": $n(input["sameText"], "input sameText"), "verifiedLeft": $n(input["verifiedLeft"], "input verifiedLeft"), "verifiedRight": $n(input["verifiedRight"], "input verifiedRight"), "originalsEqual": $n(input["originalsEqual"], "input originalsEqual")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["entryFound"] <= 1) && (env["sameId"] <= 1) && (env["bytesEqual"] <= 1) && (env["stubEqual"] <= 1) && (env["sameText"] <= 1) && (env["verifiedLeft"] <= 1) && (env["verifiedRight"] <= 1) && (env["originalsEqual"] <= 1))) throw new RangeError("outcome conservation: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.accepted": ((env["required"] <= env["available"]) ? 1 : 0), "out.verified": (((((env["entryFound"] === 1) && (env["sameId"] === 1)) && (env["bytesEqual"] === 1)) && (env["stubEqual"] === 1)) ? 1 : 0), "out.same": (((env["sameText"] === 1) || (((env["verifiedLeft"] === 1) || (env["verifiedRight"] === 1)) && (env["originalsEqual"] === 1))) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };

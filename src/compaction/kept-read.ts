@@ -4,7 +4,7 @@
 import { utf8Bytes } from "./bounds.ts";
 import type { ClaudeMessage, ClaudeToolUse } from "./from-claude.ts";
 import { keptReadStub } from "./verified/generated/kept-read-stub.js";
-import { parseTranscript } from "../recall/transcript.ts";
+import { entryText, transcriptChain, type TranscriptRow } from "../recall/transcript.ts";
 
 export const READ_STUB_THRESHOLD = 16_384;
 export const READ_STUB_MAX_BYTES = 1_024;
@@ -12,12 +12,16 @@ export const READ_STUB_MAX_BYTES = 1_024;
 type RecordValue = Record<string, unknown>;
 const obj = (value: unknown): RecordValue => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
 const blocks = (row: RecordValue): unknown[] => Array.isArray(obj(row.message).content) ? obj(row.message).content as unknown[] : [];
-const textOf = (content: unknown): string | undefined => {
+export const textOf = (content: unknown): string | undefined => {
   if (typeof content === "string") return content;
   if (!Array.isArray(content) || !content.every((item) => obj(item).type === "text" && typeof obj(item).text === "string"
     && Object.keys(obj(item)).every((key) => key === "type" || key === "text"))) return undefined;
   return content.map((item) => obj(item).text as string).join("\n");
 };
+
+/** The exact public stub format, shared by the writer and transcript verifier. */
+export const buildKeptReadStub = (path: string, entryId: string, bytes: number): string =>
+  `[Whole-file Read text removed: ${bytes} UTF-8 bytes]\nFile: ${JSON.stringify(path)}\nTranscript entry: ${entryId}\nRead the file again with Read, or use history.expand with this entry id (get a binding from history.recall).`;
 
 interface Candidate { message: ClaudeMessage; use: ClaudeToolUse; callHandle: string; id: string; path: string; original: number; text: string }
 
@@ -56,7 +60,7 @@ function candidates(messages: readonly ClaudeMessage[]): Candidate[] {
     if (typeof path !== "string" || !path || Object.keys(use.input).some((key) => key !== "file_path" && key !== "allow_large")
       || ("allow_large" in use.input && typeof use.input.allow_large !== "boolean")) continue;
     const original = utf8Bytes(result.text);
-    const text = `[Whole-file Read text removed: ${original} UTF-8 bytes]\nFile: ${JSON.stringify(path)}\nTranscript entry: ${message.handle}\nRead the file again with Read, or use history.expand with this entry id (get a binding from history.recall).`;
+    const text = buildKeptReadStub(path, message.handle, original);
     const candidate = { message, use, callHandle, id: message.handle, path, original, text };
     // Verification has not happened yet; only the size prefilter is read here.
     if (decision(candidate, false, false)["out.consider"] === 1) found.push(candidate);
@@ -67,30 +71,23 @@ function candidates(messages: readonly ClaudeMessage[]): Candidate[] {
 export const hasKeptReadCandidate = (messages: readonly ClaudeMessage[]): boolean => candidates(messages).length > 0;
 
 /** Only rebuild a row once raw transcript blocks rule out hidden images and other content. */
-export function stubKeptReads(messages: readonly ClaudeMessage[], transcript: string): ClaudeMessage[] {
+export function stubKeptReads(messages: readonly ClaudeMessage[], transcript: string | ReadonlyMap<string, TranscriptRow>): ClaudeMessage[] {
   const planned = candidates(messages);
   if (!planned.length) return [...messages];
-  // expand resolves only parseable, non-sidechain transcript entries.
-  const parsed = parseTranscript(transcript);
-  const needed = new Set(planned.flatMap((item) => [item.id, item.callHandle]));
-  const rows = new Map<string, RecordValue>();
-  for (const line of transcript.split("\n")) {
-    if (!line.trim()) continue;
-    const row = obj(JSON.parse(line));
-    if (row.isSidechain === true || typeof row.uuid !== "string" || !needed.has(row.uuid)) continue;
-    rows.set(row.uuid, row);
-  }
+  // The rebuild already parsed and validated these physical non-sidechain rows.
+  // For an initial compaction, validate the transcript once here instead.
+  const rows = typeof transcript === "string" ? transcriptChain(transcript).rows : transcript;
   const replacements = new Map<ClaudeMessage, string>();
   for (const candidate of planned) {
     const { id, callHandle, use, message, text } = candidate;
     const row = rows.get(id), call = rows.get(callHandle);
     const callBlocks = blocks(call ?? {}).map(obj).filter((b) => b.type === "tool_use" && b.id === use.tool_use_id);
-    const verifiedCall = !!call && call.type === "assistant" && callBlocks.length === 1 && callBlocks[0]!.name === "Read"
+    const verifiedCall = !!call && call.isSidechain !== true && call.type === "assistant" && callBlocks.length === 1 && callBlocks[0]!.name === "Read"
       && JSON.stringify(callBlocks[0]!.input) === JSON.stringify(use.input);
     const contents = blocks(row ?? {}), block = obj(contents[0]), result = message.toolResults![0]!;
-    const entry = parsed.byId.get(id);
+    const entry = row ? entryText(row) : undefined;
     const record = obj(row?.toolUseResult), file = obj(record.file);
-    const recoverable = !!row && row.type === "user" && contents.length === 1
+    const recoverable = !!row && row.isSidechain !== true && row.type === "user" && contents.length === 1
       && entry?.kind === "tool_result" && entry.text === `toolResult: ${result.text}`
       && block.type === "tool_result" && block.tool_use_id === result.tool_use_id && block.is_error !== true
       && textOf(block.content) === result.text
