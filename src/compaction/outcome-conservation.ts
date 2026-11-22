@@ -41,7 +41,7 @@ export function outcomeResolver(rows: ReadonlyMap<string, TranscriptRow>, messag
     const unchanged = { original: text };
     if (isError || !readStubMayFit(text.length)) return unchanged;
     // Captures are only lookup hints. Acceptance compares the complete rebuilt string.
-    const match = /^\[[^\n]*: (\d+) UTF-8 bytes\.[^\n]*\]\nFile: (.+)\nTranscript entry: ([^\r\n]+)\nSHA-256: ([a-f0-9]{64})\n/.exec(text);
+    const match = /^\[[^\n]*: (\d+) UTF-8 bytes\.[^\n]*\]\nFile: ([^\r\n]+)\nTranscript entry: ([^\r\n]+)\nSHA-256: ([a-f0-9]{64})\n/.exec(text);
     if (!match) return unchanged;
     let path: unknown;
     try { path = JSON.parse(match[2]!); } catch { return unchanged; }

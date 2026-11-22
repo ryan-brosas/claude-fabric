@@ -54,6 +54,35 @@ test("the stub byte cap accepts the boundary and refuses one byte over", () => {
   expect(unicode.resolved).toEqual({ original: unicode.stub });
 });
 
+test.each([
+  ["U+2028 path", "docs/a\u2028b.md", "source"],
+  ["U+2029 path", "docs/a\u2029b.md", "source"],
+  ["carriage-return path", "docs/a\rb.md", "source"],
+  ["line-feed path", "docs/a\nb.md", "source"],
+  ["U+2028 entry", "docs/guide.md", "source\u2028entry"],
+  ["U+2029 entry", "docs/guide.md", "source\u2029entry"],
+])("writer and resolver round-trip %s", (_name, path, entry) => {
+  const original = "x".repeat(32_000), id = "read-id", input = { file_path: path };
+  const call = { ...assistant({ tool_use_id: id, tool: "Read", input }), handle: "call" };
+  const answer = { ...user(result(id, original)), handle: entry };
+  const rows = new Map<string, TranscriptRow>([
+    ["call", { type: "assistant", uuid: "call", message: { content: [
+      { type: "tool_use", id, name: "Read", input },
+    ] } }],
+    [entry, { type: "user", uuid: entry, toolUseResult: { type: "text", file: { startLine: 1, numLines: 1, totalLines: 1 } },
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: original }] } }],
+  ]);
+  const stub = stubKeptReads([user(), call, answer], rows)[2]!.toolResults![0]!.text;
+  expect(stub).toBe(buildKeptReadStub(path, entry, original));
+  expect(Buffer.byteLength(stub)).toBeLessThanOrEqual(READ_STUB_MAX_BYTES);
+  expect(stub).toContain(`\nFile: ${JSON.stringify(path)}\n`);
+  if (path.includes("\r")) expect(stub).not.toContain("\r");
+  if (path.includes("\n")) expect(stub.split("\n")).toHaveLength(5);
+  const resolve = outcomeResolver(rows, []);
+  expect(resolve(id, stub)).toEqual({ original, entryId: entry });
+  expect(resolve(id, stub + "!")).toEqual({ original: stub + "!" });
+});
+
 test("only an exact stub with the original non-sidechain result resolves", () => {
   const original = "multi-byte é\n".repeat(2_000), path = "docs/a\"quoted.md", id = "a", entry = "source";
   const stub = buildKeptReadStub(path, entry, original);
