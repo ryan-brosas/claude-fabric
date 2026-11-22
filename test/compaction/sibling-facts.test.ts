@@ -5,7 +5,17 @@ import { hasOutcome, type ClaudeMessage } from "../../src/compaction/from-claude
 import { rebuildTranscript } from "../../src/compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 import { restoreSiblings, siblingContext, siblingGroupFacts, siblingPairFacts } from "../../src/compaction/restore-siblings.ts";
+import { siblingOwner } from "../../src/compaction/verified/generated/sibling-restoration.js";
 
+test("round5 opaque attribution admits exactly one distinct identity", () => {
+  const verdict = (candidates: number, seen = 0, same = 0) =>
+    siblingOwner.step({}, siblingOwner.init({}), { candidates, seen, same }).scalars["out.admitted"];
+  expect(verdict(0)).toBe(0);
+  expect(verdict(1)).toBe(1);
+  expect(verdict(2)).toBe(0);
+  expect(verdict(1, 1, 1)).toBe(1);
+  expect(verdict(1, 1, 0)).toBe(0);
+});
 type Fixture = { rows: TranscriptRow[]; current: ClaudeMessage[] };
 const content = (row: TranscriptRow): Record<string, unknown>[] => {
   const message = row.message as { content?: unknown } | undefined;

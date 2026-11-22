@@ -1,7 +1,8 @@
 // Recover historical siblings only with transcript message, request, ancestry,
 // block index and result-source evidence. A compact boundary starts a new epoch.
 import type { TranscriptRow } from "../recall/transcript.ts";
-import { hasOutcome, inlineOutcome, type ClaudeMessage } from "./from-claude.ts";
+import { hasOutcome, inlineOutcome, sameToolClaim, type ClaudeMessage, type ClaudeToolResult, type ClaudeToolUse } from "./from-claude.ts";
+import { fromTranscript } from "./transcript-row.ts";
 import { siblingGroup, siblingOrder, siblingOwner, siblingPair } from "./verified/generated/sibling-restoration.js";
 
 type Indexed = { row: TranscriptRow; position: number; epoch: number };
@@ -171,37 +172,35 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
     const list = possible.get(id) ?? [];
     list.push(item.row); possible.set(id, list);
   }
-  const owners = new Map<string, string>();
-  const outcomes = new Map<string, string>();
-  const details = new Map<string, string>();
+  const owners = new Map<string, TranscriptRow>();
+  const outcomes = new Map<string, { call: ClaudeToolUse; outcome: ClaudeToolResult }>();
   const inline = new Set(tail.flatMap((message) => message.toolUses.filter(hasOutcome).map((use) => use.tool_use_id)));
-  const compare = (map: Map<string, string>, id: string, signature: string): void => {
-    const prior = map.get(id);
-    admitted(siblingOwner.step({}, siblingOwner.init({}), {
-      seen: Number(prior !== undefined), same: Number(prior === signature),
-    }));
-    map.set(id, signature);
+  const callOf = (row: TranscriptRow, id: string): ClaudeToolUse =>
+    fromTranscript(row).toolUses.find((use) => use.tool_use_id === id) ?? refusal();
+  const sameOwner = (a: TranscriptRow, b: TranscriptRow, id: string): boolean =>
+    messageId(a) === messageId(b) && a.requestRef === b.requestRef && a.apiBlockIndex === b.apiBlockIndex
+      && sameToolClaim({ call: callOf(a, id) }, { call: callOf(b, id) });
+  const compare = (seen: boolean, same: boolean, candidates = 1): void => {
+    admitted(siblingOwner.step({}, siblingOwner.init({}), { seen: Number(seen), same: Number(same), candidates }));
   };
-  const signature = (row: TranscriptRow, id: string): string => JSON.stringify([messageId(row), row.requestRef, row.apiBlockIndex,
-    blocks(row).filter((block) => block.type === "tool_use" && block.id === id)]);
   const claim = (row: TranscriptRow, id: string): void => {
-    if (relevant.has(id)) compare(owners, id, signature(row, id));
-  };
-  const claimOutcome = (id: string, text: string, isError: boolean, result: unknown): void => {
     if (!relevant.has(id)) return;
-    compare(outcomes, id, JSON.stringify([text, isError]));
-    // A hook can omit structured metadata supplied by the transcript. Two
-    // present but different details still identify conflicting outcomes.
-    if (result != null) compare(details, id, JSON.stringify(result));
+    const previous = owners.get(id);
+    compare(previous !== undefined, previous !== undefined && sameOwner(previous, row, id));
+    owners.set(id, row);
+  };
+  const claimOutcome = (outcome: ClaudeToolResult): void => {
+    const id = outcome.tool_use_id;
+    if (!relevant.has(id)) return;
+    const row = owners.get(id);
+    if (!row) return refusal();
+    const claim = { call: callOf(row, id), outcome };
+    const previous = outcomes.get(id);
+    compare(previous !== undefined, previous !== undefined && sameToolClaim(previous, claim));
+    outcomes.set(id, claim);
   };
   const claimRowOutcome = (row: TranscriptRow, id: string): void => {
-    for (const block of blocks(row)) if (block.type === "tool_result" && block.tool_use_id === id) {
-      const content = block.content;
-      const text = typeof content === "string" ? content : Array.isArray(content)
-        ? content.map(object).filter((part) => part.type === "text")
-          .map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";
-      claimOutcome(id, text, block.is_error === true, row.toolUseResult);
-    }
+    for (const result of fromTranscript(row).toolResults ?? []) if (result.tool_use_id === id) claimOutcome(result);
   };
   const claimSource = (row: TranscriptRow, id: string): void => {
     if (!relevant.has(id) || typeof row.sourceToolAssistantUUID !== "string") return;
@@ -226,20 +225,23 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
     const row = ctx.byUuid.get(message.handle ?? message.uuid)?.row;
     for (const use of message.toolUses) {
       if (!relevant.has(use.tool_use_id)) continue;
-      const matches = (candidate: TranscriptRow): boolean => blocks(candidate).some((block) =>
-        block.type === "tool_use" && block.id === use.tool_use_id && block.name === use.tool
-        && JSON.stringify(block.input ?? {}) === JSON.stringify(use.input ?? {}));
-      const candidates = row ? [row].filter(matches) : (possible.get(use.tool_use_id) ?? []).filter(matches);
-      if (!candidates.length || new Set(candidates.map((candidate) => signature(candidate, use.tool_use_id))).size !== 1) return refusal();
-      claim(candidates[0]!, use.tool_use_id);
-      if (hasOutcome(use)) {
-        const outcome = inlineOutcome(use);
-        claimOutcome(use.tool_use_id, outcome.text, outcome.isError, outcome.result);
+      const id = use.tool_use_id;
+      const matches = (candidate: TranscriptRow): boolean => uses(candidate).includes(id)
+        && sameToolClaim({ call: callOf(candidate, id) }, { call: use });
+      const candidates = row ? [row].filter(matches) : (possible.get(id) ?? []).filter(matches);
+      const distinct: TranscriptRow[] = [];
+      for (const candidate of candidates) {
+        if (!distinct.some((other) => sameOwner(other, candidate, id))) distinct.push(candidate);
       }
+      compare(false, false, distinct.length);
+      const owner = distinct[0];
+      if (!owner) return refusal();
+      claim(owner, id);
+      if (hasOutcome(use)) claimOutcome({ tool_use_id: id, ...inlineOutcome(use) });
     }
     for (const result of message.toolResults ?? []) {
       if (row) claimSource(row, result.tool_use_id);
-      if (!inline.has(result.tool_use_id)) claimOutcome(result.tool_use_id, result.text, result.isError, result.result);
+      if (!inline.has(result.tool_use_id)) claimOutcome(result);
     }
   }
 }
@@ -249,7 +251,6 @@ export function restoreSiblings(chain: TranscriptRow[], rows: Map<string, Transc
   const ctx = siblingContext(chain, rows, chainEnd, tail);
   const additions = new Map<string, Indexed>();
   const pairs = new Map<string, Map<string, TranscriptRow>>();
-  const owners = new Map<string, string>();
   const handled = new Set<string>();
   const groups: { same: Indexed[]; bucket: Bucket }[] = [];
   for (const row of ctx.prefix) {
@@ -269,15 +270,6 @@ export function restoreSiblings(chain: TranscriptRow[], rows: Map<string, Transc
     for (const item of group.same) for (const call of uses(item.row)) {
       const plan = planCall(ctx, group.bucket, item, call);
       if (!plan) continue;
-      const signature = JSON.stringify([messageId(item.row), item.row.requestRef, item.row.apiBlockIndex,
-        blocks(item.row).filter((block) => block.type === "tool_use" && block.id === call),
-        blocks(plan.result).filter((block) => block.type === "tool_result" && block.tool_use_id === call),
-        plan.result.toolUseResult]);
-      const owner = owners.get(call);
-      admitted(siblingOwner.step({}, siblingOwner.init({}), {
-        seen: Number(owner !== undefined), same: Number(owner === signature),
-      }));
-      owners.set(call, signature);
       const uuid = item.row.uuid as string;
       const rowPairs = pairs.get(uuid) ?? new Map<string, TranscriptRow>();
       if (rowPairs.has(call)) refusal();

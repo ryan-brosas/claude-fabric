@@ -7,7 +7,7 @@ type Bug = "empty group" | "invalid prefix count" | "no anchor" | "missing metad
   "duplicate call" | "duplicate result" | "wrong source" | "orphan result" | "duplicate existing" | "duplicate outcome" |
   "missing call before result" | "wrong insertion" | "refuse valid pair" | "refuse valid group" | "reorder neighbor" |
   "cross existing" | "result before call" | "refuse valid order" | "cover wrong call" | "refuse covered call" |
-  "ignore owner conflict" | "refuse matching owner" | "refuse fresh owner" | "use unowned counts";
+  "ignore owner conflict" | "refuse matching owner" | "refuse fresh owner" | "use unowned counts" | "admit two owners";
 
 const group = (bug?: Bug) => fun("sibling group")
   .inputs({ anchored: bool, rows: nat, metadata: nat, requests: nat, indices: nat, connected: nat })
@@ -40,10 +40,11 @@ const pair = (bug?: Bug) => fun("sibling pair")
   });
 
 const owner = (bug?: Bug) => fun("sibling owner")
-  .inputs({ seen: bool, same: bool })
-  .returns((x) => ({ admitted: bug === "ignore owner conflict" ? x.seen.or(x.seen.not())
-    : bug === "refuse matching owner" ? x.seen.not() : bug === "refuse fresh owner" ? x.seen.and(x.same)
-      : x.seen.not().or(x.same) }));
+  .inputs({ seen: bool, same: bool, candidates: nat })
+  .returns((x) => ({ admitted: (bug === "admit two owners" ? x.candidates.atMost(2).and(x.candidates.gt(0)) : x.candidates.eq(1))
+    .and(bug === "ignore owner conflict" ? x.seen.or(x.seen.not())
+      : bug === "refuse matching owner" ? x.seen.not() : bug === "refuse fresh owner" ? x.seen.and(x.same)
+        : x.seen.not().or(x.same)) }));
 
 const order = (bug?: Bug) => fun("sibling insertion order")
   .inputs({ previous: nat, position: nat, next: nat, misplaced: nat, callPosition: nat, resultPosition: nat })
@@ -89,8 +90,9 @@ export const siblingRestorationKernels = (bug?: Bug): Kernel[] => {
         x.existing.gt(0).or(x.baseCalls.eq(0)).or(x.prefixCalls.gt(0)))], (a) => a.admitted),
     ] },
     { id: "siblingOwner", fun: w, decisions: [
-      w.law("fresh: an unseen id is admitted", () => [], (a, x) => x.seen.not().implies(a.admitted)),
-      w.law("copy: the same owner is admitted", () => [], (a, x) => x.seen.and(x.same).implies(a.admitted)),
+      w.law("unique_candidate: an admitted claim has exactly one identity", () => [], (a, x) => a.admitted.implies(x.candidates.eq(1))),
+      w.law("fresh: an unseen id is admitted", () => [], (a, x) => x.candidates.eq(1).and(x.seen.not()).implies(a.admitted)),
+      w.law("copy: the same owner is admitted", () => [], (a, x) => x.candidates.eq(1).and(x.seen).and(x.same).implies(a.admitted)),
       w.law("conflict: a different owner is refused", () => [], (a, x) => x.seen.and(x.same.not()).implies(a.admitted.not())),
     ] },
     { id: "siblingOrder", fun: o, decisions: [
@@ -106,4 +108,4 @@ export const siblingRestorationKernels = (bug?: Bug): Kernel[] => {
 export const SIBLING_RESTORATION_BUGS: Bug[] = ["empty group", "invalid prefix count", "no anchor", "missing metadata", "different request", "duplicate block", "unconnected",
   "duplicate call", "duplicate result", "wrong source", "orphan result", "duplicate existing", "duplicate outcome", "missing call before result",
   "wrong insertion", "refuse valid pair", "refuse valid group", "reorder neighbor", "cross existing", "result before call", "refuse valid order",
-  "cover wrong call", "refuse covered call", "ignore owner conflict", "refuse matching owner", "refuse fresh owner", "use unowned counts"];
+  "cover wrong call", "refuse covered call", "ignore owner conflict", "refuse matching owner", "refuse fresh owner", "use unowned counts", "admit two owners"];

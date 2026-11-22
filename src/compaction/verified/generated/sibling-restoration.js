@@ -75,9 +75,9 @@ function init(params) {
   return {scalars: {"out.admitted": 0}, maps: {}};
 }
 function step(params, state, input) {
-  const env = {"seen": $n(input["seen"], "input seen"), "same": $n(input["same"], "input same")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  const env = {"seen": $n(input["seen"], "input seen"), "same": $n(input["same"], "input same"), "candidates": $n(input["candidates"], "input candidates")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
   if (!((env["seen"] <= 1) && (env["same"] <= 1))) throw new RangeError("sibling owner: the request fails the rule's assumption, so no proof covers the step it would take");
-  const scalars = {...s, "out.admitted": (((!(env["seen"] === 1)) || (env["same"] === 1)) ? 1 : 0)};
+  const scalars = {...s, "out.admitted": (((env["candidates"] === 1) && ((!(env["seen"] === 1)) || (env["same"] === 1))) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };
