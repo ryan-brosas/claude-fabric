@@ -6,6 +6,7 @@ import { outcomeConservationProblem } from "../../src/compaction/outcome-conserv
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
 import { normalizeMessages } from "../../src/compaction/from-claude.ts";
 import { projectOutstanding } from "../../src/compaction/projections.ts";
+import { restoreSiblings } from "../../src/compaction/restore-siblings.ts";
 
 test("transcript rows preserve Claude text, tool uses, results and errors for the compactor", () => {
   const user = fromTranscript({ type: "user", uuid: "u1", message: { content: "Read the note." } });
@@ -384,6 +385,99 @@ test("ambiguous same-message calls or outcomes are refused", () => {
     expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
   }
 });
+
+test("round3 cross-epoch conflicting owners are refused rather than mispaired", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `a${epoch}`, b = `b${epoch}`, ra = `ra${epoch}`, rb = `rb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, `message${epoch}`), requestRef: `req${epoch}`, apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", `message${epoch}`), requestRef: `req${epoch}`, apiBlockIndex: 1 },
+      { ...resultRow(rb, b, "shared", epoch ? "NEW" : "OLD"), sourceToolAssistantUUID: b },
+      { ...resultRow(ra, a, `anchor${epoch}`, `A${epoch}`), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" },
+    ...group(1, "boundary"), promptRow("joined", "ra1")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round3 identical cross-epoch physical copies are not refused", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `ca${epoch}`, b = `cb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", "same-message"), requestRef: "same-request", apiBlockIndex: 1 },
+      { ...resultRow(`crb${epoch}`, b, "shared", "SAME"), sourceToolAssistantUUID: b },
+      { ...resultRow(`cra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "cra0" },
+    ...group(1, "boundary"), promptRow("joined", "cra1")];
+  const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows));
+  expect(rebuilt.find((message) => message.uuid === "cb0")?.toolUses[0]?.text).toBe("SAME");
+  expect(rebuilt.find((message) => message.uuid === "cb1")?.toolUses[0]?.text).toBe("SAME");
+});
+test("round3 cross-epoch copies with different structured outcomes are refused", () => {
+  const group = (epoch: number, parent: string) => {
+    const a = `sa${epoch}`, b = `sb${epoch}`;
+    return [
+      { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
+      { ...callRow(b, a, "shared", "same-message"), requestRef: "same-request", apiBlockIndex: 1 },
+      { ...resultRow(`srb${epoch}`, b, "shared", "SAME"), sourceToolAssistantUUID: b, toolUseResult: { data: epoch } },
+      { ...resultRow(`sra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
+    ];
+  };
+  const rows = [promptRow("start", null), ...group(0, "start"),
+    { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "sra0" },
+    ...group(1, "boundary"), promptRow("joined", "sra1")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows))).toThrow("ambiguous");
+});
+test("round3 duplicate tool id twice in one off-chain row is refused", () => {
+  const { rows, current } = siblingFixture();
+  const message = rows[2]!.message as { content: object[] };
+  message.content.push({ ...message.content[0] });
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round3 late historical result does not disable terminal restoration", () => {
+  const { rows } = siblingFixture();
+  rows.pop();
+  rows.push(callRow("c", "ra", "call-c", "terminal"), callRow("d", "c", "call-d", "terminal"),
+    resultRow("result-c", "c", "call-c", "C"), resultRow("result-d", "d", "call-d", "D"));
+  rows.splice(rows.findIndex((r) => r.uuid === "result-c"), 0, rows.splice(rows.findIndex((r) => r.uuid === "rb"), 1)[0]!);
+  const current = [summary, resultMessage("result-c", "call-c", "C"), resultMessage("result-d", "call-d", "D")];
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(rebuilt.some((message) => message.uuid === "rb")).toBe(true);
+  expect(rebuilt.some((message) => message.handle === "result-c")).toBe(true);
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+});
+
+test("round3 outcomes straddling join still rebuild", () => {
+  const a = { ...callRow("a", "start", "a", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "b", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const off = { ...resultRow("off", "a", "a", "A"), sourceToolAssistantUUID: "a" };
+  const joined = { ...resultRow("joined", "b", "b", "B"), sourceToolAssistantUUID: "b" };
+  const current = [summary, resultMessage("off", "a", "A"), resultMessage("joined", "b", "B")];
+  const rebuilt = rebuildTranscript(current, transcript(promptRow("start", null), a, b, off, joined));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(normalizeMessages(rebuilt).filter((x) => x.kind === "toolResult").map((x) => x.toolCallId)).toEqual(["a", "b"]);
+});
+
+test("round3 ten thousand ordinary calls avoid quadratic scanning", () => {
+  const count = 10_000;
+  const rows = Array.from({ length: count }, (_, i) =>
+    ({ ...callRow(`call${i}`, i ? `call${i - 1}` : "start", `id${i}`, `msg${i}`), requestRef: `req${i}`, apiBlockIndex: 0 }));
+  const chain = [promptRow("start", null), ...rows, promptRow("joined", `call${count - 1}`)];
+  const map = new Map(chain.map((row) => [row.uuid, row]));
+  const start = performance.now();
+  const restored = restoreSiblings(chain, map, chain.length - 1, [userMessage("joined", "next")]);
+  const elapsed = performance.now() - start;
+  expect(restored.rows).toEqual(chain.slice(0, -1));
+  expect(restored.pairs.size).toBe(0);
+  expect(elapsed).toBeLessThan(1000);
+}, 30000);
 
 test("sidechain and different-message abandoned branches are not imported", () => {
   for (const kind of ["sidechain", "abandoned"] as const) {

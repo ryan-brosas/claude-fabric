@@ -3,4 +3,5 @@ export interface MachineState { scalars: Record<string, number>; maps: Record<st
 export interface Machine { init(params: object): MachineState; step(params: object, state: MachineState, input: object): MachineState }
 export declare const siblingGroup: Machine;
 export declare const siblingPair: Machine;
+export declare const siblingOwner: Machine;
 export declare const siblingOrder: Machine;

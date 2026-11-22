@@ -47,7 +47,7 @@ function init(params) {
 function step(params, state, input) {
   const env = {"anchored": $n(input["anchored"], "input anchored"), "rows": $n(input["rows"], "input rows"), "metadata": $n(input["metadata"], "input metadata"), "requests": $n(input["requests"], "input requests"), "indices": $n(input["indices"], "input indices"), "connected": $n(input["connected"], "input connected")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
   if (!(env["anchored"] <= 1)) throw new RangeError("sibling group: the request fails the rule's assumption, so no proof covers the step it would take");
-  const scalars = {...s, "out.admitted": (((env["anchored"] === 1) && (0 < env["rows"]) && (env["metadata"] === env["rows"]) && (env["requests"] === env["rows"]) && (env["indices"] === env["rows"]) && (env["connected"] === env["rows"]) && (0 < env["rows"])) ? 1 : 0)};
+  const scalars = {...s, "out.admitted": (((env["anchored"] === 1) && (0 < env["rows"]) && (env["metadata"] === env["rows"]) && (env["requests"] === env["rows"]) && (env["indices"] === env["rows"]) && (env["connected"] === env["rows"]) && (0 <= env["rows"])) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };
@@ -57,11 +57,27 @@ export const siblingPair = /* @__PURE__ */ (() => {
 // Generated from the machine sibling pair. step consumes its state: keep the one it returns (fork to branch).
 function init(params) {
   const env = {}, s = {};
-  return {scalars: {"out.admitted": 0, "out.addCall": 0, "out.addResult": 0}, maps: {}};
+  return {scalars: {"out.admitted": 0, "out.covered": 0, "out.addCall": 0, "out.addResult": 0}, maps: {}};
 }
 function step(params, state, input) {
-  const env = {"calls": $n(input["calls"], "input calls"), "results": $n(input["results"], "input results"), "sources": $n(input["sources"], "input sources"), "stray": $n(input["stray"], "input stray"), "baseCalls": $n(input["baseCalls"], "input baseCalls"), "prefixCalls": $n(input["prefixCalls"], "input prefixCalls"), "existing": $n(input["existing"], "input existing")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
-  const scalars = {...s, "out.admitted": (((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) ? 1 : 0), "out.addCall": ((((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) && (env["baseCalls"] === 0)) ? 1 : 0), "out.addResult": ((((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) && (env["existing"] === 0)) ? 1 : 0)};
+  const env = {"calls": $n(input["calls"], "input calls"), "results": $n(input["results"], "input results"), "sources": $n(input["sources"], "input sources"), "stray": $n(input["stray"], "input stray"), "baseCalls": $n(input["baseCalls"], "input baseCalls"), "prefixCalls": $n(input["prefixCalls"], "input prefixCalls"), "existing": $n(input["existing"], "input existing"), "active": $n(input["active"], "input active"), "tail": $n(input["tail"], "input tail")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!(env["active"] <= 1)) throw new RangeError("sibling pair: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.admitted": (((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) ? 1 : 0), "out.covered": (((env["calls"] === 1) && (env["results"] === 0) && (env["active"] === 1) && (env["baseCalls"] === 1) && (env["prefixCalls"] === 1) && (env["existing"] === 1) && (env["tail"] === 1)) ? 1 : 0), "out.addCall": ((((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) && (env["baseCalls"] === 0)) ? 1 : 0), "out.addResult": ((((env["calls"] === 1) && (env["results"] === 1) && (env["sources"] === 1) && (env["stray"] === 0) && (env["baseCalls"] <= 1) && (env["existing"] <= 1) && (env["prefixCalls"] <= env["baseCalls"]) && (((0 < env["existing"]) || (env["baseCalls"] === 0)) || (0 < env["prefixCalls"])) && (0 <= env["baseCalls"])) && (env["existing"] === 0)) ? 1 : 0)};
+  return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
+}
+return { init, step };
+})();
+
+export const siblingOwner = /* @__PURE__ */ (() => {
+// Generated from the machine sibling owner. step consumes its state: keep the one it returns (fork to branch).
+function init(params) {
+  const env = {}, s = {};
+  return {scalars: {"out.admitted": 0}, maps: {}};
+}
+function step(params, state, input) {
+  const env = {"seen": $n(input["seen"], "input seen"), "same": $n(input["same"], "input same")}, s = state.scalars, dft = {...state.defaults}, maps = state.maps;
+  if (!((env["seen"] <= 1) && (env["same"] <= 1))) throw new RangeError("sibling owner: the request fails the rule's assumption, so no proof covers the step it would take");
+  const scalars = {...s, "out.admitted": (((!(env["seen"] === 1)) || (env["same"] === 1)) ? 1 : 0)};
   return Object.keys(dft).length ? {scalars, maps: state.maps, defaults: dft} : {scalars, maps: state.maps};
 }
 return { init, step };

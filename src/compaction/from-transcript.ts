@@ -85,19 +85,21 @@ function matchesInline(original: ClaudeToolUse | undefined, call: ClaudeToolUse,
 }
 /** Restore only whole sibling result rows from the terminal parallel group. */
 function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, join: number,
-  prefixLength: number, rebuilt: ClaudeMessage[], chain: TranscriptRow[]): ClaudeMessage[] {
+  prefixLength: number, rebuilt: ClaudeMessage[], chain: TranscriptRow[], originalPrefix: TranscriptRow[]): ClaudeMessage[] {
   if (outcomeConservationProblem(current, rebuilt) !== MISSING_OUTCOME || !prefixLength) return rebuilt;
 
   const rows = new Map(chain.map((row) => [row.uuid, row]));
   const messageId = (message: ClaudeMessage): string => string(object(rows.get(message.uuid)?.message).id);
-  const last = rebuilt[prefixLength - 1]!;
-  const id = last.role === "assistant" ? messageId(last) : "";
+  const byUuid = new Map(rebuilt.slice(0, prefixLength).map((message) => [message.uuid, message]));
+  const original = originalPrefix.map((row) => byUuid.get(string(row.uuid))).filter((message): message is ClaudeMessage => !!message);
+  const last = original[original.length - 1];
+  const id = last?.role === "assistant" ? messageId(last) : "";
   if (!id) return rebuilt;
-  let start = prefixLength - 1;
-  while (start > 0 && rebuilt[start - 1]!.role === "assistant" && messageId(rebuilt[start - 1]!) === id) start--;
-  if (prefixLength - start < 2) return rebuilt;
+  let start = original.length - 1;
+  while (start > 0 && original[start - 1]!.role === "assistant" && messageId(original[start - 1]!) === id) start--;
+  if (original.length - start < 2) return rebuilt;
   const calls = new Map<string, ClaudeToolUse>();
-  for (const use of rebuilt.slice(start, prefixLength).flatMap((message) => message.toolUses)) {
+  for (const use of original.slice(start).flatMap((message) => message.toolUses)) {
     if (!use.tool_use_id || calls.has(use.tool_use_id)) return rebuilt;
     calls.set(use.tool_use_id, use);
   }
@@ -156,7 +158,7 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
   const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join));
   const prefix = historical.rows.map(fromTranscript).filter((message) => !isFabricSummary(message)).map((message) => ({
     ...message, toolUses: message.toolUses.map((use) => {
-      const row = historical.pairs.get(use.tool_use_id);
+      const row = historical.pairs.get(message.uuid ?? "")?.get(use.tool_use_id);
       if (!row) return use;
       const outcome = fromTranscript(row).toolResults!.find((result) => result.tool_use_id === use.tool_use_id)!;
       // Like the hook input, normalize each uniquely paired outcome beside its call.
@@ -166,8 +168,9 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
     }),
   }));
   const rebuilt = [...prefix, ...messages.slice(join).filter((message) => !isFabricSummary(message))];
-  const output = restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain);
-  const originalCount = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant").length;
+  const originalPrefix = chain.slice(0, chainEnd).filter((row) => row.type === "user" || row.type === "assistant");
+  const output = restoreOutcomes(messages, summary, join, prefix.length, rebuilt, chain, originalPrefix);
+  const originalCount = originalPrefix.length;
   if (historical.pairs.size || historical.rows.length > originalCount || output.length > rebuilt.length) {
     const problem = outcomeConservationProblem(messages, output);
     if (problem) throw new Error(problem);
