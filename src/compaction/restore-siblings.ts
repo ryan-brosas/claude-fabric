@@ -167,34 +167,36 @@ function merge(prefix: TranscriptRow[], additions: Indexed[], byUuid: Map<unknow
 function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket }[], tail: readonly ClaudeMessage[]): void {
   const relevant = new Set(groups.flatMap((group) => group.same.flatMap((item) => uses(item.row))));
   if (!relevant.size) return;
-  const possible = new Map<string, TranscriptRow[]>();
-  for (const item of ctx.byUuid.values()) for (const id of uses(item.row)) if (relevant.has(id)) {
-    const list = possible.get(id) ?? [];
-    list.push(item.row); possible.set(id, list);
+  type CallClaim = { row: TranscriptRow; call: ClaudeToolUse };
+  const claims = (row: TranscriptRow): CallClaim[] => row.type === "assistant"
+    ? fromTranscript(row).toolUses.map((call) => ({ row, call })) : [];
+  const possible = new Map<string, CallClaim[]>();
+  for (const item of ctx.byUuid.values()) for (const claim of claims(item.row)) if (relevant.has(claim.call.tool_use_id)) {
+    const id = claim.call.tool_use_id, list = possible.get(id) ?? [];
+    list.push(claim); possible.set(id, list);
   }
-  const owners = new Map<string, TranscriptRow>();
+  const owners = new Map<string, CallClaim>();
   const outcomes = new Map<string, { call: ClaudeToolUse; outcome: ClaudeToolResult }>();
   const inline = new Set(tail.flatMap((message) => message.toolUses.filter(hasOutcome).map((use) => use.tool_use_id)));
-  const callOf = (row: TranscriptRow, id: string): ClaudeToolUse =>
-    fromTranscript(row).toolUses.find((use) => use.tool_use_id === id) ?? refusal();
-  const sameOwner = (a: TranscriptRow, b: TranscriptRow, id: string): boolean =>
-    messageId(a) === messageId(b) && a.requestRef === b.requestRef && a.apiBlockIndex === b.apiBlockIndex
-      && sameToolClaim({ call: callOf(a, id) }, { call: callOf(b, id) });
+  const sameOwner = (a: CallClaim, b: CallClaim): boolean =>
+    messageId(a.row) === messageId(b.row) && a.row.requestRef === b.row.requestRef
+      && a.row.apiBlockIndex === b.row.apiBlockIndex && sameToolClaim({ call: a.call }, { call: b.call });
   const compare = (seen: boolean, same: boolean, candidates = 1): void => {
     admitted(siblingOwner.step({}, siblingOwner.init({}), { seen: Number(seen), same: Number(same), candidates }));
   };
-  const claim = (row: TranscriptRow, id: string): void => {
+  const claim = (current: CallClaim): void => {
+    const id = current.call.tool_use_id;
     if (!relevant.has(id)) return;
     const previous = owners.get(id);
-    compare(previous !== undefined, previous !== undefined && sameOwner(previous, row, id));
-    owners.set(id, row);
+    compare(previous !== undefined, previous !== undefined && sameOwner(previous, current));
+    owners.set(id, current);
   };
   const claimOutcome = (outcome: ClaudeToolResult): void => {
     const id = outcome.tool_use_id;
     if (!relevant.has(id)) return;
-    const row = owners.get(id);
-    if (!row) return refusal();
-    const claim = { call: callOf(row, id), outcome };
+    const owner = owners.get(id);
+    if (!owner) return refusal();
+    const claim = { call: owner.call, outcome };
     const previous = outcomes.get(id);
     compare(previous !== undefined, previous !== undefined && sameToolClaim(previous, claim));
     outcomes.set(id, claim);
@@ -205,17 +207,20 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
   const claimSource = (row: TranscriptRow, id: string): void => {
     if (!relevant.has(id) || typeof row.sourceToolAssistantUUID !== "string") return;
     const source = ctx.byUuid.get(row.sourceToolAssistantUUID)?.row;
-    if (!source || !uses(source).includes(id)) return refusal();
-    claim(source, id);
+    if (!source) return refusal();
+    const matches = claims(source).filter((item) => item.call.tool_use_id === id);
+    if (!matches.length) return refusal();
+    for (const match of matches) claim(match);
   };
-  for (const group of groups) for (const item of group.same) for (const id of uses(item.row)) {
-    claim(item.row, id);
+  for (const group of groups) for (const item of group.same) for (const current of claims(item.row)) {
+    const id = current.call.tool_use_id;
+    claim(current);
     for (const result of group.bucket.results.get(id) ?? []) {
       if (result.row.sourceToolAssistantUUID === item.row.uuid) claimRowOutcome(result.row, id);
     }
   }
   for (const row of ctx.prefix) {
-    for (const id of uses(row)) claim(row, id);
+    for (const current of claims(row)) claim(current);
     for (const id of results(row)) {
       claimSource(row, id);
       if (!inline.has(id)) claimRowOutcome(row, id);
@@ -226,17 +231,17 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
     for (const use of message.toolUses) {
       if (!relevant.has(use.tool_use_id)) continue;
       const id = use.tool_use_id;
-      const matches = (candidate: TranscriptRow): boolean => uses(candidate).includes(id)
-        && sameToolClaim({ call: callOf(candidate, id) }, { call: use });
-      const candidates = row ? [row].filter(matches) : (possible.get(id) ?? []).filter(matches);
-      const distinct: TranscriptRow[] = [];
+      const matches = (candidate: CallClaim): boolean => candidate.call.tool_use_id === id
+        && sameToolClaim({ call: candidate.call }, { call: use });
+      const candidates = (row ? claims(row) : possible.get(id) ?? []).filter(matches);
+      const distinct: CallClaim[] = [];
       for (const candidate of candidates) {
-        if (!distinct.some((other) => sameOwner(other, candidate, id))) distinct.push(candidate);
+        if (!distinct.some((other) => sameOwner(other, candidate))) distinct.push(candidate);
       }
       compare(false, false, distinct.length);
       const owner = distinct[0];
       if (!owner) return refusal();
-      claim(owner, id);
+      claim(owner);
       if (hasOutcome(use)) claimOutcome({ tool_use_id: id, ...inlineOutcome(use) });
     }
     for (const result of message.toolResults ?? []) {

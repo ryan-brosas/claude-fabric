@@ -4,8 +4,10 @@ import { compact } from "../../src/compaction/compact.ts";
 import { fromTranscript, rebuildTranscript } from "../../src/compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../../src/compaction/outcome-conservation.ts";
 import type { ClaudeMessage } from "../../src/compaction/from-claude.ts";
-import { normalizeMessages } from "../../src/compaction/from-claude.ts";
-import { projectOutstanding } from "../../src/compaction/projections.ts";
+import { normalizeMessages, sameToolClaim } from "../../src/compaction/from-claude.ts";
+import { valuesIn } from "../../src/compaction/literals.ts";
+import { sourceFailures } from "../../src/compaction/qa-history.ts";
+import { projectOutstanding, projectWithMetadata } from "../../src/compaction/projections.ts";
 import { restoreSiblings } from "../../src/compaction/restore-siblings.ts";
 
 test("transcript rows preserve Claude text, tool uses, results and errors for the compactor", () => {
@@ -479,6 +481,56 @@ test("round4 copy with omitted structured result preserves the effective outcome
   expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared")
     .map((event) => event.kind === "toolResult" ? event.text : "")).toEqual(["SAME"]);
 });
+test("round6 successful Bash bodies with different protected paths cannot be suppressed", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
+  const bash = (uuid: string, parentUuid: string) => ({ ...callRow(uuid, parentUuid, "shared", "same"),
+    requestRef: "req", apiBlockIndex: 1, message: { id: "same", content: [
+      { type: "tool_use", id: "shared", name: "Bash", input: { command: "cat receipt.txt" } },
+    ] } });
+  const b0 = bash("b0", "a0"), c1 = bash("c1", "boundary");
+  const old = "/tmp/old-receipt.json", next = "/tmp/new-receipt.json";
+  const rb0 = { ...resultRow("rb0", "b0", "shared", old), sourceToolAssistantUUID: "b0", toolUseResult: { exitCode: 0 } };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "ra0" };
+  const joined = { ...resultRow("joined", "c1", "shared", next), sourceToolAssistantUUID: "c1", toolUseResult: { exitCode: 0 } };
+  const historical = [fromTranscript(b0), fromTranscript(rb0)], retained = [fromTranscript(c1), fromTranscript(joined)];
+  expect(normalizeMessages(historical)).toEqual(normalizeMessages(retained));
+  expect(valuesIn(old)).toContain(old);
+  expect(valuesIn(next)).toContain(next);
+  const current = [summary, { ...resultMessage("joined", "shared", next), toolResults: [
+    { tool_use_id: "shared", text: next, isError: false, result: { exitCode: 0 } },
+  ] }];
+  expect(() => rebuildTranscript(current, rowsText([promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined])))
+    .toThrow("ambiguous");
+  expect(sameToolClaim({ call: historical[0]!.toolUses[0]!, outcome: historical[1]!.toolResults![0]! },
+    { call: retained[0]!.toolUses[0]!, outcome: retained[1]!.toolResults![0]! })).toBe(false);
+});
+
+test("round6 explicit Bash flag remains distinct when exit status makes both effective errors", () => {
+  const call = { tool_use_id: "b", tool: "Bash", input: { command: "false" } };
+  const left = { call, outcome: { tool_use_id: "b", text: "", isError: false, result: { exitCode: 1 } } };
+  const right = { call, outcome: { tool_use_id: "b", text: "", isError: true, result: { exitCode: 1 } } };
+  expect(normalizeMessages([{ role: "assistant", text: "", toolUses: [call] },
+    { role: "user", text: "", toolUses: [], toolResults: [left.outcome] }]))
+    .toEqual(normalizeMessages([{ role: "assistant", text: "", toolUses: [call] },
+      { role: "user", text: "", toolUses: [], toolResults: [right.outcome] }]));
+  expect(sameToolClaim(left, right)).toBe(false);
+});
+test("round6 opaque attribution counts every duplicate-id occurrence in another epoch", () => {
+  const a0 = { ...callRow("a0", "start", "anchor", "pair"), requestRef: "req", apiBlockIndex: 0 };
+  const b0 = { ...callRow("b0", "a0", "shared", "pair"), requestRef: "req", apiBlockIndex: 1 };
+  const rb0 = { ...resultRow("rb0", "b0", "shared", "B"), sourceToolAssistantUUID: "b0" };
+  const ra0 = { ...resultRow("ra0", "a0", "anchor", "A"), sourceToolAssistantUUID: "a0" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "start" };
+  const rogue = { ...callRow("rogue", "boundary", "shared", "other"), requestRef: "other-req", apiBlockIndex: 0,
+    message: { id: "other", content: [
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "different.txt" } },
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "shared.txt" } },
+    ] } };
+  const opaque: ClaudeMessage = { ...callMessage("opaque", "shared"), toolUses: [{ ...toolUse("shared"), text: "B" }] };
+  const rows = [promptRow("start", null), a0, b0, rb0, ra0, boundary, rogue, promptRow("joined", "ra0")];
+  expect(() => rebuildTranscript([summary, userMessage("joined", "after"), opaque], rowsText(rows))).toThrow("ambiguous");
+});
 test("round5 omitted Bash exit cannot suppress a historical failure", () => {
   const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
   const bash = (uuid: string, parentUuid: string) => ({ ...callRow(uuid, parentUuid, "shared", "same"),
@@ -498,13 +550,13 @@ test("round5 omitted Bash exit cannot suppress a historical failure", () => {
     rowsText([promptRow("start", null), a0, b0, rb0, ra0, boundary, c1, joined]))).toThrow("ambiguous");
 });
 
-test("round5 equal copies survive reordered call, input and result keys", () => {
-  const group = (epoch: number, parent: string) => {
+test("round5 copied Read inputs and generic block wrappers survive irrelevant key order", () => {
+  const group = (epoch: number, parent: string, tool: string, reorderInput: boolean) => {
     const a = `ka${epoch}`, b = `kb${epoch}`;
-    const input = epoch ? { options: { second: 2, first: 1 }, file_path: "same.txt" }
+    const input = epoch && reorderInput ? { options: { second: 2, first: 1 }, file_path: "same.txt" }
       : { file_path: "same.txt", options: { first: 1, second: 2 } };
-    const block = epoch ? { id: "shared", type: "tool_use", name: "Read", input }
-      : { type: "tool_use", id: "shared", name: "Read", input };
+    const block = epoch ? { id: "shared", type: "tool_use", name: tool, input }
+      : { type: "tool_use", id: "shared", name: tool, input };
     const result = epoch ? { beta: 2, alpha: 1 } : { alpha: 1, beta: 2 };
     return [
       { ...callRow(a, parent, `anchor${epoch}`, "same-message"), requestRef: "same-request", apiBlockIndex: 0 },
@@ -514,12 +566,65 @@ test("round5 equal copies survive reordered call, input and result keys", () => 
       { ...resultRow(`kra${epoch}`, a, `anchor${epoch}`, "anchor"), sourceToolAssistantUUID: a },
     ];
   };
-  const rows = [promptRow("start", null), ...group(0, "start"),
+  const rows = (tool: string, reorderInput: boolean) => [promptRow("start", null), ...group(0, "start", tool, reorderInput),
     { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "kra0" },
-    ...group(1, "boundary"), promptRow("joined", "kra1")];
-  const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows));
-  expect(rebuilt.find((message) => message.uuid === "kb0")?.toolUses[0]?.text).toBe("SAME");
-  expect(rebuilt.find((message) => message.uuid === "kb1")?.toolUses[0]?.text).toBe("SAME");
+    ...group(1, "boundary", tool, reorderInput), promptRow("joined", "kra1")];
+  for (const [tool, reorderInput] of [["Read", true], ["MCP", false]] as const) {
+    const rebuilt = rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows(tool, reorderInput)));
+    expect(rebuilt.find((message) => message.uuid === "kb0")?.toolUses[0]?.text).toBe("SAME");
+    expect(rebuilt.find((message) => message.uuid === "kb1")?.toolUses[0]?.text).toBe("SAME");
+  }
+  expect(() => rebuildTranscript([summary, userMessage("joined", "next")], rowsText(rows("MCP", true))))
+    .toThrow("ambiguous");
+});
+
+test("round6 transcript argument rendering sees Grep key order without a pattern", () => {
+  const make = (input: Record<string, unknown>) => ({ tool_use_id: "grep", tool: "Grep", input });
+  const left = make({ dir: "src", options: "quiet" }), right = make({ options: "quiet", dir: "src" });
+  const transcript = (call: typeof left) => projectWithMetadata(normalizeMessages([
+    { role: "assistant", text: "", toolUses: [call] },
+  ])).sections.transcript;
+  expect(transcript(left)).not.toEqual(transcript(right));
+  expect(sameToolClaim({ call: left }, { call: right })).toBe(false);
+  const laterLeft = make({ a: 1, b: 2, c: 3, dir: "src" });
+  const laterRight = make({ a: 1, b: 2, dir: "src", c: 3 });
+  expect(transcript(laterLeft)).toEqual(transcript(laterRight));
+  expect(sameToolClaim({ call: laterLeft }, { call: laterRight })).toBe(true);
+});
+test("round6 retry readers decide when reordered arguments differ", () => {
+  const cases: { tool: string; base: Record<string, unknown>; orderMatters: boolean }[] = [
+    { tool: "MCP", base: {}, orderMatters: true },
+    { tool: "MCP", base: { file_path: "same.txt" }, orderMatters: true },
+    { tool: "Read", base: { file_path: "same.txt" }, orderMatters: false },
+    { tool: "Write", base: { file_path: "same.txt" }, orderMatters: false },
+    { tool: "Edit", base: { path: "same.txt" }, orderMatters: false },
+    { tool: "Grep", base: { dir: "src" }, orderMatters: false },
+    { tool: "Grep", base: { dir: "src", pattern: "foo" }, orderMatters: false },
+    { tool: "Glob", base: { path: "src" }, orderMatters: false },
+    { tool: "Glob", base: { path: "src", pattern: "*.ts" }, orderMatters: false },
+    { tool: "Read", base: {}, orderMatters: true },
+    { tool: "Read", base: { path: " " }, orderMatters: true },
+    { tool: "Read", base: { file_path: 0, path: "same.txt" }, orderMatters: true },
+    { tool: "Bash", base: { command: "false" }, orderMatters: false },
+    { tool: "Bash", base: {}, orderMatters: false },
+  ];
+  for (const { tool, base, orderMatters } of cases) {
+    const input = { ...base, options: { first: 1, second: 2 } };
+    const reordered = { options: { second: 2, first: 1 }, ...base };
+    const a = { tool_use_id: "first", tool, input, text: "boom", isError: true as const };
+    const b = { ...a, input: reordered };
+    const success = { tool_use_id: "second", tool, input, text: "ok" };
+    const events = normalizeMessages([{ role: "assistant", text: "", toolUses: [b] },
+      { role: "assistant", text: "", toolUses: [success] }]);
+    expect(projectOutstanding(events).some((line) => line.includes("boom"))).toBe(orderMatters);
+    expect(sourceFailures(events).some((line) => line.includes("boom"))).toBe(orderMatters);
+    const transcript = (call: typeof a) => projectWithMetadata(normalizeMessages([
+      { role: "assistant", text: "", toolUses: [call] },
+    ])).sections.transcript;
+    const transcriptDiffers = JSON.stringify(transcript(a)) !== JSON.stringify(transcript(b));
+    const outcome = { tool_use_id: "first", text: "boom", isError: true };
+    expect(sameToolClaim({ call: a, outcome }, { call: b, outcome })).toBe(!orderMatters && !transcriptDiffers);
+  }
 });
 test("round4 covered copy with conflicting outcome cannot suppress historical outcome", () => {
   const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };

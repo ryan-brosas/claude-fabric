@@ -82,7 +82,17 @@ export type CompactionEvent =
 
 type ToolClaim = { call: ClaudeToolUse; outcome?: ClaudeToolResult };
 
-/** Equality of the call and effective outcome the compactor receives, ignoring addresses. */
+// Both retry readers use a generic JSON argument key except for Bash and file
+// tools with a usable path (projections.ts and qa-history.ts). Keep this boundary
+// aligned with those readers; their retry behavior must not change here.
+const FILE_RETRY_TOOLS = new Set(["Read", "Write", "Edit", "Grep", "Glob"]);
+const readsArgumentOrder = (call: ClaudeToolUse): boolean => {
+  if (call.tool === "Bash") return false;
+  const path = call.input.file_path ?? call.input.path ?? call.input.dir;
+  return !(FILE_RETRY_TOOLS.has(call.tool) && typeof path === "string" && !!path.trim());
+};
+
+/** Equality on normalized events and the other fields compaction readers observe. */
 export function sameToolClaim(left: ToolClaim, right: ToolClaim): boolean {
   const events = ({ call, outcome }: ToolClaim) => {
     const use = { tool_use_id: call.tool_use_id, tool: call.tool, input: call.input };
@@ -101,7 +111,11 @@ export function sameToolClaim(left: ToolClaim, right: ToolClaim): boolean {
     return keys.length === Object.keys(second).length
       && keys.every((key) => Object.prototype.hasOwnProperty.call(second, key) && equal(first[key], second[key]));
   };
-  return equal(events(left), events(right));
+  return equal(events(left), events(right))
+    && summarizeToolArgs(left.call.tool, left.call.input) === summarizeToolArgs(right.call.tool, right.call.input)
+    && (!readsArgumentOrder(left.call) || JSON.stringify(left.call.input) === JSON.stringify(right.call.input))
+    && left.outcome?.text === right.outcome?.text
+    && left.outcome?.isError === right.outcome?.isError;
 }
 export const firstLine = (text: string): string => {
   const trimmed = text.trimStart();
@@ -109,6 +123,21 @@ export const firstLine = (text: string): string => {
   return nl < 0 ? trimmed : trimmed.slice(0, nl);
 };
 
+// Shared with the transcript projection: comparison must see exactly what it renders.
+export const MAX_TRANSCRIPT_CMD = 80;
+export const summarizeToolArgs = (name: string, args: Record<string, unknown>): string => {
+  const truncate = (text: string, max: number): string => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  };
+  const path = args.file_path ?? args.path ?? args.dir;
+  const primary = name === "Bash" ? args.command ?? args.cmd ?? args.shell
+    : name === "Grep" ? args.pattern ?? args.query ?? args.regex
+    : name === "Glob" ? args.pattern
+    : typeof path === "string" && path.trim() ? path : undefined;
+  if (typeof primary === "string" && primary.trim()) return truncate(firstLine(primary), MAX_TRANSCRIPT_CMD);
+  return Object.entries(args).slice(0, 2).map(([key, value]) => `${key}=${truncate(String(value), 40)}`).join(" ");
+};
 export const hasOutcome = (use: ClaudeToolUse): boolean =>
   use.text !== undefined || use.isError === true || use.result !== undefined;
 
