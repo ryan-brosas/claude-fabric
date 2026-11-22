@@ -45,16 +45,14 @@ export function entryText(row: Row): { text: string; kind: EntryKind } {
 }
 
 /** Physical file order need not be chain order. Follow the last conversation row by UUID. */
-export function transcriptChain(text: string): { chain: TranscriptRow[]; rows: Map<string, TranscriptRow>; physicalRows: TranscriptRow[] } {
+export function transcriptChain(text: string): { chain: TranscriptRow[]; rows: Map<string, TranscriptRow> } {
   const rows = new Map<string, Row>();
-  const physicalRows: Row[] = [];
   let leaf = "";
   for (const [index, line] of text.split("\n").entries()) {
     if (!line.trim()) continue;
     let row: Row;
     try { row = object(JSON.parse(line)); }
     catch { throw new Error(`history: invalid transcript JSON at line ${index + 1}`); }
-    physicalRows.push(row);
     const uuid = string(row.uuid);
     if (!uuid || row.isSidechain === true) continue;
     if (rows.has(uuid)) throw new Error(`history: duplicate transcript uuid ${uuid}`);
@@ -74,7 +72,7 @@ export function transcriptChain(text: string): { chain: TranscriptRow[]; rows: M
     leaf = parent ?? "";
   }
   chain.reverse();
-  return { chain, rows, physicalRows };
+  return { chain, rows };
 }
 
 const conversationEntry = (row: Row): Entry | null => {

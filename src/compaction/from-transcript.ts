@@ -122,7 +122,7 @@ function restoreOutcomes(current: readonly ClaudeMessage[], summary: number, joi
 export function rebuildTranscript(messages: readonly ClaudeMessage[], text: string): ClaudeMessage[] {
   const summary = messages.findIndex(isFabricSummary);
   if (summary < 0) throw new Error("fabric: no earlier Fabric summary to rebuild");
-  const { chain, rows, physicalRows } = transcriptChain(text);
+  const { chain, rows } = transcriptChain(text);
   const positions = new Map<string, number>();
   chain.forEach((row, index) => {
     if ((row.type === "user" || row.type === "assistant") && typeof row.uuid === "string") positions.set(row.uuid, index);
@@ -130,7 +130,7 @@ export function rebuildTranscript(messages: readonly ClaudeMessage[], text: stri
   const join = messages.findIndex((message, index) => index > summary && !!message.handle && positions.has(message.handle));
   if (join < 0) throw new Error("fabric: no current message handle joins the transcript chain");
   const chainEnd = positions.get(messages[join]!.handle!)!;
-  const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join), messages, physicalRows);
+  const historical = restoreSiblings(chain, rows, chainEnd, messages.slice(join));
   const prefix = historical.rows.map(fromTranscript).filter((message) => !isFabricSummary(message)).map((message) => ({
     ...message, toolUses: message.toolUses.map((use) => {
       const row = historical.pairs.get(message.uuid ?? "")?.get(use.tool_use_id);

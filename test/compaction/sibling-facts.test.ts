@@ -45,7 +45,7 @@ test("round4 forward-parent main-success fixture still rebuilds", () => {
   expect(outcomeConservationProblem(fixture.current, rebuilt)).toBeUndefined();
   expect(rebuilt.map((message) => message.uuid ?? message.handle)).toEqual(["p", "a", "joined", "tail"]);
 });
-test("recorded fixtures refuse unbound claims or multiple physical owners at the adapter", () => {
+test("indexed restoration matches the unindexed 91ffecb outputs on every recorded fixture", () => {
   const six: Fixture[] = JSON.parse(readFileSync(new URL("./fixtures/parallel-six-fallbacks.json", import.meta.url), "utf8"));
   const n3: Fixture = {
     rows: readFileSync(new URL("./fixtures/parallel-n3-prefix.jsonl", import.meta.url), "utf8").trim().split("\n").map((line) => JSON.parse(line)),
@@ -54,12 +54,14 @@ test("recorded fixtures refuse unbound claims or multiple physical owners at the
   const expected = JSON.parse(readFileSync(new URL("./fixtures/round3-unindexed.json", import.meta.url), "utf8"));
   expect(expected).toHaveLength(7);
   for (const [i, fixture] of [...six, n3].entries()) {
-    const { chain, rows, physicalRows } = transcriptChain(text(fixture.rows));
+    const { chain, rows } = transcriptChain(text(fixture.rows));
     const positions = new Map(chain.map((row, index) => [row.uuid, index]));
     const join = fixture.current.findIndex((message, index) => index > 0 && !!message.handle && positions.has(message.handle));
     const end = positions.get(fixture.current[join]!.handle!)!;
-    const reason = i < 6 ? "unbound current result" : "2 assistant rows";
-    expect(() => restoreSiblings(chain, rows, end, fixture.current.slice(join), fixture.current, physicalRows)).toThrow(reason);
+    const result = restoreSiblings(chain, rows, end, fixture.current.slice(join));
+    const pairs = [...result.pairs.values()].flatMap((map) => [...map].map(([id, row]) => [id, row.uuid]));
+    pairs.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    expect({ rows: result.rows.map((row) => row.uuid), pairs }).toEqual(expected[i]);
   }
 });
 test("adapter machine facts match an independent occurrence recount of every recorded fixture", () => {
@@ -75,7 +77,7 @@ test("adapter machine facts match an independent occurrence recount of every rec
   targetContent.push({ ...firstCall });
   let groups = 0, calls = 0;
   for (const fixture of [...six, n3, duplicate]) {
-    const { chain, rows, physicalRows } = transcriptChain(text(fixture.rows));
+    const { chain, rows } = transcriptChain(text(fixture.rows));
     const positions = new Map(chain.map((row, i) => [row.uuid, i]));
     const join = fixture.current.findIndex((message, i) => i > 0 && !!message.handle && positions.has(message.handle));
     expect(join).toBeGreaterThan(0);
