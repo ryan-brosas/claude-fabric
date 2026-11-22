@@ -80,33 +80,6 @@ export type CompactionEvent =
   | ToolResultEvent
   | BashEvent;
 
-type ToolClaim = { call: ClaudeToolUse; outcome?: ClaudeToolResult };
-
-/** Equality on normalized events and the other fields compaction readers observe. */
-export function sameToolClaim(left: ToolClaim, right: ToolClaim): boolean {
-  const events = ({ call, outcome }: ToolClaim) => {
-    const use = { tool_use_id: call.tool_use_id, tool: call.tool, input: call.input };
-    const messages: ClaudeMessage[] = [{ role: "assistant", text: "", toolUses: [use] }];
-    if (outcome) messages.push({ role: "user", text: "", toolUses: [], toolResults: [outcome] });
-    return normalizeMessages(messages).map(({ index, entryId, sourceEntryId, ...event }) => event);
-  };
-  const equal = (a: unknown, b: unknown): boolean => {
-    if (Object.is(a, b)) return true;
-    if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
-    if (Array.isArray(a) || Array.isArray(b)) {
-      return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => equal(value, b[i]));
-    }
-    const first = a as Record<string, unknown>, second = b as Record<string, unknown>;
-    const keys = Object.keys(first);
-    return keys.length === Object.keys(second).length
-      && keys.every((key) => Object.prototype.hasOwnProperty.call(second, key) && equal(first[key], second[key]));
-  };
-  return left.call.tool === right.call.tool
-    && JSON.stringify(left.call.input) === JSON.stringify(right.call.input)
-    && left.outcome?.text === right.outcome?.text
-    && left.outcome?.isError === right.outcome?.isError
-    && equal(events(left), events(right));
-}
 export const firstLine = (text: string): string => {
   const trimmed = text.trimStart();
   const nl = trimmed.indexOf("\n");
