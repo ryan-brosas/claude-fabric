@@ -14,6 +14,12 @@ test("protected room rejects a whole-number footer that exceeds the safe range",
     .toThrow("footer must be a safe natural, not 9007199254740992");
 });
 
+test("an unsafe protected cap does not call reduce on the input array", () => {
+  const items = ["a", "bc"];
+  Object.defineProperty(items, "reduce", { value: () => { throw new Error("unexpected input reduce"); } });
+  expect(protectedBudgets("hdr", items, Number.MAX_SAFE_INTEGER + 1)).toEqual([1, 2]);
+});
+
 test("an unsafe sample limit consumes the source before refusing it", () => {
   const seen: string[] = [];
   function* entries() {

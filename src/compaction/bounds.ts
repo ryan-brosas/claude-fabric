@@ -67,29 +67,31 @@ export const protectedBudgets = (header: string, items: readonly string[], maxBy
   if (items.length === 0) return [];
   let cap = byteCap(maxBytes);
   const headerBytes = utf8Bytes(header);
+  let demands: number[] | undefined;
   if (!Number.isSafeInteger(cap)) {
     // If every item fits, use the exact demand as an equivalent safe ceiling.
-    const full = items.reduce((total, item) => total + utf8Bytes(item), headerBytes + 2 * items.length);
+    demands = items.map(utf8Bytes);
+    const full = demands.reduce((total, bytes) => total + bytes, headerBytes + 2 * items.length);
     if (!Number.isSafeInteger(full) || full > cap) throw new RangeError("protected demand exceeds safe arithmetic");
     cap = full;
   }
   const { room, share } = protectedRoom(cap, headerBytes, items.length);
   let remaining = room;
-  const budgets = items.map((item) => {
-    const result = protectedItemBytes(utf8Bytes(item), share, 0, remaining);
+  const assign = (demand: number): number => {
+    const result = protectedItemBytes(demand, share, 0, remaining);
     remaining = result["out.afterInitial"]!;
     return result["out.initial"]!;
-  });
-  const result = items.map((item, index) => {
-    const allocation = protectedItemBytes(utf8Bytes(item), share, budgets[index]!, remaining);
-    remaining = allocation["out.remaining"]!;
-    return allocation["out.budget"]!;
-  });
+  };
+  const budgets = demands ? demands.map(assign) : items.map((item) => assign(utf8Bytes(item)));
   let used = 0;
-  for (let index = 0; index < items.length; index++) {
-    used = checkedProtectedTotal({ room, used, amount: result[index]!, demand: utf8Bytes(items[index]!) });
-  }
-  return result;
+  return items.map((item, index) => {
+    const demand = utf8Bytes(item);
+    const allocation = protectedItemBytes(demand, share, budgets[index]!, remaining);
+    remaining = allocation["out.remaining"]!;
+    const amount = allocation["out.budget"]!;
+    used = checkedProtectedTotal({ room, used, amount, demand });
+    return amount;
+  });
 };
 
 const charBytes = (character: string): number => {
