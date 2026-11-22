@@ -184,6 +184,16 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
   const compare = (seen: boolean, same: boolean, candidates = 1): void => {
     admitted(siblingOwner.step({}, siblingOwner.init({}), { seen: Number(seen), same: Number(same), candidates }));
   };
+  const uniqueCandidate = (candidates: readonly CallClaim[]): CallClaim => {
+    const distinct: CallClaim[] = [];
+    for (const candidate of candidates) {
+      if (!distinct.some((other) => sameOwner(other, candidate))) distinct.push(candidate);
+    }
+    compare(false, false, distinct.length);
+    const candidate = distinct[0];
+    if (!candidate) return refusal();
+    return candidate;
+  };
   const claim = (current: CallClaim): void => {
     const id = current.call.tool_use_id;
     if (!relevant.has(id)) return;
@@ -191,39 +201,40 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
     compare(previous !== undefined, previous !== undefined && sameOwner(previous, current));
     owners.set(id, current);
   };
-  const claimOutcome = (outcome: ClaudeToolResult): void => {
+  const claimOutcome = (outcome: ClaudeToolResult, caller: CallClaim | undefined): void => {
     const id = outcome.tool_use_id;
     if (!relevant.has(id)) return;
-    const owner = owners.get(id);
-    if (!owner) return refusal();
-    const claim = { call: owner.call, outcome };
+    const identified = caller ?? uniqueCandidate(possible.get(id) ?? []);
+    claim(identified);
+    const current = { call: identified.call, outcome };
     const previous = outcomes.get(id);
-    compare(previous !== undefined, previous !== undefined && sameToolClaim(previous, claim));
-    outcomes.set(id, claim);
+    compare(previous !== undefined, previous !== undefined && sameToolClaim(previous, current));
+    outcomes.set(id, current);
   };
-  const claimRowOutcome = (row: TranscriptRow, id: string): void => {
-    for (const result of fromTranscript(row).toolResults ?? []) if (result.tool_use_id === id) claimOutcome(result);
+  const claimRowOutcome = (row: TranscriptRow, id: string, caller: CallClaim | undefined): void => {
+    for (const result of fromTranscript(row).toolResults ?? []) if (result.tool_use_id === id) claimOutcome(result, caller);
   };
-  const claimSource = (row: TranscriptRow, id: string): void => {
+  const claimSource = (row: TranscriptRow, id: string): CallClaim | undefined => {
     if (!relevant.has(id) || typeof row.sourceToolAssistantUUID !== "string") return;
     const source = ctx.byUuid.get(row.sourceToolAssistantUUID)?.row;
     if (!source) return refusal();
     const matches = claims(source).filter((item) => item.call.tool_use_id === id);
     if (!matches.length) return refusal();
     for (const match of matches) claim(match);
+    return matches[0];
   };
   for (const group of groups) for (const item of group.same) for (const current of claims(item.row)) {
     const id = current.call.tool_use_id;
     claim(current);
     for (const result of group.bucket.results.get(id) ?? []) {
-      if (result.row.sourceToolAssistantUUID === item.row.uuid) claimRowOutcome(result.row, id);
+      if (result.row.sourceToolAssistantUUID === item.row.uuid) claimRowOutcome(result.row, id, current);
     }
   }
   for (const row of ctx.prefix) {
     for (const current of claims(row)) claim(current);
     for (const id of results(row)) {
-      claimSource(row, id);
-      if (!inline.has(id)) claimRowOutcome(row, id);
+      const source = claimSource(row, id);
+      if (!inline.has(id)) claimRowOutcome(row, id, source);
     }
   }
   for (const message of tail) {
@@ -234,19 +245,13 @@ function establishOwners(ctx: Context, groups: { same: Indexed[]; bucket: Bucket
       const matches = (candidate: CallClaim): boolean => candidate.call.tool_use_id === id
         && sameToolClaim({ call: candidate.call }, { call: use });
       const candidates = (row ? claims(row) : possible.get(id) ?? []).filter(matches);
-      const distinct: CallClaim[] = [];
-      for (const candidate of candidates) {
-        if (!distinct.some((other) => sameOwner(other, candidate))) distinct.push(candidate);
-      }
-      compare(false, false, distinct.length);
-      const owner = distinct[0];
-      if (!owner) return refusal();
-      claim(owner);
-      if (hasOutcome(use)) claimOutcome({ tool_use_id: id, ...inlineOutcome(use) });
+      const caller = uniqueCandidate(candidates);
+      claim(caller);
+      if (hasOutcome(use)) claimOutcome({ tool_use_id: id, ...inlineOutcome(use) }, caller);
     }
     for (const result of message.toolResults ?? []) {
-      if (row) claimSource(row, result.tool_use_id);
-      if (!inline.has(result.tool_use_id)) claimOutcome(result);
+      const source = row ? claimSource(row, result.tool_use_id) : undefined;
+      if (!inline.has(result.tool_use_id)) claimOutcome(result, source);
     }
   }
 }

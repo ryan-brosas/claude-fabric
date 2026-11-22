@@ -480,6 +480,46 @@ test("round4 copy with omitted structured result preserves the effective outcome
   expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared")
     .map((event) => event.kind === "toolResult" ? event.text : "")).toEqual(["SAME"]);
 });
+function round9OpaqueResultFixture(conflicting: boolean): { rows: Record<string, unknown>[]; current: ClaudeMessage[] } {
+  const a = { ...callRow("a", "p", "anchor", "pair"), requestRef: "pair", apiBlockIndex: 0 };
+  const b = { ...callRow("b", "a", "shared", "pair"), requestRef: "pair", apiBlockIndex: 1,
+    message: { id: "pair", content: [
+      { type: "tool_use", id: "shared", name: "Read", input: { file_path: "old.txt" } },
+    ] } };
+  const rb = { ...resultRow("rb", "b", "shared", "SAME"), sourceToolAssistantUUID: "b" };
+  const ra = { ...resultRow("ra", "a", "anchor", "A"), sourceToolAssistantUUID: "a" };
+  const boundary = { type: "system", subtype: "compact_boundary", uuid: "boundary", parentUuid: "joined" };
+  const other = conflicting
+    ? { ...callRow("other", "boundary", "shared", "other-message"), requestRef: "other-request", apiBlockIndex: 0,
+      message: { id: "other-message", content: [
+        { type: "tool_use", id: "shared", name: "Read", input: { file_path: "new.txt" } },
+      ] } }
+    : { ...b, uuid: "other", parentUuid: "boundary" };
+  const rother = { ...resultRow("rother", "other", "shared", "SAME"), sourceToolAssistantUUID: "other" };
+  return { rows: [promptRow("p", null), a, b, rb, ra, promptRow("joined", "ra"), boundary, other, rother],
+    current: [summary, userMessage("joined", "after"), resultMessage("opaque-result", "shared", "SAME")] };
+}
+
+test("round9 opaque result refuses when two different caller identities could own it", () => {
+  const { rows, current } = round9OpaqueResultFixture(true);
+  expect(() => rebuildTranscript(current, rowsText(rows))).toThrow("ambiguous");
+});
+
+test("round9 opaque result accepts one caller identity with a cross-epoch copy", () => {
+  const { rows, current } = round9OpaqueResultFixture(false);
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.find((message) => message.uuid === "b")?.toolUses[0]?.input).toEqual({ file_path: "old.txt" });
+  expect(normalizeMessages(rebuilt).filter((event) => event.kind === "toolResult" && event.toolCallId === "shared"))
+    .toMatchObject([{ text: "SAME", isError: false }]);
+});
+test("round9 a source-bound result need not guess among other callers", () => {
+  const { rows, current } = round9OpaqueResultFixture(true);
+  current[2] = resultMessage("rb", "shared", "SAME");
+  const rebuilt = rebuildTranscript(current, rowsText(rows));
+  expect(outcomeConservationProblem(current, rebuilt)).toBeUndefined();
+  expect(rebuilt.find((message) => message.uuid === "b")?.toolUses[0]?.input).toEqual({ file_path: "old.txt" });
+});
 test("round6 successful Bash bodies with different protected paths cannot be suppressed", () => {
   const a0 = { ...callRow("a0", "start", "anchor", "same"), requestRef: "req", apiBlockIndex: 0 };
   const bash = (uuid: string, parentUuid: string) => ({ ...callRow(uuid, parentUuid, "shared", "same"),
