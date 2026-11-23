@@ -21,6 +21,7 @@ import { OUTCOME_CONSERVATION_BUGS, outcomeConservationKernels } from "./outcome
 import { OUTCOME_RESTORATION_BUGS, outcomeRestorationKernels } from "./outcome-restoration.ts";
 import { BUDGET_BUGS, outputBudgetKernels } from "./output-budget.ts";
 import { policyKernels, POLICY_BUGS } from "./policy.ts";
+import { READ_CONTINUATION_BUGS, readContinuationKernels } from "./read-continuation.ts";
 import { RECALL_BUGS, recallKernels } from "./recall.ts";
 import { REPEAT_BUGS, repeatGuardKernels } from "./repeat-guard.ts";
 import { RESTORE_ORDER_BUGS, restoreOrderKernels } from "./restore-order.ts";
@@ -62,6 +63,7 @@ export const modules: readonly KernelModule[] = [
   { stem: "recall", source: "proofs/recall.ts", out: "src/recall/verified/generated", kernels: recallKernels as any, bugs: RECALL_BUGS },
   { stem: "repeat-guard", source: "proofs/repeat-guard.ts", out: stages, kernels: repeatGuardKernels as any, bugs: REPEAT_BUGS },
   { stem: "output-budget", source: "proofs/output-budget.ts", out: stages, kernels: outputBudgetKernels as any, bugs: BUDGET_BUGS },
+  { stem: "read-continuation", source: "proofs/read-continuation.ts", out: stages, kernels: readContinuationKernels as any, bugs: READ_CONTINUATION_BUGS },
   { stem: "store-limits", source: "proofs/store-limits.ts", out: stages, kernels: storeLimitKernels as any, bugs: STORE_BUGS },
   { stem: "gate", source: "proofs/gate.ts", out: kernel, kernels: gateKernels as any, bugs: GATE_BUGS },
   { stem: "call-timeout", source: "proofs/call-timeout.ts", out: kernel, kernels: callTimeoutKernels as any, bugs: CALL_TIMEOUT_BUGS },
