@@ -44,6 +44,11 @@ interface Repair {
   text: string;
 }
 
+interface PropertyTargets {
+  awaited?: readonly number[];
+  printed?: readonly number[];
+}
+
 const isIdentChar = (char: string | undefined): boolean =>
   char !== undefined && /[A-Za-z0-9_$]/.test(char);
 
@@ -319,11 +324,49 @@ const collectRepairs = (code: string, start: number, end: number): Repair[] => {
   return repairs;
 };
 
-// Positions come from the check: TS7053 declarations and unresolved `process` identifiers.
-function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string): Repair[] {
-  if (!indexTargets.length && !cwdTargets.length) return [];
+// The property can move inside print only when nobody uses the property's value.
+function isDiscardedStatement(node: ts.Expression): boolean {
+  let expression: ts.Node = node;
+  while (ts.isParenthesizedExpression(expression.parent) || ts.isAwaitExpression(expression.parent)) {
+    expression = expression.parent;
+  }
+  return ts.isExpressionStatement(expression.parent) && expression.parent.expression === expression;
+}
+
+// Parse in an async body like the checker: in a script, `await (...)` can parse as a call.
+function printedPropertyRepairs(code: string, targets: readonly number[]): Repair[] {
+  if (!targets.length) return [];
+  const prefix = "export {};\nasync function __fabric_main() {\n";
+  const file = ts.createSourceFile("program.ts", prefix + code + "\n}", ts.ScriptTarget.Latest, true);
+  const positions = new Set(targets);
+  const start = (node: ts.Node): number => node.getStart(file) - prefix.length;
+  const end = (node: ts.Node): number => node.end - prefix.length;
+  const repairs: Repair[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(node) && !node.questionDotToken && positions.has(start(node.name)) &&
+        isDiscardedStatement(node) && ts.isCallExpression(node.expression) && !node.expression.questionDotToken &&
+        !node.expression.typeArguments && ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "print" && node.expression.arguments.length === 1) {
+      const arg = node.expression.arguments[0]!;
+      if (!ts.isSpreadElement(arg)) {
+        repairs.push({ start: start(arg), end: start(arg), text: "(" });
+        repairs.push({ start: end(arg), end: end(arg), text: ")" + code.slice(end(node.expression), end(node)) });
+        repairs.push({ start: end(node.expression), end: end(node), text: "" });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return repairs;
+}
+
+// Positions come from the check: TS7053 declarations, unresolved `process`, and missing
+// Promise or global print properties. The AST determines which shapes can be repaired.
+function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string, propertyTargets: PropertyTargets = {}): Repair[] {
+  if (!indexTargets.length && !cwdTargets.length && !propertyTargets.awaited?.length && !propertyTargets.printed?.length) return [];
   const positions = new Set(indexTargets);
   const cwdPositions = new Set(cwdTargets);
+  const awaitPositions = new Set(propertyTargets.awaited);
   const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
   const repairs: Repair[] = [];
   const visit = (node: ts.Node): void => {
@@ -333,7 +376,7 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
         (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
-    if (cwd !== undefined && ts.isCallExpression(node) && !node.questionDotToken && !node.typeArguments && node.arguments.length === 0 &&
+    if (cwd !== undefined && ts.isCallExpression(node) && !node.typeArguments && node.arguments.length === 0 &&
         ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken &&
         node.expression.name.getText(file) === "cwd" && ts.isIdentifier(node.expression.expression) &&
         node.expression.expression.text === "process" && cwdPositions.has(node.expression.expression.getStart(file))) {
@@ -341,10 +384,15 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
       // JSON.stringify makes it a valid literal even when the folder contains quotes or backslashes.
       repairs.push({ start: node.getStart(file), end: node.end, text: JSON.stringify(cwd) });
     }
+    if (ts.isPropertyAccessExpression(node) && !ts.isPropertyAccessChain(node) && awaitPositions.has(node.name.getStart(file)) &&
+        ts.isCallExpression(node.expression) && ts.isAwaitExpression(node.parent) && node.parent.expression === node) {
+      repairs.push({ start: node.parent.getStart(file), end: node.parent.getStart(file), text: "(" });
+      repairs.push({ start: node.expression.end, end: node.expression.end, text: ")" });
+    }
     ts.forEachChild(node, visit);
   };
   visit(file);
-  return repairs;
+  return [...repairs, ...printedPropertyRepairs(code, propertyTargets.printed ?? [])];
 }
 
 function applyRepairs(code: string, repairs: Repair[]): string {
@@ -384,8 +432,8 @@ function diagnosedPropertyPaths(code: string, paths: Repair[], errorPositions: r
 }
 
 /** Try targeted repairs first; path repairs need a diagnostic at the value or its property name. */
-export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[]): string[] {
-  const targeted = diagnosticRepairs(code, indexTargets, cwdTargets, cwd);
+export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[], propertyTargets: PropertyTargets = {}): string[] {
+  const targeted = diagnosticRepairs(code, indexTargets, cwdTargets, cwd, propertyTargets);
   const scanned = collectRepairs(code, 0, code.length);
   const propertyPaths = diagnosedPropertyPaths(code, scanned, errorPositions);
   const paths = scanned.filter((repair) => propertyPaths.has(repair) ||
