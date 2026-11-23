@@ -138,6 +138,18 @@ other failed programs. Neither build had refused top-level calls, so the gain ca
 wording. The newer build had fewer wasted requests and one more pass, but no token gain. Mean tokens
 and requests per run were similar across builds. Main's failed run was `06-runlog-stats-command`.
 
+On the evening of 2026-11-23, the same driver ran 15 tasks, 5 times per arm, with `fabricOnly` on
+for the plugin. The plugin also had #72, #74 and the first commit of #76; native code mode ran
+alongside. `fabric_exec` passed 74 of 75, with a mean of 127,333 tokens, a median of 115,130, a
+range of 33,899 to 468,815 and 8.36 requests per run. Native code mode passed 74 of 75, with a mean
+of 240,386 tokens, a median of 226,900, a range of 67,474 to 678,277 and 10.89 requests per run.
+`fabric_exec` used 0.530 of native's mean and 0.507 of its median. Each arm failed one run of
+`05-router-encoded-path`; no program in the failed `fabric_exec` run was repaired. `fabric_exec` had
+19 requests that did no work: 13 type-check failures, 3 Bash nonzero exits and 3 other failed
+programs, against 13 in the afternoon. Twelve programs that failed the first check were repaired and
+ran without an extra request. On this model, the later repairs show no gain in passes or wasted
+requests over the afternoon build; the differences are within what repeated runs of these tasks show.
+
 In one #70 and #71 run of `10-rename-config-settings`, the session never called `fabric_exec` and
 used top-level Bash and Write. At its first request, the plugin's MCP server was still connecting, so
 `fabric_exec` was not offered. `fabricOnly` hides Bash and Write only while `fabric_exec` is offered,
