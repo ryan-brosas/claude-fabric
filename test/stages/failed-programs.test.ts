@@ -18,12 +18,12 @@ type LiveKind = "await" | "print" | "optional-cwd" | "unrelated";
 interface LiveFixture { kind: LiveKind; task: string; n: number; code: string; error: string }
 const liveFixtures: LiveFixture[] = JSON.parse(readFileSync(new URL("../fixtures/await-failed-programs.json", import.meta.url), "utf8"));
 
-test("replays all 13 live benchmark failures: seven pass and six retain their original errors", () => {
+test("replays all 13 live benchmark failures: eight pass and five retain their original errors", () => {
   const counts = Object.fromEntries(["await", "print", "optional-cwd", "unrelated"]
     .map((kind) => [kind, liveFixtures.filter((fixture) => fixture.kind === kind).length]));
   expect(counts).toEqual({ await: 4, print: 2, "optional-cwd": 3, unrelated: 4 });
   expect(liveFixtures.flatMap((fixture, index) => checkProgram(fixture.code, { cwd: PROJECT }).checked.ok ? [index + 1] : []))
-    .toEqual([1, 4, 5, 7, 10, 11, 13]);
+    .toEqual([1, 4, 5, 7, 8, 10, 11, 13]);
 });
 
 for (const [index, fixture] of liveFixtures.entries()) {
@@ -32,7 +32,7 @@ for (const [index, fixture] of liveFixtures.entries()) {
     const original = check(fixture.code, guestTypes(TOOLS));
     const { program, checked } = checkProgram(fixture.code, { cwd: PROJECT });
     expect(original.ok).toBe(false);
-    if (fixture.kind === "await" || fixture.kind === "print" || index === 6) {
+    if (fixture.kind === "await" || fixture.kind === "print" || index === 6 || index === 7) {
       expect(checked.ok).toBe(true);
       expect(program).not.toBe(fixture.code);
       return;
@@ -46,8 +46,10 @@ for (const [index, fixture] of liveFixtures.entries()) {
       const candidate = repairCode(fixture.code, original.indexTargets, original.cwdTargets, PROJECT);
       expect(candidate).not.toBe(fixture.code);
       const errors = check(candidate, guestTypes(TOOLS)).errors.join("\n");
-      expect(errors).toContain("This kind of expression is always truthy");
-      if (index === 11) expect(errors).toContain("Type 'undefined' is not assignable to type 'string'");
+      expect(index).toBe(11);
+      expect(errors).toContain("Type 'undefined' is not assignable to type 'string'");
+      expect(errors).not.toContain("This kind of expression is always truthy");
+      expect(errors).not.toContain("Cannot find name 'process'");
     }
   });
 }

@@ -395,9 +395,10 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
         (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
-    if (cwd !== undefined && ts.isConditionalExpression(node) && isCwdProperty(node.condition) &&
-        !referenceSensitiveConditional(node)) {
-      // Keep the true branch in place so other diagnosed repairs can still apply inside it.
+    if (cwd !== undefined && ts.isConditionalExpression(node) &&
+        (isCwdProperty(node.condition) || (cwd && isCwdCall(node.condition))) && !referenceSensitiveConditional(node)) {
+      // A cwd call returns a non-empty project folder. Keep the true branch in place so
+      // other diagnosed repairs can still apply inside it.
       repairs.push({ start: node.getStart(file), end: node.whenTrue.getStart(file), text: "(" });
       repairs.push({ start: node.whenTrue.end, end: node.end, text: ")" });
     }
