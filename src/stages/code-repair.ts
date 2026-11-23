@@ -489,8 +489,8 @@ function hasSingleOpeningBrace(object: ts.ObjectLiteralExpression, file: ts.Sour
 
 // The parser omits the direct close-brace token on an unclosed object literal. Parse in the
 // check's async body so await and recovered call arguments have the same shape. Repair only if
-// its source span contains exactly one real opening-brace token: the object's own. Any other
-// opening brace may make the placement ambiguous, so conservatively leave the program and errors alone.
+// the span has one real opening brace (the object's own) and every element is a property assignment.
+// Another opening brace can make placement ambiguous; a name: value pair cannot be a call argument.
 function missingBraceRepairs(code: string, targets: readonly number[]): Repair[] {
   if (!targets.length) return [];
   const prefix = "export {};\nasync function __fabric_main(): Promise<unknown> {\n";
@@ -503,7 +503,7 @@ function missingBraceRepairs(code: string, targets: readonly number[]): Repair[]
       const close = node.getChildren(file).find((child) => child.kind === ts.SyntaxKind.CloseParenToken);
       if (last && ts.isObjectLiteralExpression(last) && close && positions.has(close.getStart(file) - prefix.length) &&
           !last.getChildren(file).some((child) => child.kind === ts.SyntaxKind.CloseBraceToken) &&
-          hasSingleOpeningBrace(last, file)) {
+          hasSingleOpeningBrace(last, file) && last.properties.every(ts.isPropertyAssignment)) {
         const position = close.getStart(file) - prefix.length;
         repairs.push({ start: position, end: position, text: "}" });
       }
