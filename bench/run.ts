@@ -7,7 +7,7 @@ import { mkdirSync, existsSync, readFileSync, appendFileSync, writeFileSync, rmS
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { benchmarkPaths } from "./paths.ts";
-import { createBillingNoticeHandler, promptStillInInput } from "./pane.ts";
+import { createBillingNoticeHandler, promptStillInInput, trustDialogVisible } from "./pane.ts";
 import { decideResend } from "./resend-policy.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -92,6 +92,9 @@ async function runOne(arm: Arm, task: string, n: number) {
     for (let i = 0; ; i++) {
       await sleep(1000);
       const pane = await $`tmux capture-pane -p -t ${session}`.text();
+      if (trustDialogVisible(pane)) {
+        throw new Error(`Claude Code asks whether to trust the run folder ${RUNS}: run claude in that folder once and accept, or set BENCH_RUNS to a folder it already trusts`);
+      }
       if (/❯/.test(pane) && /auto mode|bypass|accept edits|for shortcuts|plan mode/.test(pane)) break;
       if (i > 60) throw new Error("the session never showed its prompt");
     }
