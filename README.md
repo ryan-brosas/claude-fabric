@@ -63,7 +63,30 @@ plain-Claude Sonnet number for comparison.
 
 ### Code mode: `fabric_exec` against native code mode
 
-`fabric_exec` solved as many runs as native code mode, but used 1.052 times its tokens.
+On 2026-11-23, `fabric_exec` with `fabricOnly` on passed as many runs as native code mode, at
+0.78 times its mean tokens.
+
+| Arm | Runs passing | Mean tokens | Median tokens |
+| --- | --- | --- | --- |
+| `fabric_exec`, `fabricOnly` on, native code mode off | 70 of 75 | 87k | 80k |
+| Native code mode | 70 of 75 | 111k | 106k |
+
+The two arms ran together on the same 15 tasks as the earlier run, 5 times per arm, on Sonnet 5.5,
+Claude Code 2.1.330 and plugin main `42b1fef`. `fabric_exec` used 0.78 times native code mode's
+mean tokens (87,053 against 111,020) and 0.76 times its median (80,486 against 106,439). Its mean
+was lower on all 15 tasks.
+Both arms failed `06-runlog-stats-command` in all 5 runs and passed every other run. Mean wall time
+per run was 36 s for `fabric_exec` and 30 s for native code mode.
+
+One `fabric_exec` run was replaced: the driver typed the prompt but the session never received Enter,
+so no session ran; the replacement needed Enter pressed by hand, then passed, and its tokens are
+counted. No plain Claude Code arm ran this time.
+
+Since the 2026-11-19 run, the changes are the `fabricOnly` option (#22, #23, #36), program guidance
+(#21) and whole-file `Read` guidance (#58, #61).
+
+On the earlier 2026-11-19 run, with `fabricOnly` off (the default), `fabric_exec` used 1.052 times
+native code mode's mean tokens. This remains the only measurement with `fabricOnly` off.
 
 | Arm | Runs passing | Mean tokens |
 | --- | --- | --- |
@@ -71,9 +94,11 @@ plain-Claude Sonnet number for comparison.
 | Native code mode | 70 of 75 | 145k |
 | Plain Claude Code | 68 of 74 | 167k |
 
-On 2026-11-19, 15 tasks ran 5 times per arm on Sonnet 5.5. `fabric_exec` costs slightly more than
-native code mode, not less. One plain run left no record, and one hit the turn limit, so the plain
-token mean covers 73 runs.
+On 2026-11-19, 15 tasks ran 5 times per arm on Sonnet 5.5. One plain run left no record, and one hit
+the turn limit, so the plain token mean covers 73 runs. Native code mode's mean fell from 145k then
+to 111k in the rerun, on a newer Claude Code, so compare arms within one day, not across the two
+dates. These 15 small tasks on one model are evidence for these tasks, not a claim about sessions in
+general.
 
 ## Install
 
