@@ -10,7 +10,7 @@ meant to replace Claude Code's native code mode.
 
 Status: the plugin exposes `fabric_exec` to Claude Code, with Fabric's self-correcting stages
 (argument repair, code repair, output budget, type-error guidance, repeat guard). Its mod provides
-a deterministic Fabric summary for compaction. If a transcript rebuild fails, it keeps the earlier
+a deterministic Fabric summary for compaction. If a transcript rebuild fails, it carries the earlier
 Fabric summary. It delegates to Claude Code when an over-budget transcript has no older history to
 cut, on an automatic skip, or on an uncaught error or timeout.
 
@@ -24,7 +24,7 @@ Code's median.
 | Compactor | Runs passing | Median tokens | Range |
 | --- | --- | --- | --- |
 | Plain Claude Code | 9 of 10 | 9.02M | 8.70M to 10.24M |
-| claude-fabric before | 10 of 10 | 13.48M | 9.71M to 17.27M |
+| claude-fabric before | 10 of 10 completed | 13.48M | 9.71M to 17.27M |
 | claude-fabric now | 18 of 20 | 8.57M | 8.16M to 9.02M |
 
 `l3-memory` is a 100-turn session with 6 compactions and 14 facts stated only in the conversation:
@@ -32,23 +32,29 @@ settings, later corrections and one constraint. A checker grades the files the m
 end. All rows use DeepSeek v4.1 Flash; plain Claude Code uses its own compaction. Plain Claude Code
 and the first claude-fabric comparison ran on 2026-11-21; the current runs ran on 2026-11-22 on
 main `f92d000`. The first claude-fabric comparison had 10 scored runs; its final summaries held 92
-of 140 facts, and the model got the rest back with recall. In each of the 20 current runs, the
-final summary after the sixth compaction held all 14 facts: 280 of 280. Each was the user's own
-sentence, word for word, not a paraphrase. The benchmark scorer graded this result, and its own
-audit passed.
+of 140 facts. Of the 48 missing, the trace report attributes 44 to recall and 2 to direct reads of
+the transcript file; 2 have no established source. One additional attempt did not complete:
+a 15-minute marker timeout after 46 turns. It was replaced, had no token count, and its cause is
+unproven. The before arm's token figures cover the 10 completed runs.
+
+In each of the 20 current runs, the final summary after the sixth compaction held all 14 facts:
+280 of 280. Each was the user's own sentence, word for word, not a paraphrase. The benchmark scorer
+graded this result, and its own audit passed.
 
 Both failed current runs wrote one list setting as strings instead of integers, though all four
 values were in their final summaries. Plain Claude Code's one failed run had the same type slip.
 The worst current run used 1.05 times the median tokens. Replaying recorded transcripts through the
-compactor showed that 0 of 120 compactions fell back to Claude Code's own summary; this was not
-established from live logs.
+compactor showed that none of the 120 compactions carried an earlier Fabric summary or delegated to
+Claude Code; this was not established from live hook logs.
 
 A second task, `l3-parallel`, has 28 turns and 3 compactions, with parallel tool calls right before
-each compaction. It passed 10 of 10 runs and 100 of 100 checks; 0 of 30 compactions fell back.
+each compaction. It passed 10 of 10 runs and 100 of 100 checks. Replay found that none of its 30
+compactions carried an earlier Fabric summary or delegated to Claude Code.
 
-After compaction, a kept whole-file `Read` result over 16,384 bytes is replaced by a stub of at
-most 1,024 bytes that names the file, its size, the transcript entry and a SHA-256 (#66). Before
-this change, the median was 9.63M tokens over 20 runs.
+After compaction, a kept whole-file `Read` result over 16,384 bytes is replaced by a stub naming
+the file, its size, the transcript entry and a SHA-256 only if the result is text-only, verifies
+against the transcript and the stub is at most 1,024 bytes; otherwise the result stays as it was
+(#66). Before this change, the median was 9.63M tokens over 20 runs.
 
 The DeepSeek comparisons cover one task family on one inexpensive model, with 20 and 10 runs.
 Token counts are mostly cache reads. This is evidence for these tasks, not a claim about sessions in
