@@ -101,9 +101,21 @@ requests per run were the same and no pass was lost. The plugin ran #74 without 
 commits, which only refuse more inputs. One `fabric_exec` run made 3 top-level Bash calls.
 
 Since the 2026-11-19 run, the changes also include the `fabricOnly` option (#22, #23, #36), program
-guidance (#21) and whole-file `Read` guidance (#58, #61). An afternoon arm that added guidance to
-chain dependent steps in one program showed no gain: 74 of 75 passed, with a mean of 83,790 tokens
-and 4.35 requests per run, so that sentence is not shipped.
+guidance (#21) and whole-file `Read` guidance (#58, #61).
+
+We tested a guidance sentence saying a program should await a result and use it in the next call.
+Both runs were on 2026-11-23, with Sonnet 5.5, 15 tasks, 5 runs per arm and `fabricOnly` on.
+
+In the afternoon, the `fabric_exec`-only arm on the #70 and #71 build passed 74 of 75, with a mean
+of 83,790 tokens, 4.35 requests per run and 6 requests that did no work. In the evening, on main
+through #76, `fabric_exec` passed 72 of 75 at a mean of 87,246 tokens and a median of 78,020, with
+4.44 requests per run and 6 requests that did no work. All three failures were
+`06-runlog-stats-command`. Native code mode ran alongside and passed 74 of 75 at a mean of 118,234
+tokens and a median of 107,383, with 14.72 requests per run.
+
+The preceding evening build without the sentence passed 75 of 75 with 4.37 requests per run and 11
+requests that did no work. The sentence roughly halves the requests that do no work but loses
+passes and does not lower requests per run, so it is not shipped.
 
 On the earlier 2026-11-19 run, with `fabricOnly` off (the default), `fabric_exec` used 1.052 times
 native code mode's mean tokens. This remains the only measurement with `fabricOnly` off.
