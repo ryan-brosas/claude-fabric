@@ -59,7 +59,10 @@ Where it stands:
    (#21), and the `fabricOnly` option (#22, #23), which keeps Bash, Edit, Write, Grep and Glob from
    the main conversation so its work goes through programs. On Haiku the two together cut mean
    tokens from 363k to 277k, all 15 runs passing; the option is off by default and on in the
-   dogfood setup.
+   dogfood setup. On 2026-11-23, `fabric_exec` with `fabricOnly` on and native code mode off passed
+   70 of 75 in a Sonnet 5.5 rerun, the same as native code mode. Across 15 tasks and 5 runs per arm,
+   it used 0.78 times native's mean tokens (87k against 111k) and 0.76 times its median (80k against
+   106k); this is evidence for these tasks, not sessions in general.
 
 Each step's details and the things we chose not to build are in
 [docs/internals/decisions.md](docs/internals/decisions.md).
