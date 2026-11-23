@@ -10,6 +10,8 @@
 // diagnostics. Only unambiguous path heads are rewritten; a regex-first tool's positional pattern
 // and an already-quoted argument are left alone.
 
+import ts from "typescript";
+
 const POSITIONAL_PATH_TOOLS = new Set(["Read", "Write", "Edit"]);
 const OBJECT_PATH_TOOLS = new Set(["Read", "Write", "Edit", "Grep", "Glob"]);
 const PATH_KEYS = new Set([
@@ -317,9 +319,29 @@ const collectRepairs = (code: string, start: number, end: number): Repair[] => {
   return repairs;
 };
 
-/** The program with unquoted path arguments and Unicode quotes in path positions quoted. */
-export function repairCode(code: string): string {
-  const repairs = collectRepairs(code, 0, code.length);
+// Positions come from TS7053 diagnostics resolved to their declarations by the check.
+function accumulatorRepairs(code: string, targets: readonly number[]): Repair[] {
+  if (!targets.length) return [];
+  const positions = new Set(targets);
+  const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
+  const repairs: Repair[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && positions.has(node.name.getStart(file)) &&
+        !node.type && node.initializer && ts.isObjectLiteralExpression(node.initializer) &&
+        node.initializer.properties.length === 0 && ts.isVariableDeclarationList(node.parent) &&
+        (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
+      repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return repairs;
+}
+
+/** Returns candidate path and diagnostic-directed accumulator repairs. */
+export function repairCode(code: string, indexTargets: readonly number[] = []): string {
+  const repairs = [...collectRepairs(code, 0, code.length), ...accumulatorRepairs(code, indexTargets)]
+    .sort((a, b) => a.start - b.start);
   if (repairs.length === 0) return code;
   let result = code;
   for (let index = repairs.length - 1; index >= 0; index--) {

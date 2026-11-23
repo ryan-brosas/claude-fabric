@@ -27,7 +27,31 @@ let previous: ts.Program | undefined;
 let served = "";
 let servedFile: ts.SourceFile | undefined;
 
-export interface CheckResult { ok: boolean; errors: string[] }
+export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[] }
+
+// Resolve TS7053 to the actual declaration, not another variable with the same name.
+function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]): number[] {
+  const targets = new Set<number>();
+  const checker = program.getTypeChecker();
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.code !== 7053 || !diagnostic.file || diagnostic.start === undefined) continue;
+    const file = diagnostic.file;
+    const start = diagnostic.start;
+    const visit = (node: ts.Node): void => {
+      if (node.getStart(file) > start || node.end <= start) return;
+      if (ts.isElementAccessExpression(node) && node.getStart(file) === start && ts.isIdentifier(node.expression)) {
+        const declarations = checker.getSymbolAtLocation(node.expression)?.declarations;
+        if (declarations?.length === 1 && ts.isVariableDeclaration(declarations[0]!)) {
+          const name = declarations[0].name;
+          if (ts.isIdentifier(name)) targets.add(name.getStart(file) - PREFIX.length);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  return [...targets].filter((position) => position >= 0);
+}
 
 export function check(code: string, guest: string): CheckResult {
   if (guest !== served) { served = guest; servedFile = undefined; }
@@ -56,7 +80,8 @@ export function check(code: string, guest: string): CheckResult {
     const { line, character } = d.file.getLineAndCharacterOfPosition(d.start);
     return "line " + (line + 1 - PREFIX_LINES) + ":" + (character + 1) + " " + msg;
   });
-  return { ok: errors.length === 0, errors };
+  const targets = indexTargets(program, diags);
+  return targets.length ? { ok: false, errors, indexTargets: targets } : { ok: errors.length === 0, errors };
 }
 
 export function transpile(code: string): string {

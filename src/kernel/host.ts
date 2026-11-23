@@ -52,7 +52,7 @@ export async function run(code: string, cwd: string, options: RunOptions = {}): 
   let program = code;
   let checked = check(code, declarations);
   if (!checked.ok) {
-    const repaired = repairCode(code);
+    const repaired = repairCode(code, checked.indexTargets);
     if (repaired !== code) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
