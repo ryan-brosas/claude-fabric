@@ -27,7 +27,15 @@ let previous: ts.Program | undefined;
 let served = "";
 let servedFile: ts.SourceFile | undefined;
 
-export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[]; cwdTargets?: number[]; errorPositions?: number[] }
+export interface CheckResult {
+  ok: boolean;
+  errors: string[];
+  indexTargets?: number[];
+  cwdTargets?: number[];
+  awaitPropertyTargets?: number[];
+  printPropertyTargets?: number[];
+  errorPositions?: number[];
+}
 
 // Resolve TS7053 to its declaration, and annotate only variables with an indexed assignment.
 function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]): number[] {
@@ -70,6 +78,50 @@ function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]
   return [...targets].filter(([symbol, position]) => position >= 0 && written.has(symbol)).map(([, position]) => position);
 }
 
+// A local `print` may return void too; only the program global supports this repair.
+function printPropertyTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]): number[] {
+  const checker = program.getTypeChecker();
+  const targets: number[] = [];
+  const directCallsOnly = new Map<ts.Symbol, boolean>();
+  const isUnchangedGlobal = (symbol: ts.Symbol, file: ts.SourceFile): boolean => {
+    const cached = directCallsOnly.get(symbol);
+    if (cached !== undefined) return cached;
+    let unchanged = true;
+    const visit = (node: ts.Node): void => {
+      // A non-call use can rebind print; direct eval can rebind it without naming it in the AST.
+      if (ts.isIdentifier(node) && (node.text === "eval" ||
+          (node.text === "print" && checker.getSymbolAtLocation(node) === symbol &&
+           !(ts.isCallExpression(node.parent) && node.parent.expression === node)))) unchanged = false;
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    directCallsOnly.set(symbol, unchanged);
+    return unchanged;
+  };
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.code !== 2339 || !diagnostic.file || diagnostic.start === undefined ||
+        !/^Property .+ does not exist on type 'void'\./.test(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))) continue;
+    const file = diagnostic.file;
+    const start = diagnostic.start;
+    const visit = (node: ts.Node): void => {
+      if (node.getStart(file) > start || node.end <= start) return;
+      if (ts.isPropertyAccessExpression(node) && node.name.getStart(file) === start &&
+          ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
+          node.expression.expression.text === "print") {
+        const symbol = checker.getSymbolAtLocation(node.expression.expression);
+        const declarations = symbol?.declarations;
+        if (symbol && declarations?.length === 1 && declarations[0]?.getSourceFile().fileName === DECLARATIONS &&
+            isUnchangedGlobal(symbol, file)) {
+          targets.push(start - PREFIX.length);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  return targets;
+}
+
 export function check(code: string, guest: string): CheckResult {
   if (guest !== served) { served = guest; servedFile = undefined; }
   const text = PREFIX + code + SUFFIX;
@@ -106,8 +158,16 @@ export function check(code: string, guest: string): CheckResult {
     d.file.text.slice(d.start, d.start + d.length) === "process" &&
     ts.flattenDiagnosticMessageText(d.messageText, "\n").startsWith("Cannot find name 'process'.")
       ? [d.start - PREFIX.length] : []);
+  // TS2339 identifies the property token; only a missing property on Promise<T> can authorize
+  // an await-precedence repair. The repair checks the precise expression shape.
+  const awaitPropertyTargets = diags.flatMap((d) => d.code === 2339 && d.file && d.start !== undefined &&
+    /^Property .+ does not exist on type 'Promise<.+>'\./.test(ts.flattenDiagnosticMessageText(d.messageText, "\n"))
+      ? [d.start - PREFIX.length] : []);
+  const printTargets = printPropertyTargets(program, diags);
   return { ok: errors.length === 0, errors, ...(targets.length ? { indexTargets: targets } : {}),
-    ...(cwdTargets.length ? { cwdTargets } : {}), ...(errorPositions.length ? { errorPositions } : {}) };
+    ...(cwdTargets.length ? { cwdTargets } : {}), ...(awaitPropertyTargets.length ? { awaitPropertyTargets } : {}),
+    ...(printTargets.length ? { printPropertyTargets: printTargets } : {}),
+    ...(errorPositions.length ? { errorPositions } : {}) };
 }
 
 export function transpile(code: string): string {

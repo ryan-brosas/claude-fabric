@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { check } from "../../src/kernel/check.ts";
 import { checkProgram, run } from "../../src/kernel/host.ts";
+import { TOOLS } from "../../src/providers/tools/index.ts";
+import { guestTypes } from "../../src/registry/generate.ts";
+import { repairCode } from "../../src/stages/code-repair.ts";
 
 type Kind = "accumulator" | "accumulator-process" | "process" | "url" | "syntax" | "live-cwd";
 interface Fixture { kind: Kind; code: string; payloads?: Record<string, string> }
@@ -10,6 +14,44 @@ interface Fixture { kind: Kind; code: string; payloads?: Record<string, string> 
 // The live report supplied one program form for both runs, so those two fixtures match.
 const fixtures: Fixture[] = JSON.parse(readFileSync(new URL("../fixtures/failed-programs.json", import.meta.url), "utf8"));
 const PROJECT = "/fixture/project";
+
+type LiveKind = "await" | "print" | "optional-cwd" | "unrelated";
+interface LiveFixture { kind: LiveKind; task: string; n: number; code: string; error: string }
+const liveFixtures: LiveFixture[] = JSON.parse(readFileSync(new URL("../fixtures/await-failed-programs.json", import.meta.url), "utf8"));
+
+test("replays all 13 live benchmark failures: six pass and seven retain their original errors", () => {
+  const counts = Object.fromEntries(["await", "print", "optional-cwd", "unrelated"]
+    .map((kind) => [kind, liveFixtures.filter((fixture) => fixture.kind === kind).length]));
+  expect(counts).toEqual({ await: 4, print: 2, "optional-cwd": 3, unrelated: 4 });
+  expect(liveFixtures.filter((fixture) => checkProgram(fixture.code, { cwd: PROJECT }).checked.ok)).toHaveLength(6);
+});
+
+for (const [index, fixture] of liveFixtures.entries()) {
+  test(`live benchmark program ${index + 1}: ${fixture.task} #${fixture.n} (${fixture.kind})`, () => {
+    // Replays are checks only: never execute any recorded program.
+    const original = check(fixture.code, guestTypes(TOOLS));
+    const { program, checked } = checkProgram(fixture.code, { cwd: PROJECT });
+    expect(original.ok).toBe(false);
+    if (fixture.kind === "await" || fixture.kind === "print") {
+      expect(checked.ok).toBe(true);
+      expect(program).not.toBe(fixture.code);
+      return;
+    }
+    expect(checked.ok).toBe(false);
+    expect(program).toBe(fixture.code);
+    expect(checked.errors).toEqual(original.errors);
+    if (fixture.kind === "unrelated") {
+      const recorded = fixture.error.replace("Type errors; code was not executed:\n", "").split("\nRecovery hint:")[0];
+      expect(checked.errors.join("\n")).toBe(recorded);
+    } else {
+      const candidate = repairCode(fixture.code, original.indexTargets, original.cwdTargets, PROJECT);
+      expect(candidate).not.toBe(fixture.code);
+      const errors = check(candidate, guestTypes(TOOLS)).errors.join("\n");
+      expect(errors).toContain(index === 6 ? "Right operand of ?? is unreachable" : "This kind of expression is always truthy");
+      if (index === 11) expect(errors).toContain("Type 'undefined' is not assignable to type 'string'");
+    }
+  });
+}
 
 test("the replay includes every recorded failure, including the overlapping case", () => {
   const counts = Object.fromEntries(["accumulator", "accumulator-process", "process", "url", "syntax", "live-cwd"]
@@ -27,8 +69,8 @@ test("the overlapping accumulator also passes once process is removed", () => {
   expect(result.program).toContain(": Record<string, any>");
 });
 
-// Programs 4 and 5 still name process outside an exact cwd() call: the property test and the
-// optional call cannot be silently rewritten. Program 1 has the original syntax error.
+// Program 4 still tests the process.cwd property. Program 5 uses an optional call in a ??
+// expression, where a literal would fail the recheck. Program 1 has the original syntax error.
 const passes = [false, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true];
 
 test("twelve of the fifteen benchmark programs now pass", () => {

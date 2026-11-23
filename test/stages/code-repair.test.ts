@@ -11,6 +11,192 @@ import { repairCandidates, repairCode } from "../../src/stages/code-repair.ts";
 const declarations = guestTypes(TOOLS);
 const PROJECT = "/fixture/project";
 
+test("repairs a property accessed before awaiting a call", () => {
+  const code = 'print(await Bash({command: "pwd"}).output);';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('print((await Bash({command: "pwd"})).output);');
+});
+
+test("moves a property on the global print result to its argument", () => {
+  const code = 'print(await Bash({command: "pwd"})).output;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('print((await Bash({command: "pwd"})).output);');
+});
+
+test("refuses to move a print property whose value is assigned and written", () => {
+  const code = 'const output = print(await Bash({command:"printf data"})).output;\nawait Write("answer.txt", `output=${output}`);';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Property 'output' does not exist on type 'void'");
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(false);
+  expect(result.program).toBe(code);
+  expect(result.checked.errors).toEqual(original.errors);
+});
+
+test("repairs discarded print properties in statements with await or parentheses", () => {
+  const cases = [
+    ['print(await Bash({command:"printf data"})).output; return 1;', 'print((await Bash({command:"printf data"})).output); return 1;'],
+    ['(print(await Bash({command:"printf data"})).output)', '(print((await Bash({command:"printf data"})).output))'],
+    ['await ((print(await Bash({command:"printf data"})).output)); return 1;', 'await ((print((await Bash({command:"printf data"})).output))); return 1;'],
+    ['await print(await Bash({command:"printf data"})).output;', 'await print((await Bash({command:"printf data"})).output);'],
+    ['if (true) { (await (print(await Bash({command:"printf data"})).output)); } return 1;', 'if (true) { (await (print((await Bash({command:"printf data"})).output))); } return 1;'],
+  ] as const;
+  for (const [code, expected] of cases) {
+    const result = checkProgram(code, { cwd: PROJECT });
+    expect(result.checked.ok).toBe(true);
+    expect(result.program).toBe(expected);
+  }
+});
+
+test("refuses print properties used in expressions, including wrapped ones", () => {
+  const access = 'print(await Bash({command:"printf data"})).output';
+  for (const code of [
+    `return ${access};`,
+    `return await ((${access}));`,
+    `String(${access});`,
+    `const text = \`output=\${${access}}\`;`,
+    `if (${access}) print("yes");`,
+    `let value: unknown; value = ${access};`,
+    `const fn = async () => ${access};`,
+    `${access}, print("after");`,
+    `await (${access} + "suffix");`,
+    `void ${access};`,
+    `for (${access}; false;) {}`,
+    `${access}; const used = ${access};`,
+  ]) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.errors.join("\n")).toContain("Property 'output' does not exist on type 'void'");
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("a consumed print property prevents all tool calls and writes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-print-refused-"));
+  try {
+    const code = 'const output = print(await Bash({command:"printf data"})).output;\nawait Write("answer.txt", `output=${output}`);';
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.text).toContain("Property 'output' does not exist on type 'void'");
+    expect(await Bun.file(join(dir, "answer.txt")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("repairs an unresolved optional cwd call", () => {
+  const code = 'return process.cwd?.();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('return "/fixture/project";');
+});
+
+test("keeps the original error if a cwd literal introduces a conditional diagnostic", () => {
+  for (const code of ['return process.cwd?.() ? "a" : "b";', 'return process.cwd?.() ?? ".";']) {
+    const original = check(code, declarations);
+    const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
+    expect(check(repaired, declarations).ok).toBe(false);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("runs each repaired property access exactly once", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-await-"));
+  try {
+    for (const code of [
+      'print(await Bash({command: "printf result"}).output);',
+      'print(await Bash({command: "printf result"})).output;',
+      'await ((print(await Bash({command: "printf result"})).output));',
+    ]) {
+      const result = await run(code, dir);
+      expect(result.ok).toBe(true);
+      expect(result.calls).toBe(1);
+      expect(result.text).toBe("result");
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a bad property and an await of a non-call retain their original errors", () => {
+  for (const code of [
+    'return await Bash({command: "pwd"}).missing;',
+    'const promise = Bash({command: "pwd"}); return await promise.output;',
+    'print(await Bash({command: "pwd"})).missing;',
+    'return await Bash({command: "pwd"})?.output;',
+  ]) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("a candidate that still fails does not run any program tools", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-await-rejected-"));
+  try {
+    const code = 'await Write("never", "x"); return await Bash({command: "pwd"}).missing;';
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.text).toContain("Property 'missing' does not exist on type 'Promise<BashResult>'");
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("never repairs a shadowed or rebound print, eval, or two print arguments", () => {
+  for (const code of [
+    'function print(value: { output: string }): void {} print({output: "x"}).output;',
+    'const print = (value: { output: string }): void => {}; print({output: "x"}).output;',
+    'print({output: "x"}, "second").output;',
+    '// @ts-ignore\nprint = () => ({output: "replacement"});\nreturn print({output: "argument"}).output;',
+    'eval(\'print = () => ({output: "replacement"})\'); return print({output: "argument"}).output;',
+  ]) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("does not touch property-shaped text or an undiagnosed access", () => {
+  const code = 'const s = "await Bash(x).output"; const t = `print({output: 1}).output`; print(await Bash({command: "pwd"}).output); return [s, t];';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const s = "await Bash(x).output"; const t = `print({output: 1}).output`; print((await Bash({command: "pwd"})).output); return [s, t];');
+  const invalid = 'const p = Promise.resolve({output: "ok"}); return await p.output;';
+  expect(checkProgram(invalid, { cwd: PROJECT }).program).toBe(invalid);
+});
+
+test("leaves passing property accesses and optional cwd calls unchanged", () => {
+  for (const code of [
+    'print((await Bash({command: "pwd"})).output);',
+    'const process = { cwd: () => "local" }; return process.cwd?.();',
+    'const print = (x: unknown) => ({output: x}); return print("x").output;',
+  ]) {
+    expect(check(code, declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT }).program).toBe(code);
+  }
+});
+
+test("combines diagnostic repairs in a single program", () => {
+  const code = 'print(await Bash({command: process.cwd?.()})).output;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('print((await Bash({command: "/fixture/project"})).output);');
+});
+
+test("combines multiple property and path repairs without changing neighboring text", () => {
+  const code = 'const a = await Bash({command: "pwd"}).output; print(await Bash({command: "pwd"})).exitCode; return [a, await Read(/tmp/x)];';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const a = (await Bash({command: "pwd"})).output; print((await Bash({command: "pwd"})).exitCode); return [a, await Read("/tmp/x")];');
+});
+
 test("the host repairs a regex-shaped object path diagnosed at the property name", () => {
   const code = 'return await Read({ file_path: /tmp/i });';
   const checked = check(code, declarations);
@@ -208,7 +394,7 @@ test("repairs only the diagnostic-targeted cwd call in concatenation and templat
 });
 
 test("refuses other process properties, non-exact calls, and text", () => {
-  for (const expression of ["process.env.X", "process.argv", "process.exit()", "process.cwd(1)", "process.cwd<string>()", "process.cwd?.()", "process?.cwd()", 'process["cwd"]()', "process.c\\u0077d()", "other.process.cwd()"]) {
+  for (const expression of ["process.env.X", "process.argv", "process.exit()", "process.cwd", "process.cwd(1)", "process.cwd<string>()", "process?.cwd()", 'process["cwd"]()', "process.c\\u0077d()", "other.process.cwd()"]) {
     const code = `return ${expression};`;
     expect(check(code, declarations).ok).toBe(false);
     expect(candidate(code)).toBe(code);

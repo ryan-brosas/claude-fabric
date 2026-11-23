@@ -55,7 +55,10 @@ export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> & { 
   if (!checked.ok) {
     // CLAUDE_PROJECT_DIR can be relative; tools and Bash resolve it from the server directory.
     const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
-    const candidates = repairCandidates(code, checked.indexTargets ?? [], checked.cwdTargets ?? [], cwd, checked.errorPositions ?? []);
+    const candidates = repairCandidates(code, checked.indexTargets ?? [], checked.cwdTargets ?? [], cwd, checked.errorPositions ?? [], {
+      awaited: checked.awaitPropertyTargets,
+      printed: checked.printPropertyTargets,
+    });
     for (const repaired of candidates) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
