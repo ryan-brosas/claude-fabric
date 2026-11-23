@@ -72,30 +72,25 @@ test("the overlapping accumulator also passes once process is removed", () => {
   expect(result.program).toContain(": Record<string, any>");
 });
 
-// Program 1 has a syntax error inside a template literal, which must stay unchanged.
-const passes = [false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
-
-test("fourteen of the fifteen benchmark programs now pass", () => {
-  expect(fixtures.slice(0, 15).filter((fixture) => checkProgram(fixture.code, { cwd: PROJECT }).checked.ok)).toHaveLength(14);
+test("all fifteen benchmark programs and both live-cwd examples pass", () => {
+  expect(fixtures).toHaveLength(17);
+  expect(fixtures.slice(0, 15).filter((fixture) => checkProgram(fixture.code, { cwd: PROJECT }).checked.ok)).toHaveLength(15);
+  expect(fixtures.filter((fixture) => checkProgram(fixture.code, { cwd: PROJECT }).checked.ok)).toHaveLength(17);
 });
 
 for (const [index, fixture] of fixtures.entries()) {
-  test(`recorded program ${index + 1}: ${fixture.kind}`, async () => {
+  test(`recorded program ${index + 1}: ${fixture.kind}`, () => {
     // This is the same path run() uses before it starts a worker. Never execute a passing fixture.
     const { program, checked } = checkProgram(fixture.code, { cwd: PROJECT });
-    if (passes[index]) {
-      expect(checked.ok).toBe(true);
-      if (fixture.kind === "accumulator" || fixture.kind === "accumulator-process") expect(program).toContain(": Record<string, any>");
-      if (fixture.kind === "process" || fixture.kind === "live-cwd") {
-        expect(program).not.toContain("process.cwd()");
-        expect(program).toContain('"/fixture/project"');
-      }
-      return;
+    expect(checked.ok).toBe(true);
+    if (fixture.kind === "syntax") {
+      expect(check(fixture.code, guestTypes(TOOLS)).errors).toEqual(["line 72:28 ',' expected."]);
+      expect(program).not.toBe(fixture.code);
     }
-    expect(checked.ok).toBe(false);
-    expect(program).toBe(fixture.code);
-    const original = check(fixture.code, guestTypes(TOOLS));
-    expect(checked.errors).toEqual(original.errors);
-    expect(checked.errors).toEqual(["line 72:28 ',' expected."]);
+    if (fixture.kind === "accumulator" || fixture.kind === "accumulator-process") expect(program).toContain(": Record<string, any>");
+    if (fixture.kind === "process" || fixture.kind === "live-cwd") {
+      expect(program).not.toContain("process.cwd()");
+      expect(program).toContain('"/fixture/project"');
+    }
   });
 }

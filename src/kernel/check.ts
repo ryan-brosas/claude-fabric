@@ -32,6 +32,7 @@ export interface CheckResult {
   errors: string[];
   indexTargets?: number[];
   cwdTargets?: number[];
+  braceTargets?: number[];
   awaitPropertyTargets?: number[];
   printPropertyTargets?: number[];
   errorPositions?: number[];
@@ -158,6 +159,11 @@ export function check(code: string, guest: string): CheckResult {
     d.file.text.slice(d.start, d.start + d.length) === "process" &&
     ts.flattenDiagnosticMessageText(d.messageText, "\n").startsWith("Cannot find name 'process'.")
       ? [d.start - PREFIX.length] : []);
+  // TS1005 at a close parenthesis may mean the last object argument is missing its brace.
+  const braceTargets = diags.flatMap((d) => d.code === 1005 && d.file && d.start !== undefined &&
+    d.start >= PREFIX.length && d.start < PREFIX.length + code.length && d.length === 1 &&
+    d.file.text[d.start] === ")" && ts.flattenDiagnosticMessageText(d.messageText, "\n") === "',' expected."
+      ? [d.start - PREFIX.length] : []);
   // TS2339 identifies the property token; only a missing property on Promise<T> can authorize
   // an await-precedence repair. The repair checks the precise expression shape.
   const awaitPropertyTargets = diags.flatMap((d) => d.code === 2339 && d.file && d.start !== undefined &&
@@ -165,7 +171,8 @@ export function check(code: string, guest: string): CheckResult {
       ? [d.start - PREFIX.length] : []);
   const printTargets = printPropertyTargets(program, diags);
   return { ok: errors.length === 0, errors, ...(targets.length ? { indexTargets: targets } : {}),
-    ...(cwdTargets.length ? { cwdTargets } : {}), ...(awaitPropertyTargets.length ? { awaitPropertyTargets } : {}),
+    ...(cwdTargets.length ? { cwdTargets } : {}), ...(braceTargets.length ? { braceTargets } : {}),
+    ...(awaitPropertyTargets.length ? { awaitPropertyTargets } : {}),
     ...(printTargets.length ? { printPropertyTargets: printTargets } : {}),
     ...(errorPositions.length ? { errorPositions } : {}) };
 }

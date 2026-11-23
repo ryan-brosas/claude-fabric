@@ -476,9 +476,33 @@ function diagnosedPropertyPaths(code: string, paths: Repair[], errorPositions: r
   return diagnosed;
 }
 
+// The parser omits the direct close-brace token on an unclosed object literal. Parse in the
+// check's async body so await and recovered call arguments have the same shape.
+function missingBraceRepairs(code: string, targets: readonly number[]): Repair[] {
+  if (!targets.length) return [];
+  const prefix = "export {};\nasync function __fabric_main(): Promise<unknown> {\n";
+  const file = ts.createSourceFile("program.ts", prefix + code + "\n}\n", ts.ScriptTarget.Latest, true);
+  const positions = new Set(targets);
+  const repairs: Repair[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const last = node.arguments.at(-1);
+      const close = node.getChildren(file).find((child) => child.kind === ts.SyntaxKind.CloseParenToken);
+      if (last && ts.isObjectLiteralExpression(last) && close && positions.has(close.getStart(file) - prefix.length) &&
+          !last.getChildren(file).some((child) => child.kind === ts.SyntaxKind.CloseBraceToken)) {
+        const position = close.getStart(file) - prefix.length;
+        repairs.push({ start: position, end: position, text: "}" });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return repairs;
+}
+
 /** Try targeted repairs first; path repairs need a diagnostic at the value or its property name. */
-export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[], propertyTargets: PropertyTargets = {}): string[] {
-  const targeted = diagnosticRepairs(code, indexTargets, cwdTargets, cwd, propertyTargets);
+export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[], propertyTargets: PropertyTargets = {}, braceTargets: readonly number[] = []): string[] {
+  const targeted = [...diagnosticRepairs(code, indexTargets, cwdTargets, cwd, propertyTargets), ...missingBraceRepairs(code, braceTargets)];
   const scanned = collectRepairs(code, 0, code.length);
   const propertyPaths = diagnosedPropertyPaths(code, scanned, errorPositions);
   const paths = scanned.filter((repair) => propertyPaths.has(repair) ||

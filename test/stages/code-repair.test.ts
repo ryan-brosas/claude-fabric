@@ -11,6 +11,93 @@ import { repairCandidates, repairCode } from "../../src/stages/code-repair.ts";
 const declarations = guestTypes(TOOLS);
 const PROJECT = "/fixture/project";
 
+test("repairs a missing object brace at the end of a call", () => {
+  const code = 'await Read({file_path: "a.txt");';
+  const original = check(code, declarations);
+  expect(original.errors).toEqual(["line 1:31 ',' expected."]);
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('await Read({file_path: "a.txt"});');
+});
+
+test("leaves a nested missing object brace alone when one insertion cannot close the call argument", () => {
+  const code = 'function f(x: {a: {b: number}}) {} f({a: {b: 1);';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("repairs an outer call argument with a closed nested object", () => {
+  const code = 'function f(x: {a: {b: number}}) {} f({a: {b: 1});';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('function f(x: {a: {b: number}}) {} f({a: {b: 1}});');
+});
+
+test("does not repair a comma error without an object argument", () => {
+  const code = 'function f(a: number, b: number) {} f(1 2);';
+  const original = check(code, declarations);
+  expect(original.errors).toContain("line 1:41 ',' expected.");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("keeps the original errors if a brace repair leaves a type error", () => {
+  const code = 'await Read({file_path: "a.txt"); const n: number = "bad";';
+  const original = check(code, declarations);
+  expect(original.errors).toContain("line 1:31 ',' expected.");
+  expect(original.errors.join("\n")).toContain("Type 'string' is not assignable to type 'number'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("only repairs a directly diagnosed call-argument brace", () => {
+  const cases = [
+    'const x = { a: { b: 1 );',
+    'new F({a: 1);',
+    'f(({a: 1));',
+    'f({a: 1}, 2);',
+    'f({a: 1});',
+  ];
+  for (const code of cases) {
+    const position = code.indexOf(")");
+    expect(repairCandidates(code, [], [], undefined, [position], {}, [position])).toEqual([]);
+  }
+});
+
+test("inserts braces only at diagnosed positions and can repair multiple calls", () => {
+  const code = 'await Read({file_path:"a"); await Read({file_path:"b");';
+  const original = check(code, declarations);
+  const first = code.indexOf(")");
+  const second = code.lastIndexOf(")");
+  expect(original.braceTargets).toEqual([first, second]);
+  expect(repairCandidates(code, [], [], undefined, original.errorPositions ?? [], {}, [first]))
+    .toEqual(['await Read({file_path:"a"}); await Read({file_path:"b");']);
+  expect(repairCandidates(code, [], [], undefined, original.errorPositions ?? [], {}, [first - 1])).toEqual([]);
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('await Read({file_path:"a"}); await Read({file_path:"b"});');
+});
+
+test("runs a repaired Read but never executes a candidate with other errors", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-"));
+  try {
+    await Bun.write(join(dir, "a.txt"), "brace repair content");
+    const passed = await run('return await Read({file_path: "a.txt");', dir);
+    expect(passed.ok).toBe(true);
+    expect(passed.calls).toBe(1);
+    expect(passed.text).toContain("brace repair content");
+
+    const code = 'await Write({file_path: "never", content: "x"); const n: number = "bad";';
+    const original = check(code, declarations);
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("repairs a property accessed before awaiting a call", () => {
   const code = 'print(await Bash({command: "pwd"}).output);';
   const result = checkProgram(code, { cwd: PROJECT });

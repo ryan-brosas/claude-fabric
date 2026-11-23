@@ -58,7 +58,7 @@ export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> & { 
     const candidates = repairCandidates(code, checked.indexTargets ?? [], checked.cwdTargets ?? [], cwd, checked.errorPositions ?? [], {
       awaited: checked.awaitPropertyTargets,
       printed: checked.printPropertyTargets,
-    });
+    }, checked.braceTargets ?? []);
     for (const repaired of candidates) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
