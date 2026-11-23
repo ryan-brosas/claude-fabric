@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 
 test("report reads the default results relative to its checkout, not the working directory", async () => {
-  const tmp = mkdtempSync(join(import.meta.dir, "report-default-"));
+  const tmp = mkdtempSync(join(tmpdir(), "report-default-"));
   try {
     const bench = join(tmp, "bench");
     const results = join(tmp, "notes/bench");
@@ -11,8 +12,10 @@ test("report reads the default results relative to its checkout, not the working
     mkdirSync(results, { recursive: true });
     cpSync(join(import.meta.dir, "report.ts"), join(bench, "report.ts"));
     writeFileSync(join(results, "results.jsonl"), JSON.stringify({ arm: "native", task: "01", n: 1, name: "sample", pass: true, total: 42 }));
+    const modules = dirname(dirname(import.meta.resolveSync("typescript/package.json")));
     const proc = Bun.spawn(["bun", join(bench, "report.ts")], {
-      cwd: bench, env: { ...process.env, BENCH_RESULTS: undefined }, stdout: "pipe", stderr: "pipe",
+      cwd: bench, env: { ...process.env, BENCH_RESULTS: undefined, NODE_PATH: [modules, process.env.NODE_PATH].filter(Boolean).join(delimiter) },
+      stdout: "pipe", stderr: "pipe",
     });
     const [output, error, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect({ exit, error }).toEqual({ exit: 0, error: "" });
@@ -23,7 +26,7 @@ test("report reads the default results relative to its checkout, not the working
 });
 
 test("report separates driver errors, missing transcripts and distinct wasted requests", async () => {
-  const tmp = mkdtempSync(join(import.meta.dir, "report-test-"));
+  const tmp = mkdtempSync(join(tmpdir(), "report-test-"));
   try {
     const dir = join(tmp, ".claude/projects/project--fabric-01-1-test");
     mkdirSync(dir, { recursive: true });
@@ -70,7 +73,7 @@ test("report separates driver errors, missing transcripts and distinct wasted re
 });
 
 test("report resolves transcript profiles in row, environment, then default order", async () => {
-  const tmp = mkdtempSync(join(import.meta.dir, "report-roots-"));
+  const tmp = mkdtempSync(join(tmpdir(), "report-roots-"));
   try {
     const defaults = join(tmp, ".claude");
     const envProfile = join(tmp, "env-profile");

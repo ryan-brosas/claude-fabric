@@ -5,13 +5,16 @@
 import { $ } from "bun";
 import { mkdirSync, existsSync, readFileSync, appendFileSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { benchmarkPaths } from "./paths.ts";
 import { createBillingNoticeHandler, promptStillInInput } from "./pane.ts";
 import { decideResend } from "./resend-policy.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const TASKS = process.env.BENCH_TASKS ?? join(ROOT, "bench/tasks");
-const RUNS = process.env.BENCH_RUNS ?? join(ROOT, "notes/bench/bench-runs");
-const RESULTS = process.env.BENCH_RESULTS ?? join(ROOT, "notes/bench/results.jsonl");
+const { runs: RUNS, results: RESULTS } = benchmarkPaths(ROOT, tmpdir(), {
+  BENCH_RUNS: process.env.BENCH_RUNS, BENCH_RESULTS: process.env.BENCH_RESULTS,
+});
 const MODEL = process.env.BENCH_MODEL ?? "claude-opus-5-5";
 const CLAUDE = process.env.BENCH_CLAUDE ?? "claude";
 const DEFAULT_CONFIG_DIR = join(process.env.HOME ?? "", ".claude");
