@@ -58,5 +58,13 @@
   {
     "kind": "process",
     "code": "const r = await Bash({command:`cd ${process.cwd()} 2>/dev/null; pwd; find . -path ./node_modules -prune -o -type f -print | grep -v '^./.git/' | head -100; echo ---; grep -rniE 'http|fetchJson' . --exclude-dir=node_modules --exclude-dir=.git -I | head -150`});return r.output;"
+  },
+  {
+    "kind": "live-cwd",
+    "code": "await Write({file_path: process.cwd()+\"/ANSWER.md\", content: \"...\"}); return \"ok\""
+  },
+  {
+    "kind": "live-cwd",
+    "code": "await Write({file_path: process.cwd()+\"/ANSWER.md\", content: \"...\"}); return \"ok\""
   }
 ]

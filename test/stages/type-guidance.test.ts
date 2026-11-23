@@ -47,6 +47,12 @@ test("sends fs, require and process to the tools", () => {
   }
 });
 
+test("a process hint explains relative paths, without adding it to other Node hints", () => {
+  expect(hint("return process.env.X;")[0]).toContain("Relative paths resolve against the project folder.");
+  expect(hint("return fs.readFileSync(\"x\");")[0]).not.toContain("Relative paths");
+  expect(hint("return process.env.X;")[0]?.split("\n")).toHaveLength(1);
+});
+
 test("calls out Promise.all tuple arity", () => {
   const hints = hint('const [a, b, c] = await Promise.all([Read("a"), Read("b")]); return c;');
   expect(hints[0]).toContain("one binding per promise");

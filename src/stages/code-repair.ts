@@ -319,10 +319,11 @@ const collectRepairs = (code: string, start: number, end: number): Repair[] => {
   return repairs;
 };
 
-// Positions come from TS7053 diagnostics resolved to their declarations by the check.
-function accumulatorRepairs(code: string, targets: readonly number[]): Repair[] {
-  if (!targets.length) return [];
-  const positions = new Set(targets);
+// Positions come from the check: TS7053 declarations and unresolved `process` identifiers.
+function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string): Repair[] {
+  if (!indexTargets.length && !cwdTargets.length) return [];
+  const positions = new Set(indexTargets);
+  const cwdPositions = new Set(cwdTargets);
   const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
   const repairs: Repair[] = [];
   const visit = (node: ts.Node): void => {
@@ -332,15 +333,23 @@ function accumulatorRepairs(code: string, targets: readonly number[]): Repair[] 
         (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
+    if (cwd !== undefined && ts.isCallExpression(node) && !node.questionDotToken && !node.typeArguments && node.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken &&
+        node.expression.name.getText(file) === "cwd" && ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "process" && cwdPositions.has(node.expression.expression.getStart(file))) {
+      // The project folder is the cwd of the program tools and the value process.cwd() would have.
+      // JSON.stringify makes it a valid literal even when the folder contains quotes or backslashes.
+      repairs.push({ start: node.getStart(file), end: node.end, text: JSON.stringify(cwd) });
+    }
     ts.forEachChild(node, visit);
   };
   visit(file);
   return repairs;
 }
 
-/** Returns candidate path and diagnostic-directed accumulator repairs. */
-export function repairCode(code: string, indexTargets: readonly number[] = []): string {
-  const repairs = [...collectRepairs(code, 0, code.length), ...accumulatorRepairs(code, indexTargets)]
+/** Returns candidate path and diagnostic-directed repairs. */
+export function repairCode(code: string, indexTargets: readonly number[] = [], cwdTargets: readonly number[] = [], cwd?: string): string {
+  const repairs = [...collectRepairs(code, 0, code.length), ...diagnosticRepairs(code, indexTargets, cwdTargets, cwd)]
     .sort((a, b) => a.start - b.start);
   if (repairs.length === 0) return code;
   let result = code;

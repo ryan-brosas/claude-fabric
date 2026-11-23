@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { BuiltinLink } from "./builtin.ts";
 import { check } from "./check.ts";
 import { execute } from "./execute.ts";
@@ -41,7 +42,7 @@ export interface RunResult { ok: boolean; text: string; ms: { check: number; run
 const budget = (text: string): Promise<string> => outputBudget({ text, max: MAX_RESULT_CHARS, fallback: bound });
 
 /** Check and, on failure, try a repair without starting a worker or calling tools. */
-export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> = {}) {
+export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> & { cwd?: string } = {}) {
   // The tool declarations are constant, but the mcp surface is not: it is printed from the
   // session's catalog, which the mod may send again while the server runs.
   const declarations = guestTypes(TOOLS, STORE, [mcpTypes(options.mcp?.catalog() ?? { servers: [] }), namespaceTypes("history", HISTORY)]);
@@ -52,7 +53,9 @@ export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> = {}
   let program = code;
   let checked = check(code, declarations);
   if (!checked.ok) {
-    const repaired = repairCode(code, checked.indexTargets);
+    // CLAUDE_PROJECT_DIR can be relative; tools and Bash resolve it from the server directory.
+    const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
+    const repaired = repairCode(code, checked.indexTargets, checked.cwdTargets, cwd);
     if (repaired !== code) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
@@ -66,7 +69,7 @@ export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> = {}
 
 export async function run(code: string, cwd: string, options: RunOptions = {}): Promise<RunResult> {
   const t0 = performance.now();
-  const { program, checked } = checkProgram(code, options);
+  const { program, checked } = checkProgram(code, { mcp: options.mcp, cwd });
   const checkMs = performance.now() - t0;
   if (!checked.ok) {
     // The errors are the ones for the code the model sent, so the line numbers match it.

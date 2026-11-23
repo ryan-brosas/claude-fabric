@@ -51,7 +51,8 @@ const missingNameHint = (message: string, tools: readonly GuidanceTool[]): strin
   const names = tools.map((tool) => "`" + tool.name + "`").join(", ");
   return name === "pi"
     ? "Recovery hint: the program tools are globals called directly: " + names + ". There is no namespace object in front of them."
-    : "Recovery hint: a program has no `fs`, `require` or `process`. Files, searches and commands go through " + names + ".";
+    : "Recovery hint: a program has no `fs`, `require` or `process`. Files, searches and commands go through " + names + "." +
+      (name === "process" ? " Relative paths resolve against the project folder." : "");
 };
 
 /**

@@ -27,7 +27,7 @@ let previous: ts.Program | undefined;
 let served = "";
 let servedFile: ts.SourceFile | undefined;
 
-export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[] }
+export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[]; cwdTargets?: number[] }
 
 // Resolve TS7053 to the actual declaration, not another variable with the same name.
 function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]): number[] {
@@ -81,7 +81,14 @@ export function check(code: string, guest: string): CheckResult {
     return "line " + (line + 1 - PREFIX_LINES) + ":" + (character + 1) + " " + msg;
   });
   const targets = indexTargets(program, diags);
-  return targets.length ? { ok: false, errors, indexTargets: targets } : { ok: errors.length === 0, errors };
+  // Only unresolved `process` identifiers can direct a cwd repair. The repair checks the AST.
+  const cwdTargets = diags.flatMap((d) =>
+    (d.code === 2591 || d.code === 2304) && d.file && d.start !== undefined && d.length === 7 &&
+    d.file.text.slice(d.start, d.start + d.length) === "process" &&
+    ts.flattenDiagnosticMessageText(d.messageText, "\n").startsWith("Cannot find name 'process'.")
+      ? [d.start - PREFIX.length] : []);
+  return { ok: errors.length === 0, errors, ...(targets.length ? { indexTargets: targets } : {}),
+    ...(cwdTargets.length ? { cwdTargets } : {}) };
 }
 
 export function transpile(code: string): string {
