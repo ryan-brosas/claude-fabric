@@ -63,27 +63,36 @@ plain-Claude Sonnet number for comparison.
 
 ### Code mode: `fabric_exec` against native code mode
 
-On 2026-11-23, `fabric_exec` with `fabricOnly` on passed as many runs as native code mode, at
-0.78 times its mean tokens.
+On the afternoon of 2026-11-23, `fabric_exec` with `fabricOnly` on passed 75 of 75 runs against
+native code mode's 74 of 75, at 0.730 times its mean tokens.
 
-| Arm | Runs passing | Mean tokens | Median tokens |
-| --- | --- | --- | --- |
-| `fabric_exec`, `fabricOnly` on, native code mode off | 70 of 75 | 87k | 80k |
-| Native code mode | 70 of 75 | 111k | 106k |
+| Arm | Runs passing | Mean tokens | Median tokens | Range | Requests per run |
+| --- | --- | --- | --- | --- | --- |
+| `fabric_exec`, `fabricOnly` on, native code mode off | 75 of 75 | 83,200 | 78,147 | 52,921 to 163,413 | 4.37 |
+| Native code mode | 74 of 75 | 113,965 | 105,287 | 73,438 to 204,995 | 15.52 |
 
-The two arms ran together on the same 15 tasks as the earlier run, 5 times per arm, on Sonnet 5.5,
-Claude Code 2.1.330 and plugin main `42b1fef`. `fabric_exec` used 0.78 times native code mode's
-mean tokens (87,053 against 111,020) and 0.76 times its median (80,486 against 106,439). Its mean
-was lower on all 15 tasks.
-Both arms failed `06-runlog-stats-command` in all 5 runs and passed every other run. Mean wall time
-per run was 36 s for `fabric_exec` and 30 s for native code mode.
+The two arms ran together on 15 tasks, 5 times per arm, on Sonnet 5.5. The `fabric_exec` plugin
+included Read's continuation notice (#70) and repairs for type errors and refused writes that cost a
+request (#71). It used 0.730 times native code mode's mean tokens and 0.742 times its median.
 
-One `fabric_exec` run was replaced: the driver typed the prompt but the session never received Enter,
-so no session ran; the replacement needed Enter pressed by hand, then passed, and its tokens are
-counted. No plain Claude Code arm ran this time.
+That morning, with plugin main `42b1fef`, both arms passed 70 of 75. `fabric_exec` had a mean of
+87k tokens and a median of 80k, against native code mode's 111k and 106k. The ratios were 0.78 for
+the mean and 0.76 for the median. The morning `fabric_exec` arm replaced a run where the driver
+typed the prompt but never sent Enter; the replacement passed and its tokens are counted.
 
-Since the 2026-11-19 run, the changes are the `fabricOnly` option (#22, #23, #36), program guidance
-(#21) and whole-file `Read` guidance (#58, #61).
+Task 06's morning prompt was ambiguous about the format of the `slowest:` line. It failed all 5
+runs in every arm. The prompt now gives the format, and the task passed all 5 runs in both afternoon
+arms. Pass counts across the two runs are not comparable for task 06: in the morning both arms
+passed 70 of 70 runs on the other 14 tasks. Token means in both runs cover all 15 tasks.
+
+In the `fabric_exec` arm, requests that did no work fell from 35 in the morning to 13 in the
+afternoon: refused top-level calls from 18 to 0, type-check failures from 15 to 13, and Bash nonzero
+exits from 2 to 0.
+
+Since the 2026-11-19 run, the changes also include the `fabricOnly` option (#22, #23, #36), program
+guidance (#21) and whole-file `Read` guidance (#58, #61). An afternoon arm that added guidance to
+chain dependent steps in one program showed no gain: 74 of 75 passed, with a mean of 83,790 tokens
+and 4.35 requests per run, so that sentence is not shipped.
 
 On the earlier 2026-11-19 run, with `fabricOnly` off (the default), `fabric_exec` used 1.052 times
 native code mode's mean tokens. This remains the only measurement with `fabricOnly` off.
@@ -96,8 +105,8 @@ native code mode's mean tokens. This remains the only measurement with `fabricOn
 
 On 2026-11-19, 15 tasks ran 5 times per arm on Sonnet 5.5. One plain run left no record, and one hit
 the turn limit, so the plain token mean covers 73 runs. Native code mode's mean fell from 145k then
-to 111k in the rerun, on a newer Claude Code, so compare arms within one day, not across the two
-dates. These 15 small tasks on one model are evidence for these tasks, not a claim about sessions in
+to 111k in the morning rerun, on a newer Claude Code. Compare arms within the same run, not across
+days. These 15 small tasks on one model are evidence for these tasks, not a claim about sessions in
 general.
 
 ## Install
