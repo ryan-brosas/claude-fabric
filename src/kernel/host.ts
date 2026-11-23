@@ -11,7 +11,7 @@ import { HISTORY } from "../providers/tools/history.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { guestTypes, inputFields, namespaceTypes } from "../registry/generate.ts";
 import { mcpTypes } from "../registry/mcp.ts";
-import { repairCode } from "../stages/code-repair.ts";
+import { repairCandidates } from "../stages/code-repair.ts";
 import { outputBudget } from "../stages/output-budget.ts";
 import { BLOCK, type RepeatGuard, blockText, warnText } from "../stages/repeat-guard.ts";
 import { typeErrorGuidance, type GuidanceTool } from "../stages/type-guidance.ts";
@@ -55,12 +55,13 @@ export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> & { 
   if (!checked.ok) {
     // CLAUDE_PROJECT_DIR can be relative; tools and Bash resolve it from the server directory.
     const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
-    const repaired = repairCode(code, checked.indexTargets, checked.cwdTargets, cwd);
-    if (repaired !== code) {
+    const candidates = repairCandidates(code, checked.indexTargets ?? [], checked.cwdTargets ?? [], cwd, checked.errorPositions ?? []);
+    for (const repaired of candidates) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
         program = repaired;
         checked = retried;
+        break;
       }
     }
   }

@@ -6,10 +6,102 @@ import { check } from "../../src/kernel/check.ts";
 import { checkProgram, run } from "../../src/kernel/host.ts";
 import { TOOLS } from "../../src/providers/tools/index.ts";
 import { guestTypes } from "../../src/registry/generate.ts";
-import { repairCode } from "../../src/stages/code-repair.ts";
+import { repairCandidates, repairCode } from "../../src/stages/code-repair.ts";
 
 const declarations = guestTypes(TOOLS);
 const PROJECT = "/fixture/project";
+
+test("the host repairs a regex-shaped object path diagnosed at the property name", () => {
+  const code = 'return await Read({ file_path: /tmp/i });';
+  const checked = check(code, declarations);
+  expect(checked.errorPositions).toContain(code.indexOf("file_path"));
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('return await Read({ file_path: "/tmp/i" });');
+});
+
+test("the host repairs regex-shaped object paths for all path tools", () => {
+  const cases = [
+    ['return await Read({ "file_path": /tmp/i });', 'return await Read({ "file_path": "/tmp/i" });'],
+    ['return await Write({ file_path: /tmp/i, content: "x" });', 'return await Write({ file_path: "/tmp/i", content: "x" });'],
+    ['return await Edit({ file_path: /tmp/i, old_string: "a", new_string: "b" });', 'return await Edit({ file_path: "/tmp/i", old_string: "a", new_string: "b" });'],
+    ['return await Grep({ pattern: "x", path: /tmp/i });', 'return await Grep({ pattern: "x", path: "/tmp/i" });'],
+    ['return await Glob({ pattern: "*.ts", path: /tmp/i });', 'return await Glob({ pattern: "*.ts", path: "/tmp/i" });'],
+  ] as const;
+  for (const [code, expected] of cases) {
+    const result = checkProgram(code, { cwd: PROJECT });
+    expect({ code, ok: result.checked.ok, program: result.program }).toEqual({ code, ok: true, program: expected });
+  }
+});
+
+test("a positional regex-shaped path is diagnosed at its value and repaired", () => {
+  const code = 'return await Read(/tmp/i);';
+  expect(check(code, declarations).errorPositions).toContain(code.indexOf('/tmp/i'));
+  expect(checkProgram(code, { cwd: PROJECT })).toMatchObject({
+    program: 'return await Read("/tmp/i");', checked: { ok: true },
+  });
+});
+
+test("property-name diagnostics only authorize their exact initializer", () => {
+  const sibling = 'return await Read({ file_path: /tmp/.source, offset: "bad" });';
+  expect(check(sibling, declarations).errorPositions).toContain(sibling.indexOf("offset"));
+  expect(repairCandidates(sibling, [], [], undefined, [sibling.indexOf("offset")])).toEqual([]);
+  const expression = 'return await Read({ file_path: /tmp/i + ".x" });';
+  expect(repairCode(expression)).not.toBe(expression);
+  expect(repairCandidates(expression, [], [], undefined, [expression.indexOf("file_path")])).toEqual([]);
+});
+
+test("diagnostic repairs preserve valid regex-source paths", () => {
+  const objectCode = 'await Write({ file_path: /tmp/.source, content: "x" }); return process.cwd();';
+  const objectResult = checkProgram(objectCode, { cwd: PROJECT });
+  expect(objectResult.checked.ok).toBe(true);
+  expect(objectResult.program).toContain('file_path: /tmp/.source');
+  for (const suffix of ['return process.cwd();', 'const out = {}; for (const k of ["x"]) out[k] = k; return out;']) {
+    const code = 'await Write(/tmp/.source, "x"); ' + suffix;
+    const result = checkProgram(code, { cwd: PROJECT });
+    expect(result.checked.ok).toBe(true);
+    expect(result.program).toContain('Write(/tmp/.source, "x")');
+  }
+});
+
+test("mixed diagnostics repair only the invalid path and preserve regex source", () => {
+  const code = 'await Write(/tmp/.source, "x"); await Write(/tmp/x, "y"); return process.cwd();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toContain('Write(/tmp/.source, "x")');
+  expect(result.program).toContain('Write("/tmp/x", "y")');
+  expect(result.program).toContain('return "/fixture/project"');
+});
+
+test("diagnostic-only repair writes the regex source inside the project", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-regexp-"));
+  try {
+    const code = 'await Write(/tmp/.source, "x"); return process.cwd();';
+    // Refuse to execute if a regression would turn the path into an absolute write.
+    expect(checkProgram(code, { cwd: dir }).program).toContain('Write(/tmp/.source, "x")');
+    const result = await run(code, dir);
+    expect(result.ok).toBe(true);
+    expect(await Bun.file(join(dir, "tmp")).text()).toBe("x");
+    expect(result.text).toBe(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("read-only indexed lookups do not turn a rejected program into side effects", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-read-only-"));
+  try {
+    const marker = join(dir, "marker");
+    await Bun.write(marker, "unchanged");
+    const result = await run('const out = {}; await Write("marker", "changed"); return out["missing"]();', dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(await Bun.file(marker).text()).toBe("unchanged");
+    expect(result.text).toContain("Type errors; code was not executed");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("returns the absolute project folder for an unresolved process.cwd call", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-"));
@@ -156,6 +248,30 @@ test("does not execute when another process reference still fails after a candid
   expect(result.text).toContain("Cannot find name \'process\'");
 });
 
+test("an indexed accumulator can be read after it is written", async () => {
+  const code = 'const out = {}; for (const k of ["x"]) out[k] = 2; return out["x"];';
+  const result = await run(code, tmpdir());
+  expect(result.ok).toBe(true);
+  expect(result.text).toBe("2");
+});
+
+test("recognizes compound indexed assignments, not updates or shadowed assignments", () => {
+  for (const op of ["=", "+=", "||=", "??="]) {
+    const code = `const out = {}; out["x"] ${op} 1; return out["x"];`;
+    expect(checkProgram(code).checked.ok).toBe(true);
+  }
+  for (const code of ['const out = {}; out["x"]++; return 1;',
+    'const out = {}; { const out = {}; out["x"] = 1; } return out["x"]();']) {
+    expect(checkProgram(code).checked.ok).toBe(false);
+    expect(checkProgram(code).program).toBe(code);
+  }
+});
+
+test("an indexed write without TS7053 still counts for a diagnosed read", () => {
+  const code = 'const out = {}; out["toString"] = () => "ok"; return out["missing"];';
+  expect(checkProgram(code).checked.ok).toBe(true);
+});
+
 test("annotates only declarations named by TS7053, including two accumulators", () => {
   const code = 'const first = {}, second = {}, untouched = {}; for (const key of ["x"]) { first[key] = 1; second[key] = 2; } return [first, second, untouched];';
   expect(candidate(code)).toBe('const first: Record<string, any> = {}, second: Record<string, any> = {}, untouched = {}; for (const key of ["x"]) { first[key] = 1; second[key] = 2; } return [first, second, untouched];');
@@ -270,6 +386,17 @@ test("quotes Windows drive paths", () => {
 test("is idempotent", () => {
   const once = repairCode("return await Read(/tmp/x);");
   expect(repairCode(once)).toBe(once);
+});
+
+test("the host still repairs diagnosed unquoted paths", () => {
+  for (const code of ["return await Read(/tmp/x);", "return await Read({ file_path: /Users/foo/bar.ts });",
+    'await Write(/tmp/x, "body");', 'await Edit(../lib/a.ts, "a", "b");',
+    "return await Read(https://example.com/foo.md5?q=/a/b/c/d);",
+    "return await Read(/var/folders/xx/T/cache.md5?q=/a/b/c/d/e/f/g);",
+    "return await Read(“/tmp/x”);", "return await Read(./src/index.ts);", "return await Read(~/.bashrc);",
+    "return await Read(C:/Users/foo/bar.ts);", "return `x ${await Read(/tmp/x)}`;"]) {
+    expect({ code, ok: checkProgram(code).checked.ok }).toEqual({ code, ok: true });
+  }
 });
 
 test("makes a program the check rejects typecheck", () => {

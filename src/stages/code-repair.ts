@@ -347,10 +347,8 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
   return repairs;
 }
 
-/** Returns candidate path and diagnostic-directed repairs. */
-export function repairCode(code: string, indexTargets: readonly number[] = [], cwdTargets: readonly number[] = [], cwd?: string): string {
-  const repairs = [...collectRepairs(code, 0, code.length), ...diagnosticRepairs(code, indexTargets, cwdTargets, cwd)]
-    .sort((a, b) => a.start - b.start);
+function applyRepairs(code: string, repairs: Repair[]): string {
+  repairs.sort((a, b) => a.start - b.start);
   if (repairs.length === 0) return code;
   let result = code;
   for (let index = repairs.length - 1; index >= 0; index--) {
@@ -359,4 +357,40 @@ export function repairCode(code: string, indexTargets: readonly number[] = [], c
     result = result.slice(0, repair.start) + repair.text + result.slice(repair.end);
   }
   return result;
+}
+
+/** Returns candidate path and diagnostic-directed repairs. */
+export function repairCode(code: string, indexTargets: readonly number[] = [], cwdTargets: readonly number[] = [], cwd?: string): string {
+  return applyRepairs(code, [...collectRepairs(code, 0, code.length), ...diagnosticRepairs(code, indexTargets, cwdTargets, cwd)]);
+}
+
+// A type mismatch in an object value can be diagnosed on its property name instead of the value.
+function diagnosedPropertyPaths(code: string, paths: Repair[], errorPositions: readonly number[]): Set<Repair> {
+  const diagnosed = new Set<Repair>();
+  if (!paths.length || !errorPositions.length) return diagnosed;
+  const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && errorPositions.some((position) =>
+      node.name.getStart(file) <= position && position < node.name.end)) {
+      const start = node.initializer.getStart(file);
+      for (const path of paths) {
+        if (path.start === start && path.end === node.initializer.end) diagnosed.add(path);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return diagnosed;
+}
+
+/** Try targeted repairs first; path repairs need a diagnostic at the value or its property name. */
+export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[]): string[] {
+  const targeted = diagnosticRepairs(code, indexTargets, cwdTargets, cwd);
+  const scanned = collectRepairs(code, 0, code.length);
+  const propertyPaths = diagnosedPropertyPaths(code, scanned, errorPositions);
+  const paths = scanned.filter((repair) => propertyPaths.has(repair) ||
+    errorPositions.some((position) => repair.start <= position && position < repair.end));
+  const candidates = [targeted, paths, [...targeted, ...paths]]
+    .map((repairs) => applyRepairs(code, repairs));
+  return [...new Set(candidates)].filter((candidate) => candidate !== code);
 }

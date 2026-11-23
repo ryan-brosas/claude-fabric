@@ -27,11 +27,11 @@ let previous: ts.Program | undefined;
 let served = "";
 let servedFile: ts.SourceFile | undefined;
 
-export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[]; cwdTargets?: number[] }
+export interface CheckResult { ok: boolean; errors: string[]; indexTargets?: number[]; cwdTargets?: number[]; errorPositions?: number[] }
 
-// Resolve TS7053 to the actual declaration, not another variable with the same name.
+// Resolve TS7053 to its declaration, and annotate only variables with an indexed assignment.
 function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]): number[] {
-  const targets = new Set<number>();
+  const targets = new Map<ts.Symbol, number>();
   const checker = program.getTypeChecker();
   for (const diagnostic of diagnostics) {
     if (diagnostic.code !== 7053 || !diagnostic.file || diagnostic.start === undefined) continue;
@@ -40,17 +40,34 @@ function indexTargets(program: ts.Program, diagnostics: readonly ts.Diagnostic[]
     const visit = (node: ts.Node): void => {
       if (node.getStart(file) > start || node.end <= start) return;
       if (ts.isElementAccessExpression(node) && node.getStart(file) === start && ts.isIdentifier(node.expression)) {
-        const declarations = checker.getSymbolAtLocation(node.expression)?.declarations;
-        if (declarations?.length === 1 && ts.isVariableDeclaration(declarations[0]!)) {
+        const symbol = checker.getSymbolAtLocation(node.expression);
+        const declarations = symbol?.declarations;
+        if (symbol && declarations?.length === 1 && ts.isVariableDeclaration(declarations[0]!)) {
           const name = declarations[0].name;
-          if (ts.isIdentifier(name)) targets.add(name.getStart(file) - PREFIX.length);
+          if (ts.isIdentifier(name)) targets.set(symbol, name.getStart(file) - PREFIX.length);
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(file);
   }
-  return [...targets].filter((position) => position >= 0);
+  const written = new Set<ts.Symbol>();
+  const file = program.getSourceFile(GUEST);
+  const visit = (node: ts.Node): void => {
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      let left: ts.Node = node;
+      let parent = node.parent;
+      while (ts.isParenthesizedExpression(parent)) { left = parent; parent = parent.parent; }
+      if (ts.isBinaryExpression(parent) && parent.left === left &&
+          parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const symbol = checker.getSymbolAtLocation(node.expression);
+        if (symbol && targets.has(symbol)) written.add(symbol);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (file && targets.size) visit(file);
+  return [...targets].filter(([symbol, position]) => position >= 0 && written.has(symbol)).map(([, position]) => position);
 }
 
 export function check(code: string, guest: string): CheckResult {
@@ -81,6 +98,8 @@ export function check(code: string, guest: string): CheckResult {
     return "line " + (line + 1 - PREFIX_LINES) + ":" + (character + 1) + " " + msg;
   });
   const targets = indexTargets(program, diags);
+  const errorPositions = diags.flatMap((d) => d.file && d.start !== undefined && d.start >= PREFIX.length
+    ? [d.start - PREFIX.length] : []);
   // Only unresolved `process` identifiers can direct a cwd repair. The repair checks the AST.
   const cwdTargets = diags.flatMap((d) =>
     (d.code === 2591 || d.code === 2304) && d.file && d.start !== undefined && d.length === 7 &&
@@ -88,7 +107,7 @@ export function check(code: string, guest: string): CheckResult {
     ts.flattenDiagnosticMessageText(d.messageText, "\n").startsWith("Cannot find name 'process'.")
       ? [d.start - PREFIX.length] : []);
   return { ok: errors.length === 0, errors, ...(targets.length ? { indexTargets: targets } : {}),
-    ...(cwdTargets.length ? { cwdTargets } : {}) };
+    ...(cwdTargets.length ? { cwdTargets } : {}), ...(errorPositions.length ? { errorPositions } : {}) };
 }
 
 export function transpile(code: string): string {
