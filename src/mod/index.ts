@@ -22,6 +22,7 @@ import {
 import { compactDeferred } from "./deferred.ts";
 import { deferredByOption, fabricOnly, offered } from "./fabric-only.ts";
 import { OfferMemo } from "./verified/offer-memo.ts";
+import { transcriptReadProblem } from "./verified/transcript-read.ts";
 
 // The in-process half of the plugin: compaction, and the loop that lets a program's
 // mcp.<server>.<tool>() reach Claude Code's own MCP connections and its WebSearch reach Claude
@@ -71,7 +72,8 @@ export const register: Register = (on, options) => {
         const path = (await $.session.info()).transcriptPath;
         if (!path) throw new Error("no transcript path");
         const size = (await $.fs.stat(path)).size;
-        if (!Number.isSafeInteger(size) || size < 0) throw new Error("invalid transcript size");
+        const readProblem = transcriptReadProblem(size);
+        if (readProblem) throw new Error(readProblem);
         const bytes = new Uint8Array(size);
         // A single $.fs.read answer is capped at 4 MiB. Read bytes so a Unicode
         // character split between ranges survives, and decode only after joining.

@@ -27,11 +27,12 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   Claude Code 2.1.329. The mod accepts a rebuild only if it preserves every effective tool outcome
   in the current messages, including its multiplicity; a missing or conflicting outcome falls back
   to Carry with a debug reason. This check cannot recover an off-chain outcome lost before an
-  earlier compaction. If the transcript or join fails, the mod also logs why and carries the earlier
-  summary instead. The summary shares a 32 KiB ceiling. The request and recent exchanges have room
-  first. Earlier user messages take the room they leave, up to 22 KiB for the section and 4 KiB
-  per message. When more than 64 earlier messages are eligible, one slot keeps the opening message
-  and 63 prefer newer distinct messages, then newer repeats; a later correction can still be omitted,
+  earlier compaction. If the transcript exceeds the mod's byte read bound, or the transcript or join
+  fails, the mod logs why and carries the earlier summary instead. The summary shares a 32 KiB
+  ceiling. The request and recent exchanges have room first. Earlier user messages take the room
+  they leave, up to 22 KiB for the section and 4 KiB per message. When more than 64 earlier messages
+  are eligible, one slot keeps the opening message and 63 prefer newer distinct messages, then newer
+  repeats; a later correction can still be omitted,
   with the section notice naming its source range. After them, the dialogue section keeps the closing
   bytes of up to 64 earlier assistant replies, up to 256 bytes each. The Carry and operational history share the remaining room
   (`summaryCarry`). When the Carry must shrink, it keeps its start and end and names the middle cut.

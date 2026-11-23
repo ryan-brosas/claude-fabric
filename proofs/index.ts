@@ -27,6 +27,7 @@ import { RESTORE_ORDER_BUGS, restoreOrderKernels } from "./restore-order.ts";
 import { SIBLING_RESTORATION_BUGS, siblingRestorationKernels } from "./sibling-restoration.ts";
 import { STORE_BUGS, storeLimitKernels } from "./store-limits.ts";
 import { TOOL_VISIBILITY_BUGS, toolVisibilityKernels } from "./tool-visibility.ts";
+import { TRANSCRIPT_READ_BUGS, transcriptReadKernels } from "./transcript-read.ts";
 
 export interface KernelModule {
   /** Generated module stem: `<out>/<stem>.js`. */
@@ -70,4 +71,5 @@ export const modules: readonly KernelModule[] = [
   { stem: "bridge-binding", source: "proofs/bridge-binding.ts", out: kernel, kernels: bridgeBindingKernels as any, bugs: BRIDGE_BINDING_BUGS },
   { stem: "tool-visibility", source: "proofs/tool-visibility.ts", out: mod, kernels: toolVisibilityKernels as any, bugs: TOOL_VISIBILITY_BUGS },
   { stem: "offer-memo", source: "proofs/offer-memo.ts", out: mod, kernels: offerMemoKernels as any, bugs: OFFER_MEMO_BUGS },
+  { stem: "transcript-read", source: "proofs/transcript-read.ts", out: mod, kernels: transcriptReadKernels as any, bugs: TRANSCRIPT_READ_BUGS },
 ];
