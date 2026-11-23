@@ -1,3 +1,4 @@
 [test]
-# Only this repo's tests; upstream/ holds the pi-fabric reference clone.
+# Default discovery stays in test/, away from upstream/ and the benchmark task fixtures.
+# The test script also runs the benchmark unit test files explicitly.
 root = "./test"

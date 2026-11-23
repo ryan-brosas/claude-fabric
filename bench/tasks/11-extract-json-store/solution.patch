@@ -1,0 +1,108 @@
+diff --git a/src/services/notes.ts b/src/services/notes.ts
+index a5725af..e438028 100644
+--- a/src/services/notes.ts
++++ b/src/services/notes.ts
+@@ -1,5 +1,4 @@
+-import { mkdir } from "node:fs/promises";
+-import { dirname } from "node:path";
++import { readJson, writeJson } from "../storage/json-store";
+ import { dataFile } from "../storage/paths";
+ import type { Note } from "../types";
+ import { ValidationError } from "../util/errors";
+@@ -8,14 +7,8 @@ import { newId } from "../util/ids";
+ type Env = Record<string, string | undefined>;
+ 
+ async function readNotes(path: string): Promise<Note[]> {
+-  const file = Bun.file(path);
+-  if (!(await file.exists())) return [];
+-  try {
+-    const parsed: unknown = JSON.parse(await file.text());
+-    return Array.isArray(parsed) ? (parsed as Note[]) : [];
+-  } catch {
+-    return [];
+-  }
++  const value = await readJson<Note[]>(path, []);
++  return Array.isArray(value) ? value : [];
+ }
+ 
+ export async function listNotes(projectId: string, env: Env = process.env): Promise<Note[]> {
+@@ -40,7 +33,6 @@ export async function addNote(
+   };
+   notes.push(note);
+ 
+-  await mkdir(dirname(path), { recursive: true });
+-  await Bun.write(path, JSON.stringify(notes));
++  await writeJson(path, notes);
+   return note;
+ }
+diff --git a/src/services/projects.ts b/src/services/projects.ts
+index 5636f47..264a908 100644
+--- a/src/services/projects.ts
++++ b/src/services/projects.ts
+@@ -1,5 +1,4 @@
+-import { mkdir } from "node:fs/promises";
+-import { dirname } from "node:path";
++import { readJson, writeJson } from "../storage/json-store";
+ import { dataFile } from "../storage/paths";
+ import type { Project } from "../types";
+ import { ValidationError } from "../util/errors";
+@@ -8,14 +7,8 @@ import { newId } from "../util/ids";
+ type Env = Record<string, string | undefined>;
+ 
+ export async function listProjects(env: Env = process.env): Promise<Project[]> {
+-  const path = dataFile("projects", env);
+-  try {
+-    const text = await Bun.file(path).text();
+-    const parsed: unknown = JSON.parse(text);
+-    return Array.isArray(parsed) ? (parsed as Project[]) : [];
+-  } catch {
+-    return [];
+-  }
++  const value = await readJson<Project[]>(dataFile("projects", env), []);
++  return Array.isArray(value) ? value : [];
+ }
+ 
+ export async function createProject(
+@@ -29,8 +22,6 @@ export async function createProject(
+   const project: Project = { id: newId("prj"), name, createdAt: new Date().toISOString() };
+   projects.push(project);
+ 
+-  const path = dataFile("projects", env);
+-  await mkdir(dirname(path), { recursive: true });
+-  await Bun.write(path, JSON.stringify(projects, null, 2));
++  await writeJson(dataFile("projects", env), projects);
+   return project;
+ }
+diff --git a/src/storage/json-store.ts b/src/storage/json-store.ts
+new file mode 100644
+index 0000000..b277771
+--- /dev/null
++++ b/src/storage/json-store.ts
+@@ -0,0 +1,27 @@
++import { mkdir, rename, rm } from "node:fs/promises";
++import { basename, dirname, join } from "node:path";
++
++export async function readJson<T>(path: string, fallback: T): Promise<T> {
++  try {
++    const file = Bun.file(path);
++    if (!(await file.exists())) return fallback;
++    const parsed: unknown = JSON.parse(await file.text());
++    return parsed as T;
++  } catch {
++    return fallback;
++  }
++}
++
++export async function writeJson(path: string, value: unknown): Promise<void> {
++  const directory = dirname(path);
++  await mkdir(directory, { recursive: true });
++
++  const temp = join(directory, `.${basename(path)}.tmp-${crypto.randomUUID()}`);
++  try {
++    await Bun.write(temp, JSON.stringify(value));
++    await rename(temp, path);
++  } catch (error) {
++    await rm(temp, { force: true }).catch(() => {});
++    throw error;
++  }
++}

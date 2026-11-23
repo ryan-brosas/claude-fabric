@@ -1,0 +1,7 @@
+{
+  "name": "shop-api",
+  "version": "1.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test" }
+}

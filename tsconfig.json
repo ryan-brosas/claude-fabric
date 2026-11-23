@@ -15,10 +15,12 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "proofs/**/*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "bench/*.ts"
   ],
   "exclude": [
     "src/mod",
-    "test/mod"
+    "test/mod",
+    "bench/tasks"
   ]
 }

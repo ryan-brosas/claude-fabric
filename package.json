@@ -10,7 +10,7 @@
     "spike": "bun src/kernel/spike.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:mod": "tsc -p tsconfig.mod.json",
-    "test": "bun test ./test"
+    "test": "bun test ./test && bun test ./bench/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

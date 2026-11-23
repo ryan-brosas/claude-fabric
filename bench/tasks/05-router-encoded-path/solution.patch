@@ -1,0 +1,63 @@
+diff --git a/src/path.ts b/src/path.ts
+index 55a23a4..a0484fe 100644
+--- a/src/path.ts
++++ b/src/path.ts
+@@ -12,24 +12,30 @@ export function splitPath(path: string): string[] {
+   return path.split("/").filter((segment) => segment.length > 0);
+ }
+ 
++/**
++ * Decodes one segment at a time, so an encoded slash stays inside its own
++ * segment instead of splitting the path. The result is re-encoded and joined
++ * with plain slashes; `Router.match` decodes the segments again.
++ */
+ export function normalizePath(pathname: string): string {
+   const rawPath = pathname.split("?")[0] ?? "";
++  const rawSegments = splitPath(rawPath);
++  const segments: string[] = [];
+ 
+-  let decoded: string;
+-  try {
+-    decoded = decodeURIComponent(rawPath);
+-  } catch {
+-    throw new PathError("invalid_encoding", `path is not valid percent encoding: ${rawPath}`);
+-  }
+-
+-  const segments = splitPath(decoded);
+-  for (const segment of segments) {
+-    if (segment === "." || segment === "..") {
+-      throw new PathError("traversal", `path segment "${segment}" is not allowed`);
++  for (const raw of rawSegments) {
++    let decoded: string;
++    try {
++      decoded = decodeURIComponent(raw);
++    } catch {
++      throw new PathError("invalid_encoding", `path is not valid percent encoding: ${rawPath}`);
+     }
+-    if (segment.includes("\u0000")) {
++    if (decoded === "." || decoded === "..") {
++      throw new PathError("traversal", `path segment "${decoded}" is not allowed`);
++    }
++    if (decoded.includes("\u0000")) {
+       throw new PathError("traversal", "path contains a null byte");
+     }
++    segments.push(encodeURIComponent(decoded));
+   }
+ 
+   return "/" + segments.join("/");
+diff --git a/src/router.ts b/src/router.ts
+index d65436d..f1a71a2 100644
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -39,7 +39,10 @@ export class Router {
+   }
+ 
+   match(method: string, path: string): Match | null {
+-    const segments = path.split("/").filter((segment) => segment.length > 0);
++    const segments = path
++      .split("/")
++      .filter((segment) => segment.length > 0)
++      .map((segment) => decodeURIComponent(segment));
+     const wanted = method.toUpperCase();
+     for (const route of this.#routes) {
+       if (route.method !== wanted) continue;
