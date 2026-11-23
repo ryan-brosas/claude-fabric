@@ -151,6 +151,10 @@ What shapes claude-fabric, and why. Rewrite an entry when it changes; don't add 
   70/75, native code mode 70/75, plain 68/74 (one plain run of task 12 left no record, and one hit the turn limit, so its token mean covers 73 runs), `fabric_exec` at 1.052
   times native's tokens. Task 06 failed every run of every arm, and nothing else failed: its prompt leaves the output
   calls and the `slowest` format open, and its check expects one form of each.
+  On 2026-11-23 the prompt in `bench/tasks/06-runlog-stats-command/prompt.md` was changed to state
+  the order of the text lines and the `slowest:` form, `task (durationMs)` with an `ms` suffix. The
+  hidden check was not changed. Since then `fabric_exec` passed task 06 in 5 of 5 runs in each of
+  three Sonnet 5.5 reruns that day; native code mode passed it in 5, 4 and 3 of 5 runs, respectively.
 
 ## Trust
 
