@@ -81,6 +81,26 @@ const PRINT = [
   "/** Runs handler after timeout ms, within this call's time limit. */",
   "declare function setTimeout(handler: (_: void) => void, timeout?: number): TimerHandle;",
   "declare function clearTimeout(handle: TimerHandle): void;",
+  // These Web platform globals are present in Bun Workers; do not add the whole DOM library.
+  "declare class URL {",
+  "  constructor(url: string | URL, base?: string | URL);",
+  "  hash: string; host: string; hostname: string; href: string; password: string; pathname: string; port: string; protocol: string; search: string; username: string;",
+  "  readonly origin: string; readonly searchParams: URLSearchParams;",
+  "  toString(): string; toJSON(): string;",
+  "  static canParse(url: string | URL, base?: string | URL): boolean;",
+  "  static parse(url: string | URL, base?: string | URL): URL | null;",
+  "}",
+  "declare class URLSearchParams implements Iterable<[string, string]> {",
+  "  constructor(init?: string | Iterable<[string, string]> | Record<string, string>);",
+  "  readonly size: number;",
+  "  append(name: string, value: string): void;",
+  "  delete(name: string, value?: string): void;",
+  "  get(name: string): string | null; getAll(name: string): string[]; has(name: string, value?: string): boolean;",
+  "  set(name: string, value: string): void; sort(): void; toString(): string;",
+  "  forEach(callback: (value: string, key: string, parent: URLSearchParams) => void, thisArg?: unknown): void;",
+  "  entries(): IterableIterator<[string, string]>; keys(): IterableIterator<string>; values(): IterableIterator<string>;",
+  "  [Symbol.iterator](): IterableIterator<[string, string]>;",
+  "}",
 ].join("\n");
 
 const HEADER = "// Globals a fabric_exec program sees. Names and fields follow Claude Code's own tools.";
