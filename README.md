@@ -89,6 +89,15 @@ In the `fabric_exec` arm, requests that did no work fell from 35 in the morning 
 afternoon: refused top-level calls from 18 to 0, type-check failures from 15 to 13, and Bash nonzero
 exits from 2 to 0.
 
+That evening, a third run used the plugin with #72 and #74 as well, with a native arm alongside.
+`fabric_exec` passed 75 of 75 at a mean of 83,950 tokens and median of 75,922 (range 52,971 to
+136,643), with 4.37 requests per run. Native code mode passed 74 of 75 at a mean of 112,633 and
+median of 106,302 (range 74,953 to 209,984), with 15.44 requests per run. `fabric_exec` used 0.745
+times native's mean and 0.714 times its median. It had 11 requests that did no work: 10 type-check
+failures and 1 other failed program. Against the afternoon build, there was no measurable change:
+requests per run were the same and no pass was lost. The plugin ran #74 without its last commit,
+which only refuses more inputs. One `fabric_exec` run made 3 top-level Bash calls.
+
 Since the 2026-11-19 run, the changes also include the `fabricOnly` option (#22, #23, #36), program
 guidance (#21) and whole-file `Read` guidance (#58, #61). An afternoon arm that added guidance to
 chain dependent steps in one program showed no gain: 74 of 75 passed, with a mean of 83,790 tokens
@@ -128,7 +137,9 @@ wording. The newer build had fewer wasted requests and one more pass, but no tok
 and requests per run were similar across builds. Main's failed run was `06-runlog-stats-command`.
 
 In one #70 and #71 run of `10-rename-config-settings`, the session never called `fabric_exec` and
-used top-level Bash and Write, which `fabricOnly` should have kept from it. The cause is unknown.
+used top-level Bash and Write. At its first request, the plugin's MCP server was still connecting, so
+`fabric_exec` was not offered. `fabricOnly` hides Bash and Write only while `fabric_exec` is offered,
+so the model started with the built-in tools and kept using them.
 The run passed, and its 212,143 tokens are counted. These 15 small tasks are evidence for these
 tasks, not a claim about sessions in general.
 

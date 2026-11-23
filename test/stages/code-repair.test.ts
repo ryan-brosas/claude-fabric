@@ -88,6 +88,13 @@ test("a consumed print property prevents all tool calls and writes", async () =>
   }
 });
 
+test("repairs a guarded cwd property alongside an accumulator", () => {
+  const code = 'const out = {}; for (const f of ["a"]) out[f] = process.cwd ? `${process.cwd()}/${f}` : f; return out;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const out: Record<string, any> = {}; for (const f of ["a"]) out[f] = (`${"/fixture/project"}/${f}`); return out;');
+});
+
 test("repairs an unresolved optional cwd call", () => {
   const code = 'return process.cwd?.();';
   const result = checkProgram(code, { cwd: PROJECT });
@@ -95,13 +102,383 @@ test("repairs an unresolved optional cwd call", () => {
   expect(result.program).toBe('return "/fixture/project";');
 });
 
-test("keeps the original error if a cwd literal introduces a conditional diagnostic", () => {
-  for (const code of ['return process.cwd?.() ? "a" : "b";', 'return process.cwd?.() ?? ".";']) {
+test("repairs cwd calls as conditions and repairs the retained branch", () => {
+  for (const condition of ["process.cwd()", "process.cwd?.()", "((process.cwd()))", "((process.cwd?.()))"]) {
+    const code = `return ${condition} ? process.cwd?.() + "/a" : "fallback";`;
+    const result = checkProgram(code, { cwd: PROJECT });
+    expect(result.checked.ok).toBe(true);
+    expect(result.program).toBe('return ("/fixture/project" + "/a");');
+  }
+});
+
+test("refuses guarded conditionals in reference-sensitive positions", async () => {
+  const code = 'const obj = { value: "ok", f() { return this.value; } }; await Write("never", "x"); return ((process.cwd ? obj.f : obj.f))();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.cwdTargets).toHaveLength(1);
+  expect(repairCode(code, original.indexTargets, original.cwdTargets, PROJECT)).toBe(code);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-reference-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  for (const expression of [
+    'new ((process.cwd ? obj.C : obj.C))()',
+    '((process.cwd ? obj.tag : obj.tag))`text`',
+    'typeof ((process.cwd ? obj.value : obj.value))',
+    'delete ((process.cwd ? obj.value : obj.value))',
+    'new ((process.cwd ? obj.C : obj.C)!)()',
+    '((process.cwd ? obj.tag : obj.tag) as (s: TemplateStringsArray) => string)`text`',
+    'typeof ((process.cwd ? obj.value : obj.value) satisfies string | undefined)',
+    'delete ((process.cwd ? obj.value : obj.value) as string | undefined)',
+  ]) {
+    const program = `const obj: { value?: string; C: new () => object; tag: (s: TemplateStringsArray) => string } = { C: class {}, tag: s => s[0] ?? "" }; return ${expression};`;
+    const checked = check(program, declarations);
+    expect(checked.ok).toBe(false);
+    expect(checked.cwdTargets).toHaveLength(1);
+    expect(repairCode(program, checked.indexTargets, checked.cwdTargets, PROJECT)).toBe(program);
+    expect(checkProgram(program, { cwd: PROJECT })).toEqual({ program, checked });
+  }
+});
+
+for (const [wrapper, expression] of [
+  ["non-null", '(process.cwd ? obj.f : obj.f)!()'],
+  ["as", '((process.cwd ? obj.f : obj.f) as () => string)()'],
+  ["satisfies", '((process.cwd ? obj.f : obj.f) satisfies () => string)()'],
+  ["type assertion", '(<() => string>(process.cwd ? obj.f : obj.f))()'],
+  ["mixed wrappers", '(((process.cwd ? obj.f : obj.f)! as () => string) satisfies () => string)()'],
+] as const) {
+  test(`refuses a ${wrapper} wrapped conditional callee`, () => {
+    const code = `const obj = { value: "ok", f() { return this.value; } }; return ${expression};`;
     const original = check(code, declarations);
-    const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
-    expect(check(repaired, declarations).ok).toBe(false);
+    expect(original.ok).toBe(false);
+    expect(original.cwdTargets).toHaveLength(1);
+    expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  });
+}
+
+test("refuses cwd call conditions in reference-sensitive positions", async () => {
+  for (const condition of ["process.cwd()", "process.cwd?.()", "((process.cwd()))", "((process.cwd?.()))"]) {
+    for (const expression of [
+      `((${condition} ? obj.f : obj.f))()`,
+      `new ((${condition} ? obj.C : obj.C)!)()`,
+      `((${condition} ? obj.tag : obj.tag) as (s: TemplateStringsArray) => string)\`text\``,
+      `typeof ((${condition} ? obj.value : obj.value) satisfies string | undefined)`,
+      `delete ((${condition} ? obj.value : obj.value) as string | undefined)`,
+      `((((${condition} ? obj.f : obj.f)! as () => string) satisfies () => string))()`,
+    ]) {
+      const code = `const obj: { value?: string; f: () => string; C: new () => object; tag: (s: TemplateStringsArray) => string } = { f: () => "ok", C: class {}, tag: s => s[0] ?? "" }; return ${expression};`;
+      const original = check(code, declarations);
+      expect(original.cwdTargets).toHaveLength(1);
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-call-reference-"));
+  try {
+    for (const condition of ["process.cwd()", "process.cwd?.()"]) {
+      const code = `const obj = { value: "ok", f() { return this.value; } }; await Write("never", "x"); return ((${condition} ? obj.f : obj.f))();`;
+      const original = check(code, declarations);
+      const result = await run(code, dir);
+      expect(result.ok).toBe(false);
+      expect(result.calls).toBe(0);
+      expect(result.ms.run).toBe(0);
+      for (const error of original.errors) expect(result.text).toContain(error);
+      expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a generic instantiation of a guarded method", async () => {
+  const code = 'const obj = { value: "bound", f<T>() { return this.value; } }; await Write("never", "x"); return ((process.cwd() ? obj.f : obj.f)<string>)();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-generic-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a guarded anonymous function whose inferred name would change", async () => {
+  const code = 'const f = process.cwd() ? () => 1 : () => 2; return f.name;';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-name-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a property true branch even when the conditional is used as a value", () => {
+  const code = 'const obj = { f() { return "ok"; } }; const fn = (process.cwd ? obj.f : obj.f) as () => string; return fn();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("refuses a guarded eval callee without changing its original errors or running tools", async () => {
+  const code = 'const x = 42; await Write("never", "x"); return (process.cwd ? eval : eval)("typeof x");';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-eval-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses identifier true branches through transparent wrappers", () => {
+  for (const branch of [
+    'someVar', '(someVar)', '(someVar!)', '(someVar as string)',
+    '(someVar satisfies string)', '(<string>someVar)',
+    '(((someVar!) as string) satisfies string)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const someVar = "y"; return ${condition} ? ${branch} : "x";`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+  const code = 'function someVar<T>() { return 1; } return process.cwd ? someVar<string> : someVar<string>;';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors).toHaveLength(1);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("refuses property and element true branches through transparent wrappers", () => {
+  for (const branch of [
+    'obj.f', 'obj["f"]', 'obj?.f', 'obj?.["f"]', '(obj.f)', '(obj.f!)',
+    '(obj.f as typeof obj.f)', '(obj.f satisfies typeof obj.f)',
+    '(<typeof obj.f>obj.f)', '(obj.f<string>)', '(((obj["f"]!) as typeof obj.f) satisfies typeof obj.f)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const obj = { f<T>() { return "ok"; } }; const value = ${condition} ? ${branch} : ${branch}; return value;`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+});
+
+test("refuses function and class true branches through transparent wrappers", () => {
+  for (const branch of [
+    '() => 1', '(function () { return 1; })', '(class {})',
+    '(function named() { return 1; })', '(class Named {})',
+    '((() => 1) as () => number)', '((() => 1) satisfies () => number)',
+    '(<() => number>(() => 1))', '((() => 1)!)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const value = ${condition} ? ${branch} : ${branch}; return value.name;`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+});
+
+test("repairs guarded template, concatenation, call, and await values", () => {
+  for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+    for (const [branch, expected] of [
+      ['`path/${process.cwd()}`', '`path/${"/fixture/project"}`'],
+      ['process.cwd() + "/a"', '"/fixture/project" + "/a"'],
+      ['String("ok")', 'String("ok")'],
+      ['await Promise.resolve("ok")', 'await Promise.resolve("ok")'],
+    ]) {
+      const code = `async function value() { return ${condition} ? ${branch} : "fallback"; } return value();`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe(`async function value() { return (${expected}); } return value();`);
+    }
+  }
+});
+
+test("repairs a call-result true branch even in a conditional callee", () => {
+  const code = 'const make = () => () => "ok"; return (process.cwd ? make() : make())();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const make = () => () => "ok"; return ((make()))();');
+});
+
+test("runs repaired guarded values without evaluating their fallbacks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-values-"));
+  try {
+    for (const [code, expected] of [
+      ['return process.cwd ? `dir:${process.cwd()}` : (await Write("never", "x"), "fallback");', `dir:${dir}`],
+      ['return process.cwd() ? process.cwd() + "/a" : (await Write("never", "x"), "fallback");', `${dir}/a`],
+      ['return process.cwd?.() ? String("call") : (await Write("never", "x"), "fallback");', 'call'],
+      ['return process.cwd ? await Promise.resolve("await") : (await Write("never", "x"), "fallback");', 'await'],
+      ['const make = () => () => "callee"; return (process.cwd ? make() : make())();', 'callee'],
+    ]) {
+      const result = await run(code, dir);
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe(expected);
+      expect(result.calls).toBe(0);
+      expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("composes cwd fallback replacements with boundary insertions", () => {
+  for (const call of ["process.cwd()", "process.cwd?.()"]) {
+    for (const operator of ["||", "??"]) {
+      const code = `print(${call} ${operator} ".").length;`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe('print(("/fixture/project").length);');
+    }
+  }
+  const inside = 'return process.cwd() || (() => { print("x").length; return "."; })();';
+  const checked = check(inside, declarations);
+  expect(checked.cwdTargets).toHaveLength(1);
+  expect(checked.printPropertyTargets).toHaveLength(1);
+  expect(checkProgram(inside, { cwd: PROJECT })).toMatchObject({
+    program: 'return "/fixture/project";', checked: { ok: true },
+  });
+});
+
+test("repairs cwd calls on the left of nullish and logical fallbacks", () => {
+  for (const call of ["process.cwd()", "process.cwd?.()", "(process.cwd())", "(process.cwd?.())"]) {
+    for (const operator of ["??", "||"]) {
+      const code = `return ${call} ${operator} ".";`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe('return "/fixture/project";');
+    }
+  }
+});
+
+test("runs synthetic guarded programs without their unreachable fallbacks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-guard-"));
+  try {
+    for (const code of [
+      'return process.cwd?.() || (await Write("never", "x"), ".");',
+      'return process.cwd ? process.cwd() + "/a" : (await Write("never", "x"), ".");',
+      'return process.cwd() ? process.cwd() + "/a" : (await Write("never", "x"), ".");',
+      'return (process.cwd?.()) ? process.cwd() + "/a" : (await Write("never", "x"), ".");',
+    ]) {
+      const result = await run(code, dir);
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe(code.includes(" ? ") ? dir + "/a" : dir);
+      expect(result.calls).toBe(0);
+      expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("combines nested guard repairs and discards repairs in an unreachable branch", () => {
+  const code = 'return process.cwd ? process.cwd?.() ?? "." : process.cwd();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('return ("/fixture/project");');
+  const nested = 'return process.cwd?.() ? process.cwd() ? process.cwd() : "inner" : "outer";';
+  expect(checkProgram(nested, { cwd: PROJECT })).toMatchObject({
+    program: 'return (("/fixture/project"));', checked: { ok: true },
+  });
+  const boundary = 'print(process.cwd() ? "x" : "y").length;';
+  expect(checkProgram(boundary, { cwd: PROJECT })).toMatchObject({
+    program: 'print((("x")).length);', checked: { ok: true },
+  });
+  const fallback = 'return process.cwd() || Read(/tmp/x);';
+  expect(checkProgram(fallback, { cwd: PROJECT })).toMatchObject({
+    program: 'return "/fixture/project";', checked: { ok: true },
+  });
+});
+
+test("keeps the original errors when a guarded true branch still fails", async () => {
+  const code = 'await Write("never", "x"); return process.cwd ? missing() : "fallback";';
+  const original = check(code, declarations);
+  const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
+  expect(repaired).toBe('await Write("never", "x"); return (missing());');
+  expect(check(repaired, declarations).ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-rejected-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not widen guard repairs to other process shapes", () => {
+  for (const code of [
+    'return process.cwd("arg") ? "a" : "b";',
+    'return process.cwd<string>() ? "a" : "b";',
+    'return process?.cwd() ? "a" : "b";',
+    'return process.env.X ?? "y";',
+    'return process ? "a" : "b";',
+    'return typeof process !== "undefined" ? "a" : "b";',
+  ]) {
+    const original = check(code, declarations);
+    if (code.includes("process.env")) {
+      expect(repairCode(code, original.indexTargets, original.cwdTargets, PROJECT)).toBe(code);
+    }
     expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
   }
+});
+
+test("leaves a scoped process guard untouched while repairing another error", () => {
+  const code = 'const process: { cwd?: () => string } = {}; const out = {}; for (const k of ["a"]) out[k] = process.cwd ? process.cwd() : "local"; return out;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe(code.replace("out = {}", "out: Record<string, any> = {}"));
+  for (const call of ["process.cwd()", "process.cwd?.()", "((process.cwd()))", "((process.cwd?.()))"]) {
+    const local = `const process = { cwd: () => "" }; const out = {}; for (const k of ["a"]) out[k] = ${call} ? "cwd" : "local"; return out;`;
+    const repaired = checkProgram(local, { cwd: PROJECT });
+    expect(repaired.checked.ok).toBe(true);
+    expect(repaired.program).toBe(local.replace("out = {}", "out: Record<string, any> = {}"));
+  }
+  const passing = 'const process = { cwd: () => null as string | null }; return process.cwd() ?? "local";';
+  expect(check(passing, declarations).ok).toBe(true);
+  expect(checkProgram(passing, { cwd: PROJECT }).program).toBe(passing);
 });
 
 test("runs each repaired property access exactly once", async () => {
@@ -372,6 +749,14 @@ test("does not repair cwd without a project folder", () => {
   expect(repairCode(code, checked.indexTargets, checked.cwdTargets)).toBe(code);
   expect(checkProgram(code)).toMatchObject({ program: code, checked: { ok: false } });
   expect(checkProgram(code).checked.errors.join("\n")).toContain("Cannot find name \'process\'");
+  for (const condition of ["process.cwd()", "process.cwd?.()"]) {
+    const guarded = `return ${condition} ? "a" : "b";`;
+    const original = check(guarded, declarations);
+    expect(repairCode(guarded, original.indexTargets, original.cwdTargets)).toBe(guarded);
+    expect(checkProgram(guarded)).toEqual({ program: guarded, checked: original });
+    expect(repairCode(guarded, original.indexTargets, original.cwdTargets, ""))
+      .toBe('return "" ? "a" : "b";');
+  }
 });
 
 test("repairs an empty object accumulator rejected by the check", async () => {
@@ -431,7 +816,10 @@ test("does not execute when another process reference still fails after a candid
   const result = await run(code, tmpdir());
   expect(result.ok).toBe(false);
   expect(result.calls).toBe(0);
+  expect(result.ms.run).toBe(0);
   expect(result.text).toContain("Cannot find name \'process\'");
+  expect(result.text).toContain("Recovery hint: a program has no `fs`, `require` or `process`.");
+  expect(result.text).toContain("Relative paths resolve against the project folder.");
 });
 
 test("an indexed accumulator can be read after it is written", async () => {

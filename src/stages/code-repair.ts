@@ -360,6 +360,18 @@ function printedPropertyRepairs(code: string, targets: readonly number[]): Repai
   return repairs;
 }
 
+// A conditional produces a value. Refuse property or element references (which can change
+// a receiver), bare identifiers (which can make eval direct), and functions or classes
+// (which can cause a surrounding name to be inferred).
+function unsafeConditionalBranch(expression: ts.Expression): boolean {
+  while (ts.isParenthesizedExpression(expression) || ts.isNonNullExpression(expression) ||
+         ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) ||
+         ts.isTypeAssertionExpression(expression) || ts.isExpressionWithTypeArguments(expression) ||
+         ts.isPartiallyEmittedExpression(expression)) expression = expression.expression;
+  return ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression) ||
+    ts.isIdentifier(expression) || ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isClassExpression(expression);
+}
+
 // Positions come from the check: TS7053 declarations, unresolved `process`, and missing
 // Promise or global print properties. The AST determines which shapes can be repaired.
 function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string, propertyTargets: PropertyTargets = {}): Repair[] {
@@ -369,6 +381,13 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
   const awaitPositions = new Set(propertyTargets.awaited);
   const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
   const repairs: Repair[] = [];
+  const isCwdProperty = (node: ts.Node): boolean =>
+    ts.isPropertyAccessExpression(node) && !node.questionDotToken && node.name.getText(file) === "cwd" &&
+    ts.isIdentifier(node.expression) && node.expression.text === "process" && cwdPositions.has(node.expression.getStart(file));
+  const isCwdCall = (node: ts.Node): boolean => {
+    while (ts.isParenthesizedExpression(node)) node = node.expression;
+    return ts.isCallExpression(node) && !node.typeArguments && node.arguments.length === 0 && isCwdProperty(node.expression);
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && positions.has(node.name.getStart(file)) &&
         !node.type && node.initializer && ts.isObjectLiteralExpression(node.initializer) &&
@@ -376,12 +395,22 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
         (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
-    if (cwd !== undefined && ts.isCallExpression(node) && !node.typeArguments && node.arguments.length === 0 &&
-        ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken &&
-        node.expression.name.getText(file) === "cwd" && ts.isIdentifier(node.expression.expression) &&
-        node.expression.expression.text === "process" && cwdPositions.has(node.expression.expression.getStart(file))) {
-      // The project folder is the cwd of the program tools and the value process.cwd() would have.
-      // JSON.stringify makes it a valid literal even when the folder contains quotes or backslashes.
+    if (cwd !== undefined && ts.isConditionalExpression(node) &&
+        (isCwdProperty(node.condition) || (cwd && isCwdCall(node.condition))) && !unsafeConditionalBranch(node.whenTrue)) {
+      // A cwd call returns a non-empty project folder. Keep the true branch in place so
+      // other diagnosed repairs can still apply inside it.
+      repairs.push({ start: node.getStart(file), end: node.whenTrue.getStart(file), text: "(" });
+      repairs.push({ start: node.whenTrue.end, end: node.end, text: ")" });
+    }
+    if (cwd && ts.isBinaryExpression(node) &&
+        (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
+        isCwdCall(node.left)) {
+      // The project folder is non-empty, so neither fallback can be reached.
+      repairs.push({ start: node.getStart(file), end: node.end, text: JSON.stringify(cwd) });
+      return;
+    }
+    if (cwd !== undefined && ts.isCallExpression(node) && isCwdCall(node)) {
+      // JSON.stringify makes the folder a valid literal even with quotes or backslashes.
       repairs.push({ start: node.getStart(file), end: node.end, text: JSON.stringify(cwd) });
     }
     if (ts.isPropertyAccessExpression(node) && !ts.isPropertyAccessChain(node) && awaitPositions.has(node.name.getStart(file)) &&
@@ -396,11 +425,27 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
 }
 
 function applyRepairs(code: string, repairs: Repair[]): string {
-  repairs.sort((a, b) => a.start - b.start);
-  if (repairs.length === 0) return code;
+  repairs.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    const aInsertion = a.start === a.end;
+    const bInsertion = b.start === b.end;
+    // Reverse application must replace first, then insert before its start boundary.
+    if (aInsertion !== bInsertion) return aInsertion ? -1 : 1;
+    return b.end - a.end;
+  });
+  const disjoint: Repair[] = [];
+  for (const repair of repairs) {
+    const previous = disjoint.at(-1);
+    if (previous && previous.end > previous.start && repair.start < previous.end) {
+      // A whole-expression repair discards edits inside it; crossing edits are ambiguous.
+      if (repair.end <= previous.end) continue;
+      return code;
+    }
+    disjoint.push(repair);
+  }
   let result = code;
-  for (let index = repairs.length - 1; index >= 0; index--) {
-    const repair = repairs[index];
+  for (let index = disjoint.length - 1; index >= 0; index--) {
+    const repair = disjoint[index];
     if (!repair) continue;
     result = result.slice(0, repair.start) + repair.text + result.slice(repair.end);
   }
