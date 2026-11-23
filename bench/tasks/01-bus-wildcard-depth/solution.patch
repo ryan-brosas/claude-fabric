@@ -1,0 +1,19 @@
+diff --git c/src/topic.ts w/src/topic.ts
+index c4bceb4..a641991 100644
+--- c/src/topic.ts
++++ w/src/topic.ts
+@@ -34,13 +34,11 @@ export function validatePattern(pattern: string): void {
+ export function matches(pattern: string, topic: string): boolean {
+   const wanted = splitTopic(pattern);
+   const actual = splitTopic(topic);
+-  if (wanted.length > actual.length + 1) return false;
+-
+   for (let index = 0; index < wanted.length; index += 1) {
+     const segment = wanted[index];
+     if (segment === "#") return true;
+     if (segment === "*") {
+-      if (index === wanted.length - 1) return true;
++      if (index >= actual.length) return false;
+       continue;
+     }
+     if (segment !== actual[index]) return false;

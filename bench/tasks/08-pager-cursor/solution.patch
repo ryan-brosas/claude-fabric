@@ -1,0 +1,109 @@
+diff --git a/src/http/handlers.ts b/src/http/handlers.ts
+index a705d22..d62f656 100644
+--- a/src/http/handlers.ts
++++ b/src/http/handlers.ts
+@@ -15,7 +15,7 @@ export interface ListQuery {
+ export function handleListUsers(repo: MemoryUserRepository, query: ListQuery = {}): HandlerResult {
+   try {
+     const limit = query.limit === undefined ? undefined : Number(query.limit);
+-    const page = listUsers(repo, { limit });
++    const page = listUsers(repo, { limit, cursor: query.cursor ?? null });
+     return { status: 200, body: serializePage(page) };
+   } catch (error) {
+     if (error instanceof InvalidLimitError) {
+diff --git a/src/http/serialize.ts b/src/http/serialize.ts
+index e198366..73e75fd 100644
+--- a/src/http/serialize.ts
++++ b/src/http/serialize.ts
+@@ -2,8 +2,9 @@ import type { UserListPage } from "../types";
+ 
+ export interface SerializedPage {
+   items: UserListPage["items"];
++  nextCursor: string | null;
+ }
+ 
+ export function serializePage(page: UserListPage): SerializedPage {
+-  return { items: page.items };
++  return { items: page.items, nextCursor: page.nextCursor };
+ }
+diff --git a/src/service/list-users.ts b/src/service/list-users.ts
+index 820e090..6922e44 100644
+--- a/src/service/list-users.ts
++++ b/src/service/list-users.ts
+@@ -1,5 +1,6 @@
+ import type { MemoryUserRepository } from "../repo/memory";
+-import type { ListUsersInput, UserListPage } from "../types";
++import type { ListUsersInput, User, UserListPage } from "../types";
++import { decodeBase64Url, encodeBase64Url } from "../util/base64";
+ 
+ export const DEFAULT_LIMIT = 20;
+ export const MAX_LIMIT = 100;
+@@ -22,6 +23,38 @@ export class InvalidCursorError extends Error {
+   }
+ }
+ 
++interface Cursor {
++  createdAt: string;
++  id: string;
++}
++
++function encodeCursor(user: User): string {
++  return encodeBase64Url(JSON.stringify({ createdAt: user.createdAt, id: user.id }));
++}
++
++function decodeCursor(value: string): Cursor {
++  const raw = decodeBase64Url(value);
++  if (raw === null) throw new InvalidCursorError("cursor is not valid base64url");
++
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch {
++    throw new InvalidCursorError("cursor is not valid JSON");
++  }
++
++  const record = parsed as Partial<Cursor>;
++  if (typeof record.createdAt !== "string" || typeof record.id !== "string") {
++    throw new InvalidCursorError("cursor is missing its position");
++  }
++  return { createdAt: record.createdAt, id: record.id };
++}
++
++function isAfter(user: User, cursor: Cursor): boolean {
++  if (user.createdAt !== cursor.createdAt) return user.createdAt > cursor.createdAt;
++  return user.id > cursor.id;
++}
++
+ export function listUsers(repo: MemoryUserRepository, input: ListUsersInput = {}): UserListPage {
+   const limit = input.limit ?? DEFAULT_LIMIT;
+   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+@@ -29,5 +62,18 @@ export function listUsers(repo: MemoryUserRepository, input: ListUsersInput = {}
+   }
+ 
+   const ordered = repo.ordered();
+-  return { items: ordered.slice(0, limit) };
++  let start = 0;
++
++  if (input.cursor) {
++    const cursor = decodeCursor(input.cursor);
++    const known = ordered.some((user) => user.createdAt === cursor.createdAt && user.id === cursor.id);
++    if (!known) throw new InvalidCursorError("cursor does not point at a known position");
++    const index = ordered.findIndex((user) => isAfter(user, cursor));
++    start = index === -1 ? ordered.length : index;
++  }
++
++  const items = ordered.slice(start, start + limit);
++  const last = items.at(-1);
++  const nextCursor = last && start + limit < ordered.length ? encodeCursor(last) : null;
++  return { items, nextCursor };
+ }
+diff --git a/src/types.ts b/src/types.ts
+index bac8b95..97a01c7 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -12,4 +12,5 @@ export interface ListUsersInput {
+ 
+ export interface UserListPage {
+   items: User[];
++  nextCursor: string | null;
+ }

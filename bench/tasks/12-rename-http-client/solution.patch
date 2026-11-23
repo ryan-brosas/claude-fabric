@@ -1,0 +1,291 @@
+diff --git a/docs/api.md b/docs/api.md
+index 1da8bbb..15844d8 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -2,9 +2,9 @@
+ 
+ | Export | Kind |
+ | --- | --- |
+-| `HttpClient` | class: `request`, `getJson`, `postJson` |
+-| `fetchJson` | one-shot JSON fetch |
+-| `HttpError` | error with `status` and `payload` |
++| `ApiClient` | class: `request`, `getJson`, `postJson` |
++| `requestJson` | one-shot JSON fetch |
++| `ApiError` | error with `status` and `payload` |
+ | `withAuth` | header helper |
+ | `createUserApi`, `createSearchApi` | typed factories |
+ | `listOrders` | orders fetch |
+diff --git a/src/api/orders.ts b/src/api/orders.ts
+index e9d085c..6eb73e4 100644
+--- a/src/api/orders.ts
++++ b/src/api/orders.ts
+@@ -1,6 +1,6 @@
+ import { apiBaseUrl } from "../config";
+-import { fetchJson } from "../http/fetch-json";
+-import type { Fetcher } from "../http/types";
++import { requestJson } from "../client/fetch-json";
++import type { Fetcher } from "../client/types";
+ 
+ export interface Order {
+   id: string;
+@@ -16,5 +16,5 @@ export async function listOrders(options: ListOrdersOptions = {}): Promise<Order
+   const headers: Record<string, string> = options.token
+     ? { authorization: `Bearer ${options.token}` }
+     : {};
+-  return fetchJson<Order[]>(`${apiBaseUrl()}/orders`, { headers, fetch: options.fetch });
++  return requestJson<Order[]>(`${apiBaseUrl()}/orders`, { headers, fetch: options.fetch });
+ }
+diff --git a/src/api/search.ts b/src/api/search.ts
+index 818b110..04c3b95 100644
+--- a/src/api/search.ts
++++ b/src/api/search.ts
+@@ -1,11 +1,11 @@
+-import type { HttpClient } from "../http/client";
++import type { ApiClient } from "../client/client";
+ 
+ export interface SearchHit {
+   id: string;
+   score: number;
+ }
+ 
+-export function createSearchApi(client: HttpClient) {
++export function createSearchApi(client: ApiClient) {
+   return {
+     find: (query: string): Promise<SearchHit[]> =>
+       client.getJson<SearchHit[]>(`/search?q=${encodeURIComponent(query)}`),
+diff --git a/src/api/users.ts b/src/api/users.ts
+index dfe032f..c71bfa6 100644
+--- a/src/api/users.ts
++++ b/src/api/users.ts
+@@ -1,11 +1,11 @@
+-import type { HttpClient } from "../http/client";
++import type { ApiClient } from "../client/client";
+ 
+ export interface User {
+   id: string;
+   name: string;
+ }
+ 
+-export function createUserApi(client: HttpClient) {
++export function createUserApi(client: ApiClient) {
+   return {
+     list: (): Promise<User[]> => client.getJson<User[]>("/users"),
+     get: (id: string): Promise<User> => client.getJson<User>(`/users/${encodeURIComponent(id)}`),
+diff --git a/src/http/client.ts b/src/client/client.ts
+similarity index 85%
+rename from src/http/client.ts
+rename to src/client/client.ts
+index 9fec79f..dca7445 100644
+--- a/src/http/client.ts
++++ b/src/client/client.ts
+@@ -1,6 +1,6 @@
+-import { HttpError } from "./errors";
++import { ApiError } from "./errors";
+ import { withAuth } from "./headers";
+-import type { Fetcher, HttpResult } from "./types";
++import type { Fetcher, RequestResult } from "./types";
+ 
+ export interface ClientOptions {
+   baseUrl: string;
+@@ -9,7 +9,7 @@ export interface ClientOptions {
+   fetch?: Fetcher;
+ }
+ 
+-export class HttpClient {
++export class ApiClient {
+   readonly #baseUrl: string;
+   readonly #token?: string;
+   readonly #headers: Record<string, string>;
+@@ -22,14 +22,14 @@ export class HttpClient {
+     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
+   }
+ 
+-  async request<T>(method: string, path: string, body?: unknown): Promise<HttpResult<T>> {
++  async request<T>(method: string, path: string, body?: unknown): Promise<RequestResult<T>> {
+     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+       method,
+       headers: withAuth(this.#headers, this.#token),
+       body: body === undefined ? undefined : JSON.stringify(body),
+     });
+     const data = (await response.json()) as T;
+-    if (!response.ok) throw new HttpError(response.status, data);
++    if (!response.ok) throw new ApiError(response.status, data);
+     return { status: response.status, headers: response.headers, data };
+   }
+ 
+diff --git a/src/http/errors.ts b/src/client/errors.ts
+similarity index 76%
+rename from src/http/errors.ts
+rename to src/client/errors.ts
+index 1a1a2bd..0d9d594 100644
+--- a/src/http/errors.ts
++++ b/src/client/errors.ts
+@@ -1,10 +1,10 @@
+-export class HttpError extends Error {
++export class ApiError extends Error {
+   readonly status: number;
+   readonly payload: unknown;
+ 
+   constructor(status: number, payload: unknown) {
+     super(`request failed with status ${status}`);
+-    this.name = "HttpError";
++    this.name = "ApiError";
+     this.status = status;
+     this.payload = payload;
+   }
+diff --git a/src/http/fetch-json.ts b/src/client/fetch-json.ts
+similarity index 57%
+rename from src/http/fetch-json.ts
+rename to src/client/fetch-json.ts
+index 6c28ba3..ca98ce8 100644
+--- a/src/http/fetch-json.ts
++++ b/src/client/fetch-json.ts
+@@ -1,15 +1,15 @@
+-import { HttpError } from "./errors";
++import { ApiError } from "./errors";
+ import type { Fetcher } from "./types";
+ 
+-export interface FetchJsonOptions {
++export interface RequestJsonOptions {
+   headers?: Record<string, string>;
+   fetch?: Fetcher;
+ }
+ 
+-export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}): Promise<T> {
++export async function requestJson<T>(url: string, options: RequestJsonOptions = {}): Promise<T> {
+   const doFetch: Fetcher = options.fetch ?? ((input, init) => fetch(input, init));
+   const response = await doFetch(url, { headers: options.headers });
+   const data: unknown = await response.json();
+-  if (!response.ok) throw new HttpError(response.status, data);
++  if (!response.ok) throw new ApiError(response.status, data);
+   return data as T;
+ }
+diff --git a/src/http/headers.ts b/src/client/headers.ts
+similarity index 100%
+rename from src/http/headers.ts
+rename to src/client/headers.ts
+diff --git a/src/http/types.ts b/src/client/types.ts
+similarity index 78%
+rename from src/http/types.ts
+rename to src/client/types.ts
+index 1a23318..f77321e 100644
+--- a/src/http/types.ts
++++ b/src/client/types.ts
+@@ -1,4 +1,4 @@
+-export interface HttpResult<T> {
++export interface RequestResult<T> {
+   status: number;
+   headers: Headers;
+   data: T;
+diff --git a/src/index.ts b/src/index.ts
+index c817d8c..8cfd427 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,10 +1,10 @@
+-export { HttpClient } from "./http/client";
+-export type { ClientOptions } from "./http/client";
+-export { fetchJson } from "./http/fetch-json";
+-export type { FetchJsonOptions } from "./http/fetch-json";
+-export { HttpError } from "./http/errors";
+-export { withAuth } from "./http/headers";
+-export type { Fetcher, HttpResult } from "./http/types";
++export { ApiClient } from "./client/client";
++export type { ClientOptions } from "./client/client";
++export { requestJson } from "./client/fetch-json";
++export type { RequestJsonOptions } from "./client/fetch-json";
++export { ApiError } from "./client/errors";
++export { withAuth } from "./client/headers";
++export type { Fetcher, RequestResult } from "./client/types";
+ export { createUserApi } from "./api/users";
+ export type { User } from "./api/users";
+ export { listOrders } from "./api/orders";
+diff --git a/test/api.test.ts b/test/api.test.ts
+index d6da92a..1d1a86e 100644
+--- a/test/api.test.ts
++++ b/test/api.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, test } from "bun:test";
+-import { HttpClient, createSearchApi, createUserApi, listOrders } from "../src/index";
++import { ApiClient, createSearchApi, createUserApi, listOrders } from "../src/index";
+ 
+ function fakeFetch(body: unknown, status = 200) {
+   const calls: { url: string; init?: RequestInit }[] = [];
+@@ -13,7 +13,7 @@ function fakeFetch(body: unknown, status = 200) {
+ describe("api factories", () => {
+   test("users lists and gets", async () => {
+     const fake = fakeFetch([{ id: "u1", name: "Ada" }]);
+-    const client = new HttpClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
++    const client = new ApiClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
+     const api = createUserApi(client);
+     expect(await api.list()).toEqual([{ id: "u1", name: "Ada" }]);
+     expect(fake.calls[0]?.url).toBe("https://api.test/users");
+@@ -21,7 +21,7 @@ describe("api factories", () => {
+ 
+   test("search encodes the query", async () => {
+     const fake = fakeFetch([]);
+-    const client = new HttpClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
++    const client = new ApiClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
+     await createSearchApi(client).find("a b");
+     expect(fake.calls[0]?.url).toBe("https://api.test/search?q=a%20b");
+   });
+diff --git a/test/client.test.ts b/test/client.test.ts
+index 302ec1d..86b8c3b 100644
+--- a/test/client.test.ts
++++ b/test/client.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, test } from "bun:test";
+-import { HttpClient, HttpError, fetchJson } from "../src/index";
++import { ApiClient, ApiError, requestJson } from "../src/index";
+ 
+ function fakeFetch(body: unknown, status = 200) {
+   const calls: { url: string; init?: RequestInit }[] = [];
+@@ -13,31 +13,31 @@ function fakeFetch(body: unknown, status = 200) {
+   return { calls, fetcher };
+ }
+ 
+-describe("fetchJson", () => {
++describe("requestJson", () => {
+   test("parses JSON", async () => {
+     const fake = fakeFetch({ ok: true });
+-    expect(await fetchJson("https://x.test/y", { fetch: fake.fetcher })).toEqual({ ok: true });
++    expect(await requestJson("https://x.test/y", { fetch: fake.fetcher })).toEqual({ ok: true });
+     expect(fake.calls[0]?.url).toBe("https://x.test/y");
+   });
+ 
+-  test("throws HttpError with the payload", async () => {
++  test("throws ApiError with the payload", async () => {
+     const fake = fakeFetch({ error: "nope" }, 500);
+     let caught: unknown;
+     try {
+-      await fetchJson("https://x.test/y", { fetch: fake.fetcher });
++      await requestJson("https://x.test/y", { fetch: fake.fetcher });
+     } catch (error) {
+       caught = error;
+     }
+-    expect(caught).toBeInstanceOf(HttpError);
+-    expect((caught as HttpError).status).toBe(500);
+-    expect((caught as HttpError).payload).toEqual({ error: "nope" });
++    expect(caught).toBeInstanceOf(ApiError);
++    expect((caught as ApiError).status).toBe(500);
++    expect((caught as ApiError).payload).toEqual({ error: "nope" });
+   });
+ });
+ 
+-describe("HttpClient", () => {
++describe("ApiClient", () => {
+   test("joins the base url and sends the token", async () => {
+     const fake = fakeFetch([{ id: "u1" }]);
+-    const client = new HttpClient({ baseUrl: "https://api.test/", token: "t", fetch: fake.fetcher });
++    const client = new ApiClient({ baseUrl: "https://api.test/", token: "t", fetch: fake.fetcher });
+     expect(await client.getJson("/users")).toEqual([{ id: "u1" }]);
+     expect(fake.calls[0]?.url).toBe("https://api.test/users");
+     const headers = fake.calls[0]?.init?.headers as Record<string, string>;
+@@ -47,7 +47,7 @@ describe("HttpClient", () => {
+ 
+   test("posts JSON bodies", async () => {
+     const fake = fakeFetch({ id: "u2" });
+-    const client = new HttpClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
++    const client = new ApiClient({ baseUrl: "https://api.test", fetch: fake.fetcher });
+     expect(await client.postJson("/users", { name: "Ada" })).toEqual({ id: "u2" });
+     expect(fake.calls[0]?.init?.body).toBe(JSON.stringify({ name: "Ada" }));
+   });

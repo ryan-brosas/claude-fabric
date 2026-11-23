@@ -1,0 +1,100 @@
+diff --git a/src/webhook/receive.ts b/src/webhook/receive.ts
+index 687e63a..72de23b 100644
+--- a/src/webhook/receive.ts
++++ b/src/webhook/receive.ts
+@@ -1,5 +1,6 @@
+ import { handlePing } from "../handlers/ping";
+ import type { Queue } from "../queue";
++import { verifySignature } from "./verify";
+ 
+ export interface ReceiveDeps {
+   secret: string;
+@@ -14,12 +15,30 @@ export interface WebhookResult {
+   body: Record<string, unknown>;
+ }
+ 
+-// TODO: check the x-relay-signature header once src/webhook/verify.ts lands.
+ export function receiveWebhook(
+   headers: Headers,
+   rawBody: string,
+   deps: ReceiveDeps,
+ ): WebhookResult {
++  const nowSeconds = deps.now?.() ?? Math.floor(Date.now() / 1000);
++  const verification = verifySignature({
++    secret: deps.secret,
++    header: headers.get("x-relay-signature"),
++    body: rawBody,
++    toleranceSeconds: deps.toleranceSeconds,
++    nowSeconds,
++  });
++
++  if (!verification.ok) {
++    if (verification.reason === "malformed") {
++      return { status: 400, body: { error: "malformed_signature" } };
++    }
++    if (verification.reason === "timestamp_out_of_range") {
++      return { status: 401, body: { error: "timestamp_out_of_range" } };
++    }
++    return { status: 401, body: { error: "bad_signature" } };
++  }
++
+   const topic = headers.get("x-relay-topic") ?? "unknown";
+   let payload: unknown = null;
+   try {
+@@ -30,7 +49,6 @@ export function receiveWebhook(
+ 
+   if (topic === "ping") handlePing(payload);
+ 
+-  const nowSeconds = deps.now?.() ?? Math.floor(Date.now() / 1000);
+   deps.queue.push({
+     topic,
+     payload,
+diff --git a/src/webhook/verify.ts b/src/webhook/verify.ts
+new file mode 100644
+index 0000000..1be748e
+--- /dev/null
++++ b/src/webhook/verify.ts
+@@ -0,0 +1,43 @@
++import { hmacHex, safeCompare } from "../sign";
++
++export interface VerifyInput {
++  secret: string;
++  /** Raw value of the x-relay-signature header, or null when absent. */
++  header: string | null;
++  body: string;
++  toleranceSeconds: number;
++  nowSeconds: number;
++}
++
++export type VerifyReason = "malformed" | "timestamp_out_of_range" | "bad_signature";
++
++export interface VerifyResult {
++  ok: boolean;
++  reason?: VerifyReason;
++}
++
++export function verifySignature(input: VerifyInput): VerifyResult {
++  const header = input.header?.trim();
++  if (!header) return { ok: false, reason: "malformed" };
++
++  const parts = new Map<string, string>();
++  for (const piece of header.split(",")) {
++    const index = piece.indexOf("=");
++    if (index <= 0) return { ok: false, reason: "malformed" };
++    parts.set(piece.slice(0, index).trim(), piece.slice(index + 1).trim());
++  }
++
++  const timestamp = parts.get("t");
++  const signature = parts.get("v1");
++  if (!timestamp || !signature) return { ok: false, reason: "malformed" };
++  if (!/^\d+$/.test(timestamp)) return { ok: false, reason: "malformed" };
++
++  const seconds = Number(timestamp);
++  if (!Number.isSafeInteger(seconds)) return { ok: false, reason: "malformed" };
++  if (Math.abs(input.nowSeconds - seconds) > input.toleranceSeconds) {
++    return { ok: false, reason: "timestamp_out_of_range" };
++  }
++
++  const expected = hmacHex(input.secret, `${timestamp}.${input.body}`);
++  return safeCompare(expected, signature) ? { ok: true } : { ok: false, reason: "bad_signature" };
++}

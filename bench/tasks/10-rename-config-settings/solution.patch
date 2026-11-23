@@ -1,0 +1,394 @@
+diff --git a/src/app.ts b/src/app.ts
+index 4eb06e3..43c0588 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,24 +1,24 @@
+-import { loadConfig } from "./config";
+-import type { Config } from "./config";
+ import { enabledFeatures } from "./features";
++import { loadSettings } from "./settings";
++import type { Settings } from "./settings";
+ 
+ export interface App {
+-  config: Config;
++  settings: Settings;
+   startedAt: string;
+   features: string[];
+ }
+ 
+ export interface AppOptions {
+-  config?: Config;
++  settings?: Settings;
+   now?: () => Date;
+ }
+ 
+ export function createApp(options: AppOptions = {}): App {
+-  const config = options.config ?? loadConfig();
++  const settings = options.settings ?? loadSettings();
+   const now = options.now ?? (() => new Date());
+   return {
+-    config,
++    settings,
+     startedAt: now().toISOString(),
+-    features: enabledFeatures(config),
++    features: enabledFeatures(settings),
+   };
+ }
+diff --git a/src/cache.ts b/src/cache.ts
+index a08c417..50fbb63 100644
+--- a/src/cache.ts
++++ b/src/cache.ts
+@@ -1,5 +1,5 @@
+-import type { Config } from "./config";
++import type { Settings } from "./settings";
+ 
+-export function cacheTtlMs(config: Config): number {
+-  return config.features.beta ? 60_000 : 300_000;
++export function cacheTtlMs(settings: Settings): number {
++  return settings.features.beta ? 60_000 : 300_000;
+ }
+diff --git a/src/cli.ts b/src/cli.ts
+index 55e70d6..37bac01 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,10 +1,10 @@
+-import { loadConfig } from "./config";
+ import { createLogger } from "./logger";
++import { loadSettings } from "./settings";
+ 
+ export function main(argv: string[]): number {
+-  const config = loadConfig();
++  const settings = loadSettings();
+   const logger = createLogger(argv.includes("--verbose") ? "debug" : "info");
+-  logger(`appbox on ${config.http.host}:${config.http.port}`);
++  logger(`appbox on ${settings.http.host}:${settings.http.port}`);
+   return 0;
+ }
+ 
+diff --git a/src/config/index.ts b/src/config/index.ts
+deleted file mode 100644
+index 4008790..0000000
+--- a/src/config/index.ts
++++ /dev/null
+@@ -1,29 +0,0 @@
+-import { readFileSync } from "node:fs";
+-import { defaultConfig } from "./defaults";
+-import { fromEnv, mergeConfig } from "./load";
+-import type { Config } from "./types";
+-
+-export interface LoadConfigOptions {
+-  env?: Record<string, string | undefined>;
+-  filePath?: string | null;
+-  readFile?: (path: string) => string;
+-}
+-
+-const readText = (path: string): string => readFileSync(path, "utf8");
+-
+-export function loadConfig(options: LoadConfigOptions = {}): Config {
+-  const env = options.env ?? process.env;
+-  const filePath = options.filePath ?? env.APP_CONFIG ?? null;
+-  const readFile = options.readFile ?? readText;
+-
+-  let config = defaultConfig;
+-  if (filePath) {
+-    config = mergeConfig(config, JSON.parse(readFile(filePath)) as Config);
+-  }
+-  return mergeConfig(config, fromEnv(env));
+-}
+-
+-export { defaultConfig } from "./defaults";
+-export { fromEnv, mergeConfig } from "./load";
+-export type { ConfigPatch } from "./load";
+-export type { Config, ConfigSource } from "./types";
+diff --git a/src/db.ts b/src/db.ts
+index 50b4994..9884f9c 100644
+--- a/src/db.ts
++++ b/src/db.ts
+@@ -1,6 +1,6 @@
+-import { loadConfig } from "./config";
++import { loadSettings } from "./settings";
+ 
+ export function databasePlan(): { url: string; poolSize: number } {
+-  const config = loadConfig();
+-  return { url: config.db.url, poolSize: config.db.poolSize };
++  const settings = loadSettings();
++  return { url: settings.db.url, poolSize: settings.db.poolSize };
+ }
+diff --git a/src/features.ts b/src/features.ts
+index decbc4b..baa8f2c 100644
+--- a/src/features.ts
++++ b/src/features.ts
+@@ -1,11 +1,11 @@
+-import type { Config } from "./config";
++import type { Settings } from "./settings";
+ 
+-export function enabledFeatures(config: Config): string[] {
+-  return Object.entries(config.features)
++export function enabledFeatures(settings: Settings): string[] {
++  return Object.entries(settings.features)
+     .filter(([, enabled]) => enabled)
+     .map(([name]) => name);
+ }
+ 
+-export function isEnabled(config: Config, feature: keyof Config["features"]): boolean {
+-  return config.features[feature];
++export function isEnabled(settings: Settings, feature: keyof Settings["features"]): boolean {
++  return settings.features[feature];
+ }
+diff --git a/src/index.ts b/src/index.ts
+index 24163ef..61604f2 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,7 +1,7 @@
+ export { createApp } from "./app";
+ export type { App, AppOptions } from "./app";
+-export { loadConfig, defaultConfig } from "./config";
+-export type { Config, ConfigSource, LoadConfigOptions } from "./config";
++export { defaultSettings, loadSettings } from "./settings";
++export type { LoadSettingsOptions, Settings, SettingsSource } from "./settings";
+ export { enabledFeatures, isEnabled } from "./features";
+ export { cacheTtlMs } from "./cache";
+ export { createLogger } from "./logger";
+diff --git a/src/server.ts b/src/server.ts
+index 2cf655f..b8cf6a2 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -1,5 +1,5 @@
+-import { loadConfig } from "./config";
+ import { createLogger } from "./logger";
++import { loadSettings } from "./settings";
+ 
+ export interface ServerPlan {
+   port: number;
+@@ -7,9 +7,9 @@ export interface ServerPlan {
+ }
+ 
+ export function planServer(options: { port?: number } = {}): ServerPlan {
+-  const config = loadConfig();
++  const settings = loadSettings();
+   const logger = createLogger();
+-  const plan = { port: options.port ?? config.http.port, host: config.http.host };
++  const plan = { port: options.port ?? settings.http.port, host: settings.http.host };
+   logger(`server will listen on ${plan.host}:${plan.port}`);
+   return plan;
+ }
+diff --git a/src/config/defaults.ts b/src/settings/defaults.ts
+similarity index 63%
+rename from src/config/defaults.ts
+rename to src/settings/defaults.ts
+index 24fe52f..5970638 100644
+--- a/src/config/defaults.ts
++++ b/src/settings/defaults.ts
+@@ -1,6 +1,6 @@
+-import type { Config } from "./types";
++import type { Settings } from "./types";
+ 
+-export const defaultConfig: Config = {
++export const defaultSettings: Settings = {
+   http: { port: 3000, host: "127.0.0.1" },
+   db: { url: "postgres://localhost/app", poolSize: 5 },
+   features: { beta: false, auditLog: false },
+diff --git a/src/settings/index.ts b/src/settings/index.ts
+new file mode 100644
+index 0000000..7826720
+--- /dev/null
++++ b/src/settings/index.ts
+@@ -0,0 +1,29 @@
++import { readFileSync } from "node:fs";
++import { defaultSettings } from "./defaults";
++import { fromEnv, mergeSettings } from "./load";
++import type { Settings } from "./types";
++
++export interface LoadSettingsOptions {
++  env?: Record<string, string | undefined>;
++  filePath?: string | null;
++  readFile?: (path: string) => string;
++}
++
++const readText = (path: string): string => readFileSync(path, "utf8");
++
++export function loadSettings(options: LoadSettingsOptions = {}): Settings {
++  const env = options.env ?? process.env;
++  const filePath = options.filePath ?? env.APP_CONFIG ?? null;
++  const readFile = options.readFile ?? readText;
++
++  let settings = defaultSettings;
++  if (filePath) {
++    settings = mergeSettings(settings, JSON.parse(readFile(filePath)) as Settings);
++  }
++  return mergeSettings(settings, fromEnv(env));
++}
++
++export { defaultSettings } from "./defaults";
++export { fromEnv, mergeSettings } from "./load";
++export type { SettingsPatch } from "./load";
++export type { Settings, SettingsSource } from "./types";
+diff --git a/src/config/load.ts b/src/settings/load.ts
+similarity index 73%
+rename from src/config/load.ts
+rename to src/settings/load.ts
+index 0b5848a..7a485e2 100644
+--- a/src/config/load.ts
++++ b/src/settings/load.ts
+@@ -1,13 +1,13 @@
+ import { readBool } from "../util/env";
+-import type { Config } from "./types";
++import type { Settings } from "./types";
+ 
+-export interface ConfigPatch {
+-  http?: Partial<Config["http"]>;
+-  db?: Partial<Config["db"]>;
+-  features?: Partial<Config["features"]>;
++export interface SettingsPatch {
++  http?: Partial<Settings["http"]>;
++  db?: Partial<Settings["db"]>;
++  features?: Partial<Settings["features"]>;
+ }
+ 
+-export function mergeConfig(base: Config, patch: ConfigPatch): Config {
++export function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
+   return {
+     http: { ...base.http, ...patch.http },
+     db: { ...base.db, ...patch.db },
+@@ -15,8 +15,8 @@ export function mergeConfig(base: Config, patch: ConfigPatch): Config {
+   };
+ }
+ 
+-export function fromEnv(env: Record<string, string | undefined>): ConfigPatch {
+-  const patch: ConfigPatch = {};
++export function fromEnv(env: Record<string, string | undefined>): SettingsPatch {
++  const patch: SettingsPatch = {};
+ 
+   if (env.APP_PORT !== undefined) patch.http = { ...patch.http, port: Number(env.APP_PORT) };
+   if (env.APP_HOST !== undefined) patch.http = { ...patch.http, host: env.APP_HOST };
+diff --git a/src/config/types.ts b/src/settings/types.ts
+similarity index 66%
+rename from src/config/types.ts
+rename to src/settings/types.ts
+index a6e3482..c5b6e72 100644
+--- a/src/config/types.ts
++++ b/src/settings/types.ts
+@@ -1,4 +1,4 @@
+-export interface Config {
++export interface Settings {
+   http: {
+     port: number;
+     host: string;
+@@ -13,4 +13,4 @@ export interface Config {
+   };
+ }
+ 
+-export type ConfigSource = "defaults" | "file" | "env";
++export type SettingsSource = "defaults" | "file" | "env";
+diff --git a/test/app.test.ts b/test/app.test.ts
+index 58eb2c8..c51f331 100644
+--- a/test/app.test.ts
++++ b/test/app.test.ts
+@@ -1,17 +1,17 @@
+ import { describe, expect, test } from "bun:test";
+ import { createApp } from "../src/app";
+-import { loadConfig } from "../src/config";
++import { loadSettings } from "../src/settings";
+ 
+ describe("createApp", () => {
+   test("carries the config and the enabled features", () => {
+-    const config = loadConfig({ env: { APP_FEATURE_AUDIT: "1" }, filePath: null });
+-    const app = createApp({ config, now: () => new Date("2026-01-01T00:00:00.000Z") });
++    const settings = loadSettings({ env: { APP_FEATURE_AUDIT: "1" }, filePath: null });
++    const app = createApp({ settings, now: () => new Date("2026-01-01T00:00:00.000Z") });
+     expect(app.startedAt).toBe("2026-01-01T00:00:00.000Z");
+     expect(app.features).toEqual(["auditLog"]);
+   });
+ 
+   test("defaults to an empty feature list", () => {
+-    const app = createApp({ config: loadConfig({ env: {}, filePath: null }) });
++    const app = createApp({ settings: loadSettings({ env: {}, filePath: null }) });
+     expect(app.features).toEqual([]);
+   });
+ });
+diff --git a/test/config.test.ts b/test/config.test.ts
+deleted file mode 100644
+index 0d35518..0000000
+--- a/test/config.test.ts
++++ /dev/null
+@@ -1,23 +0,0 @@
+-import { describe, expect, test } from "bun:test";
+-import { defaultConfig, loadConfig } from "../src/config";
+-
+-describe("loadConfig", () => {
+-  test("returns the defaults with an empty environment", () => {
+-    const config = loadConfig({ env: {}, filePath: null });
+-    expect(config).toEqual(defaultConfig);
+-  });
+-
+-  test("lets the environment override single keys", () => {
+-    const config = loadConfig({ env: { APP_PORT: "8080", APP_FEATURE_BETA: "1" }, filePath: null });
+-    expect(config.http.port).toBe(8080);
+-    expect(config.http.host).toBe(defaultConfig.http.host);
+-    expect(config.features.beta).toBe(true);
+-  });
+-
+-  test("reads a JSON file before the environment", () => {
+-    const readFile = () => JSON.stringify({ http: { port: 7000 }, db: { poolSize: 9 } });
+-    const config = loadConfig({ env: { APP_PORT: "9000" }, filePath: "app.json", readFile });
+-    expect(config.http.port).toBe(9000);
+-    expect(config.db.poolSize).toBe(9);
+-  });
+-});
+diff --git a/test/features.test.ts b/test/features.test.ts
+index e3e55b1..293675e 100644
+--- a/test/features.test.ts
++++ b/test/features.test.ts
+@@ -1,18 +1,18 @@
+ import { describe, expect, test } from "bun:test";
+ import { createApp } from "../src/app";
+ import { cacheTtlMs } from "../src/cache";
+-import { loadConfig } from "../src/config";
++import { loadSettings } from "../src/settings";
+ 
+ describe("feature helpers", () => {
+   test("beta shortens the cache ttl", () => {
+-    const base = loadConfig({ env: {}, filePath: null });
+-    const beta = loadConfig({ env: { APP_FEATURE_BETA: "true" }, filePath: null });
++    const base = loadSettings({ env: {}, filePath: null });
++    const beta = loadSettings({ env: { APP_FEATURE_BETA: "true" }, filePath: null });
+     expect(cacheTtlMs(base)).toBe(300_000);
+     expect(cacheTtlMs(beta)).toBe(60_000);
+   });
+ 
+   test("the app lists enabled features in declaration order", () => {
+-    const config = loadConfig({ env: { APP_FEATURE_BETA: "1", APP_FEATURE_AUDIT: "1" }, filePath: null });
+-    expect(createApp({ config }).features).toEqual(["beta", "auditLog"]);
++    const settings = loadSettings({ env: { APP_FEATURE_BETA: "1", APP_FEATURE_AUDIT: "1" }, filePath: null });
++    expect(createApp({ settings }).features).toEqual(["beta", "auditLog"]);
+   });
+ });
+diff --git a/test/settings.test.ts b/test/settings.test.ts
+new file mode 100644
+index 0000000..ff4e65b
+--- /dev/null
++++ b/test/settings.test.ts
+@@ -0,0 +1,23 @@
++import { describe, expect, test } from "bun:test";
++import { defaultSettings, loadSettings } from "../src/settings";
++
++describe("loadSettings", () => {
++  test("returns the defaults with an empty environment", () => {
++    const settings = loadSettings({ env: {}, filePath: null });
++    expect(settings).toEqual(defaultSettings);
++  });
++
++  test("lets the environment override single keys", () => {
++    const settings = loadSettings({ env: { APP_PORT: "8080", APP_FEATURE_BETA: "1" }, filePath: null });
++    expect(settings.http.port).toBe(8080);
++    expect(settings.http.host).toBe(defaultSettings.http.host);
++    expect(settings.features.beta).toBe(true);
++  });
++
++  test("reads a JSON file before the environment", () => {
++    const readFile = () => JSON.stringify({ http: { port: 7000 }, db: { poolSize: 9 } });
++    const settings = loadSettings({ env: { APP_PORT: "9000" }, filePath: "app.json", readFile });
++    expect(settings.http.port).toBe(9000);
++    expect(settings.db.poolSize).toBe(9);
++  });
++});

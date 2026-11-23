@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+dir=${1:?usage: check.sh <repo-dir>}
+here=$(cd "$(dirname "$0")" && pwd)
+[ -d "$dir" ] || { echo "FAIL 07: no such directory $dir"; exit 2; }
+rm -rf "$dir/test/hidden"
+mkdir -p "$dir/test/hidden"
+cp "$here"/hidden/*.test.ts "$dir/test/hidden/"
+cd "$dir"
+out=$(bun test test/hidden 2>&1) || {
+  why=$(printf '%s\n' "$out" | grep -m1 -E '\(fail\)|error:|Expected' || printf '%s' "$out" | tail -3)
+  echo "FAIL 07: $why"
+  exit 1
+}
+if [ ! -f src/webhook/verify.ts ]; then
+  echo "FAIL 07: src/webhook/verify.ts is missing"
+  exit 1
+fi
+echo "PASS 07: inbound signatures, tolerance and queue isolation all correct"

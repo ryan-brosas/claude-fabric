@@ -1,0 +1,113 @@
+diff --git a/src/csv/fields.ts b/src/csv/fields.ts
+index f8b150e..2bc125a 100644
+--- a/src/csv/fields.ts
++++ b/src/csv/fields.ts
+@@ -1,13 +1,11 @@
+-const WRAPPED = /^"([\s\S]*)"$/;
++import type { ParsedCell } from "./parse";
+ 
+ /**
+- * Normalizes one raw cell.
+- *
+- * Older exporters sent quoted cells with the quotes still attached, so the
+- * wrapper is stripped here before the optional trim.
++ * Normalizes one parsed cell. Quoted cells are already unescaped by the
++ * tokenizer, so their spacing is kept untouched; unquoted cells get the
++ * optional trim.
+  */
+-export function normalizeField(value: string, trim: boolean): string {
+-  const wrapped = WRAPPED.exec(value);
+-  const inner = wrapped ? wrapped[1] : value;
+-  return trim ? inner.trim() : inner;
++export function normalizeField(cell: ParsedCell, trim: boolean): string {
++  if (cell.quoted) return cell.value;
++  return trim ? cell.value.trim() : cell.value;
+ }
+diff --git a/src/csv/parse.ts b/src/csv/parse.ts
+index d0a9c3f..4c3e228 100644
+--- a/src/csv/parse.ts
++++ b/src/csv/parse.ts
+@@ -1,20 +1,27 @@
+ import { CsvError, type ParseOptions } from "../types";
+ 
+-export function parseCsv(text: string, options: ParseOptions = {}): string[][] {
++export interface ParsedCell {
++  readonly value: string;
++  readonly quoted: boolean;
++}
++
++export function parseCsvRows(text: string, options: ParseOptions = {}): ParsedCell[][] {
+   const delimiter = options.delimiter ?? ",";
+   const quote = options.quote ?? '"';
+   if (delimiter.length !== 1) throw new CsvError("delimiter must be one character", 0);
+   if (quote.length !== 1) throw new CsvError("quote must be one character", 0);
+ 
+-  const rows: string[][] = [];
+-  let row: string[] = [];
++  const rows: ParsedCell[][] = [];
++  let row: ParsedCell[] = [];
+   let field = "";
++  let fieldQuoted = false;
+   let index = 0;
+   let quoted = false;
+ 
+   const endField = (): void => {
+-    row.push(field);
++    row.push({ value: field, quoted: fieldQuoted });
+     field = "";
++    fieldQuoted = false;
+   };
+   const endRow = (): void => {
+     endField();
+@@ -41,6 +48,7 @@ export function parseCsv(text: string, options: ParseOptions = {}): string[][] {
+     }
+     if (char === quote && field.length === 0) {
+       quoted = true;
++      fieldQuoted = true;
+       index += 1;
+       continue;
+     }
+@@ -64,6 +72,10 @@ export function parseCsv(text: string, options: ParseOptions = {}): string[][] {
+   }
+ 
+   if (quoted) throw new CsvError(`unterminated quoted field in row ${rows.length + 1}`, rows.length + 1);
+-  if (field.length > 0 || row.length > 0) endRow();
++  if (field.length > 0 || row.length > 0 || fieldQuoted) endRow();
+   return rows;
+ }
++
++export function parseCsv(text: string, options: ParseOptions = {}): string[][] {
++  return parseCsvRows(text, options).map((row) => row.map((cell) => cell.value));
++}
+diff --git a/src/csv/read.ts b/src/csv/read.ts
+index 347e78c..2de5fa4 100644
+--- a/src/csv/read.ts
++++ b/src/csv/read.ts
+@@ -1,8 +1,8 @@
+ import { normalizeField } from "./fields";
+-import { parseCsv } from "./parse";
++import { parseCsvRows } from "./parse";
+ import type { ReadOptions } from "../types";
+ 
+ export function readCsv(text: string, options: ReadOptions = {}): string[][] {
+   const trim = options.trim ?? true;
+-  return parseCsv(text, options).map((row) => row.map((cell) => normalizeField(cell, trim)));
++  return parseCsvRows(text, options).map((row) => row.map((cell) => normalizeField(cell, trim)));
+ }
+diff --git a/src/csv/serialize.ts b/src/csv/serialize.ts
+index 4a53f4c..3d8b64a 100644
+--- a/src/csv/serialize.ts
++++ b/src/csv/serialize.ts
+@@ -9,9 +9,10 @@ export function escapeField(value: string, delimiter = ","): string {
+     value.includes(delimiter) ||
+     value.includes(QUOTE) ||
+     value.includes("\n") ||
+-    value.includes("\r");
++    value.includes("\r") ||
++    value.trim() !== value;
+   if (!needsQuotes) return value;
+-  return QUOTE + value + QUOTE;
++  return QUOTE + value.replaceAll(QUOTE, QUOTE + QUOTE) + QUOTE;
+ }
+ 
+ export function stringifyCsv(rows: string[][], options: StringifyOptions = {}): string {

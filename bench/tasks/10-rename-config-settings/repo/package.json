@@ -1,0 +1,10 @@
+{
+  "name": "appbox",
+  "version": "3.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "appbox": "./src/cli.ts" },
+  "scripts": {
+    "test": "bun test"
+  }
+}

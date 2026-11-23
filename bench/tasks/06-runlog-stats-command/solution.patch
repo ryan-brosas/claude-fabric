@@ -1,0 +1,108 @@
+diff --git a/src/cli.ts b/src/cli.ts
+index 3d1106c..429cc52 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,6 +1,7 @@
+ import { addCommand } from "./commands/add";
+ import type { CommandContext } from "./commands/context";
+ import { listCommand } from "./commands/list";
++import { statsCommand } from "./commands/stats";
+ import type { Io } from "./io";
+ 
+ export interface CliDeps {
+@@ -17,6 +18,7 @@ export const HELP = [
+   "commands:",
+   "  add <task> [ok|failed|skipped] [durationMs]   append a run",
+   "  list                                          print every run",
++  "  stats [--json]                                summarize runs",
+   "  help                                          print this text",
+ ].join("\n");
+ 
+@@ -38,6 +40,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
+       return await addCommand(context);
+     case "list":
+       return await listCommand(context);
++    case "stats":
++      return await statsCommand(context);
+     case "help":
+     case undefined:
+       io.out(HELP);
+diff --git a/src/commands/index.ts b/src/commands/index.ts
+index 00f2ae1..5e69965 100644
+--- a/src/commands/index.ts
++++ b/src/commands/index.ts
+@@ -1,3 +1,4 @@
+ export { addCommand } from "./add";
+ export { listCommand } from "./list";
++export { statsCommand } from "./stats";
+ export type { CommandContext } from "./context";
+diff --git a/src/commands/stats.ts b/src/commands/stats.ts
+new file mode 100644
+index 0000000..0240bf8
+--- /dev/null
++++ b/src/commands/stats.ts
+@@ -0,0 +1,25 @@
++import { readLog, resolveLogPath } from "../log/store";
++import { summarize, type RunSummary } from "../log/summary";
++import type { CommandContext } from "./context";
++
++export function formatSummary(summary: RunSummary): string[] {
++  return [
++    `total: ${summary.total}`,
++    `ok: ${summary.ok}`,
++    `failed: ${summary.failed}`,
++    `skipped: ${summary.skipped}`,
++    `avg: ${summary.avgDurationMs}ms`,
++    summary.slowest ? `slowest: ${summary.slowest.task} (${summary.slowest.durationMs}ms)` : "slowest: none",
++  ];
++}
++
++export async function statsCommand(context: CommandContext): Promise<number> {
++  const entries = await readLog(resolveLogPath(context.env));
++  const summary = summarize(entries);
++  if (context.args.includes("--json")) {
++    context.io.out(JSON.stringify(summary));
++  } else {
++    for (const line of formatSummary(summary)) context.io.out(line);
++  }
++  return 0;
++}
+diff --git a/src/log/summary.ts b/src/log/summary.ts
+new file mode 100644
+index 0000000..e07951f
+--- /dev/null
++++ b/src/log/summary.ts
+@@ -0,0 +1,33 @@
++import type { RunEntry, RunStatus } from "./types";
++
++export interface RunSummary {
++  total: number;
++  ok: number;
++  failed: number;
++  skipped: number;
++  avgDurationMs: number;
++  slowest: { task: string; durationMs: number } | null;
++}
++
++export function summarize(entries: RunEntry[]): RunSummary {
++  const counts: Record<RunStatus, number> = { ok: 0, failed: 0, skipped: 0 };
++  let totalDuration = 0;
++  let slowest: RunSummary["slowest"] = null;
++
++  for (const entry of entries) {
++    counts[entry.status] += 1;
++    totalDuration += entry.durationMs;
++    if (!slowest || entry.durationMs > slowest.durationMs) {
++      slowest = { task: entry.task, durationMs: entry.durationMs };
++    }
++  }
++
++  return {
++    total: entries.length,
++    ok: counts.ok,
++    failed: counts.failed,
++    skipped: counts.skipped,
++    avgDurationMs: entries.length === 0 ? 0 : Math.round(totalDuration / entries.length),
++    slowest,
++  };
++}

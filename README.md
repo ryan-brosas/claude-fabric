@@ -63,6 +63,8 @@ plain-Claude Sonnet number for comparison.
 
 ### Code mode: `fabric_exec` against native code mode
 
+The benchmark driver is `bench/run.ts`, and its report is `bench/report.ts`.
+
 On the afternoon of 2026-11-23, `fabric_exec` with `fabricOnly` on passed 75 of 75 runs against
 native code mode's 74 of 75, at 0.730 times its mean tokens.
 

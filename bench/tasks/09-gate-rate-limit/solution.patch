@@ -1,0 +1,81 @@
+diff --git a/src/app.ts b/src/app.ts
+index 964014e..fc7b659 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,6 +1,7 @@
+ import { loadConfig } from "./config";
+ import { Pipeline } from "./pipeline";
+ import { auth } from "./middleware/auth";
++import { rateLimit } from "./middleware/rate-limit";
+ import { handleRoutes } from "./routes";
+ 
+ export interface AppOptions {
+@@ -13,8 +14,11 @@ export interface AppOptions {
+ export function createApp(options: AppOptions = {}): Pipeline {
+   const config = loadConfig();
+   const token = options.auth?.token ?? config.auth.token;
++  const limit = options.rateLimit?.limit ?? config.rateLimit.limit;
++  const windowMs = options.rateLimit?.windowMs ?? config.rateLimit.windowMs;
+ 
+   const app = new Pipeline(handleRoutes);
+   app.use(auth({ token }));
++  app.use(rateLimit({ limit, windowMs, now: options.now }));
+   return app;
+ }
+diff --git a/src/index.ts b/src/index.ts
+index 76eca3f..640db2f 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -9,3 +9,5 @@ export { loadConfig } from "./config";
+ export type { Config } from "./config";
+ export { auth } from "./middleware/auth";
+ export { logging } from "./middleware/logging";
++export { rateLimit } from "./middleware/rate-limit";
++export type { RateLimitOptions } from "./middleware/rate-limit";
+diff --git a/src/middleware/rate-limit.ts b/src/middleware/rate-limit.ts
+new file mode 100644
+index 0000000..65c43f4
+--- /dev/null
++++ b/src/middleware/rate-limit.ts
+@@ -0,0 +1,41 @@
++import { json } from "../http";
++import type { Middleware } from "../pipeline";
++
++export interface RateLimitOptions {
++  limit: number;
++  windowMs: number;
++  /** Millisecond clock, injectable for tests. */
++  now?: () => number;
++}
++
++/**
++ * Sliding-window limiter. Every accepted request is remembered for `windowMs`;
++ * a request is refused while the window holds `limit` requests for its key.
++ * Refused requests are not recorded, so a blocked client cannot extend its own
++ * block.
++ */
++export function rateLimit(options: RateLimitOptions): Middleware {
++  const now = options.now ?? Date.now;
++  const hits = new Map<string, number[]>();
++
++  return (request) => {
++    const current = now();
++    const key = `${request.clientIp}|${request.method}|${request.path}`;
++    const recent = (hits.get(key) ?? []).filter((time) => current - time < options.windowMs);
++
++    if (recent.length >= options.limit) {
++      const oldest = recent[0] ?? current;
++      const retryAfterMs = Math.max(0, oldest + options.windowMs - current);
++      hits.set(key, recent);
++      return json(
++        429,
++        { error: "rate_limited", retryAfterMs },
++        { "retry-after": String(Math.ceil(retryAfterMs / 1000)) },
++      );
++    }
++
++    recent.push(current);
++    hits.set(key, recent);
++    return null;
++  };
++}

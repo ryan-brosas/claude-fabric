@@ -1,0 +1,12 @@
+diff --git a/ANSWER.md b/ANSWER.md
+new file mode 100644
+index 0000000..07ceceb
+--- /dev/null
++++ b/ANSWER.md
+@@ -0,0 +1,6 @@
++port: 8080
++overlay: src/profiles/overlay.ts:applyProfileOverlay
++list_merge: src/resolve/merge.ts:mergeLists
++sources: 4
++overlay_disable_env: CONF_NO_PROFILE
++schema_keys: 7

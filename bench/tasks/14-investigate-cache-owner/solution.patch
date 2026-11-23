@@ -1,0 +1,10 @@
+diff --git a/ANSWER.md b/ANSWER.md
+new file mode 100644
+index 0000000..dfd1a3f
+--- /dev/null
++++ b/ANSWER.md
+@@ -0,0 +1,4 @@
++owner: src/cache/remember.ts
++function: memoize
++lru_limit: 500
++unbounded_call_sites: 3

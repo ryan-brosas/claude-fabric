@@ -100,6 +100,8 @@ Read [docs/internals/decisions.md](docs/internals/decisions.md) before you add s
    and the marketplace is `fabric-exec`.
 5. **Trusting a `claude -p` run to cover native code mode.** Native code mode runs only in an
    interactive terminal. Drive comparisons in tmux.
+6. **Running task hidden tests against untouched fixtures.** The tests in `bench/tasks/` fail
+   until their tasks are solved; use `bench/tasks/verify.sh` to check both before and after.
 
 ## Hit every surface
 
@@ -184,5 +186,6 @@ module in `src/stages/` with its own unit tests in `test/stages/`.
 
 ## Docs and scratch
 
-Most changes need no doc change. Rewrite a page instead of adding to it. Plans, inventories and
-benchmarks in progress go in `notes/`, which is gitignored.
+Most changes need no doc change. Rewrite a page instead of adding to it. Plans and inventories go
+in `notes/`, which is gitignored. The benchmark driver, report and tasks are in `bench/`; its
+results and logs go in `notes/`.

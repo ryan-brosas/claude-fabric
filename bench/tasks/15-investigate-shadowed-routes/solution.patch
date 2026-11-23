@@ -1,0 +1,10 @@
+diff --git a/ANSWER.md b/ANSWER.md
+new file mode 100644
+index 0000000..9c1b4d8
+--- /dev/null
++++ b/ANSWER.md
+@@ -0,0 +1,4 @@
++shadow_route: GET /api/*
++shadow_file: src/app.ts:createApp
++unreachable: 3
++orders_file: src/routes/orders.ts
