@@ -6,6 +6,10 @@ export function billingNoticeVisible(pane: string): boolean {
     && pane.split(/\r?\n/).some((line) => line.trim() === "Enter to continue \u00b7 Esc to cancel");
 }
 
+export function trustDialogVisible(pane: string): boolean {
+  return pane.includes("Is this a project you created or one you trust?");
+}
+
 // Reuse the compiled resend decision. Here pending means a newly observed billing notice.
 export const billingNoticeLaws = (policy: ReturnType<typeof resendPolicy>) => [
   policy.law("billing notice: at most three continues", () => [],

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { billingNoticeVisible, promptStillInInput } from "./pane.ts";
+import { billingNoticeVisible, promptStillInInput, trustDialogVisible } from "./pane.ts";
 
 const prompt = "I need to know what a staging deploy will actually listen on before we cut the release.";
 const unsent = `Earlier text
@@ -42,6 +42,19 @@ describe("billingNoticeVisible", () => {
       "────────────────────\n❯\n────────────────────\n  auto mode on",
     ];
     for (const pane of panes) expect(billingNoticeVisible(pane)).toBe(false);
+  });
+});
+
+describe("trustDialogVisible", () => {
+  test("detects the trust dialog", () => {
+    const pane = "Quick safety check: Is this a project you created or one you trust?\nEnter to confirm \u00b7 Esc to cancel";
+    expect(trustDialogVisible(pane)).toBe(true);
+    expect(trustDialogVisible(pane.replace("one you trust?", "one you trust"))).toBe(false);
+  });
+  test("rejects idle, running and billing notice panes", () => {
+    expect(trustDialogVisible(unsent)).toBe(false);
+    expect(trustDialogVisible(running)).toBe(false);
+    expect(trustDialogVisible(billingNotice)).toBe(false);
   });
 });
 
