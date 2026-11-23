@@ -88,6 +88,13 @@ test("a consumed print property prevents all tool calls and writes", async () =>
   }
 });
 
+test("repairs a guarded cwd property alongside an accumulator", () => {
+  const code = 'const out = {}; for (const f of ["a"]) out[f] = process.cwd ? `${process.cwd()}/${f}` : f; return out;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const out: Record<string, any> = {}; for (const f of ["a"]) out[f] = (`${"/fixture/project"}/${f}`); return out;');
+});
+
 test("repairs an unresolved optional cwd call", () => {
   const code = 'return process.cwd?.();';
   const result = checkProgram(code, { cwd: PROJECT });
@@ -95,13 +102,89 @@ test("repairs an unresolved optional cwd call", () => {
   expect(result.program).toBe('return "/fixture/project";');
 });
 
-test("keeps the original error if a cwd literal introduces a conditional diagnostic", () => {
-  for (const code of ['return process.cwd?.() ? "a" : "b";', 'return process.cwd?.() ?? ".";']) {
+test("repairs cwd calls on the left of nullish and logical fallbacks", () => {
+  for (const call of ["process.cwd()", "process.cwd?.()", "(process.cwd())", "(process.cwd?.())"]) {
+    for (const operator of ["??", "||"]) {
+      const code = `return ${call} ${operator} ".";`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe('return "/fixture/project";');
+    }
+  }
+});
+
+test("runs synthetic guarded programs without their unreachable fallbacks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-guard-"));
+  try {
+    for (const code of [
+      'return process.cwd?.() || (await Write("never", "x"), ".");',
+      'return process.cwd ? process.cwd() + "/a" : (await Write("never", "x"), ".");',
+    ]) {
+      const result = await run(code, dir);
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe(code.includes(" ? ") ? dir + "/a" : dir);
+      expect(result.calls).toBe(0);
+      expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("combines nested guard repairs and discards repairs in an unreachable branch", () => {
+  const code = 'return process.cwd ? process.cwd?.() ?? "." : process.cwd();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('return ("/fixture/project");');
+  const fallback = 'return process.cwd() || Read(/tmp/x);';
+  expect(checkProgram(fallback, { cwd: PROJECT })).toMatchObject({
+    program: 'return "/fixture/project";', checked: { ok: true },
+  });
+});
+
+test("keeps the original errors when a guarded true branch still fails", async () => {
+  const code = 'await Write("never", "x"); return process.cwd ? missing : "fallback";';
+  const original = check(code, declarations);
+  const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
+  expect(repaired).toBe('await Write("never", "x"); return (missing);');
+  expect(check(repaired, declarations).ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-rejected-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not widen guard repairs to other process shapes", () => {
+  for (const code of [
+    'return process.cwd?.() ? "a" : "b";',
+    'return process.env.X ?? "y";',
+    'return process ? "a" : "b";',
+    'return typeof process !== "undefined" ? "a" : "b";',
+  ]) {
     const original = check(code, declarations);
-    const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
-    expect(check(repaired, declarations).ok).toBe(false);
+    if (code.includes("process.env")) {
+      expect(repairCode(code, original.indexTargets, original.cwdTargets, PROJECT)).toBe(code);
+    }
     expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
   }
+});
+
+test("leaves a scoped process guard untouched while repairing another error", () => {
+  const code = 'const process: { cwd?: () => string } = {}; const out = {}; for (const k of ["a"]) out[k] = process.cwd ? process.cwd() : "local"; return out;';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe(code.replace("out = {}", "out: Record<string, any> = {}"));
+  const passing = 'const process = { cwd: () => null as string | null }; return process.cwd() ?? "local";';
+  expect(check(passing, declarations).ok).toBe(true);
+  expect(checkProgram(passing, { cwd: PROJECT }).program).toBe(passing);
 });
 
 test("runs each repaired property access exactly once", async () => {
@@ -431,7 +514,10 @@ test("does not execute when another process reference still fails after a candid
   const result = await run(code, tmpdir());
   expect(result.ok).toBe(false);
   expect(result.calls).toBe(0);
+  expect(result.ms.run).toBe(0);
   expect(result.text).toContain("Cannot find name \'process\'");
+  expect(result.text).toContain("Recovery hint: a program has no `fs`, `require` or `process`.");
+  expect(result.text).toContain("Relative paths resolve against the project folder.");
 });
 
 test("an indexed accumulator can be read after it is written", async () => {
