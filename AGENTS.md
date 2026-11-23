@@ -60,9 +60,12 @@ Where it stands:
    the main conversation so its work goes through programs. On Haiku the two together cut mean
    tokens from 363k to 277k, all 15 runs passing; the option is off by default and on in the
    dogfood setup. On 2026-11-23, `fabric_exec` with `fabricOnly` on and native code mode off passed
-   70 of 75 in a Sonnet 5.5 rerun, the same as native code mode. Across 15 tasks and 5 runs per arm,
-   it used 0.78 times native's mean tokens (87k against 111k) and 0.76 times its median (80k against
-   106k); this is evidence for these tasks, not sessions in general.
+   75 of 75 in an afternoon Sonnet 5.5 rerun with plugin changes #70 and #71; native code mode passed
+   74 of 75. Across 15 tasks and 5 runs per arm, it used 0.73 times native's mean tokens (83k against
+   114k) and 0.74 times its median (78k against 105k); this is evidence for these tasks, not sessions
+   in general. On `deepseek-v4.1-flash` through CoralBricks, `fabric_exec` with #70 and #71 and native
+   code mode both passed 75 of 75; `fabric_exec` used 0.52 times native's mean tokens (137k against
+   264k).
 
 Each step's details and the things we chose not to build are in
 [docs/internals/decisions.md](docs/internals/decisions.md).
