@@ -10,7 +10,9 @@ meant to replace Claude Code's native code mode.
 
 Status: the plugin exposes `fabric_exec` to Claude Code, with Fabric's self-correcting stages
 (argument repair, code repair, output budget, type-error guidance, repeat guard). Its mod provides
-a deterministic Fabric summary for compaction, with fallback to Claude Code in some cases.
+a deterministic Fabric summary for compaction. If a transcript rebuild fails, it keeps the earlier
+Fabric summary. It delegates to Claude Code when an over-budget transcript has no older history to
+cut, on an automatic skip, or on an uncaught error or timeout.
 
 ## Benchmarks
 
@@ -22,7 +24,7 @@ Code's median.
 | Compactor | Runs passing | Median tokens | Range |
 | --- | --- | --- | --- |
 | Plain Claude Code | 9 of 10 | 9.02M | 8.70M to 10.24M |
-| claude-fabric before | 10 of 10 | 13.33M | Not supplied |
+| claude-fabric before | 10 of 10 | 13.48M | 9.71M to 17.27M |
 | claude-fabric now | 18 of 20 | 8.57M | 8.16M to 9.02M |
 
 `l3-memory` is a 100-turn session with 6 compactions and 14 facts stated only in the conversation:

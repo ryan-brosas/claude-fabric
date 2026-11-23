@@ -29,7 +29,9 @@ Where it stands:
 2. **Done:** the `src/` layout in architecture.md, the action registry that generates guest
    types, tool lines and argument checks, and an empty mod that loads.
 3. **Done:** the deterministic compactor in `src/compaction/` answers `session.compact` with a
-   Fabric summary and no model call, or falls back to Claude Code. Its cut and allocation rules are
+   Fabric summary and no model call. If a transcript rebuild fails, it keeps the earlier Fabric
+   summary. It delegates to Claude Code when an over-budget transcript has no older history to cut,
+   on an automatic skip, or on an uncaught error or timeout. Its cut and allocation rules are
    gdp-wired kernels in `proofs/`.
 4. **Done, the self-correcting stages** (argument repair, code repair, output budget, type-error
    guidance, repeat guard), copied with MIT credit. The repeat guard's counting rule
