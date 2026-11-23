@@ -20,6 +20,19 @@ test("repairs a missing object brace at the end of a call", () => {
   expect(result.program).toBe('await Read({file_path: "a.txt"});');
 });
 
+test("ignores brace characters in string, template, comment, and regex text", () => {
+  const cases = [
+    ['await Edit({file_path: "a{b}.txt", old_string: `x { y`, new_string: "z");',
+      'await Edit({file_path: "a{b}.txt", old_string: `x { y`, new_string: "z"});'],
+    ['function f(x: {a: string, b: string}) {} f({a: /[{]/.source /* { comment */, b: `x ${42} { y`);',
+      'function f(x: {a: string, b: string}) {} f({a: /[{]/.source /* { comment */, b: `x ${42} { y`});'],
+  ] as const;
+  for (const [code, repaired] of cases) {
+    expect(check(code, declarations).ok).toBe(false);
+    expect(checkProgram(code, { cwd: PROJECT })).toMatchObject({ program: repaired, checked: { ok: true } });
+  }
+});
+
 test("leaves a nested missing object brace alone when one insertion cannot close the call argument", () => {
   const code = 'function f(x: {a: {b: number}}) {} f({a: {b: 1);';
   const original = check(code, declarations);
@@ -59,6 +72,33 @@ return f({
   }
 });
 
+test("refuses an ambiguous arrow body and never executes the program", async () => {
+  const code = `function noop() {}
+const dryRun = true;
+function f(x: { action: () => void; dryRun?: boolean }) { return x.dryRun ? "preview" : "delete"; }
+return f({ action: () => { noop(), dryRun });`;
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  const inner = code.replace("noop(), dryRun });", "noop(), dryRun }});");
+  const outer = code.replace("noop(), dryRun });", "noop() }, dryRun });");
+  expect(check(inner, declarations).ok).toBe(true);
+  expect(check(outer, declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-arrow-"));
+  try {
+    expect((await run(inner, dir)).text).toBe("delete");
+    expect((await run(outer, dir)).text).toBe("preview");
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("refuses a last nested object even through transparent wrappers", () => {
   const values = [
     '{b: 1}',
@@ -79,18 +119,29 @@ test("refuses a last nested object even through transparent wrappers", () => {
   }
 });
 
-test("repairs an outer object when a nested object is not its last property", () => {
+test("refuses a nested object even when it is not the last property", () => {
   const code = 'function f(x: {a: {x: number}, b: number}) {} f({a: {x: 1}, b: 2);';
-  const result = checkProgram(code, { cwd: PROJECT });
-  expect(result.checked.ok).toBe(true);
-  expect(result.program).toBe('function f(x: {a: {x: number}, b: number}) {} f({a: {x: 1}, b: 2});');
+  const original = check(code, declarations);
+  expect(original.braceTargets).toHaveLength(1);
+  expect(check(code.replace('b: 2);', 'b: 2});'), declarations).ok).toBe(true);
+  // A second opening token is refused without trying to decide whether this nesting is safe.
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
 });
 
-test("repairs when the last value merely contains an object literal", () => {
-  const code = 'function f(x: {a: number}) {} f({a: ({x: 1}).x);';
-  const result = checkProgram(code, { cwd: PROJECT });
-  expect(result.checked.ok).toBe(true);
-  expect(result.program).toBe('function f(x: {a: number}) {} f({a: ({x: 1}).x});');
+test("refuses any additional opening brace token inside the object", () => {
+  const cases = [
+    'function f(x: {a: number}) {} f({a: ({x: 1}).x);',
+    'function f(x: {a: unknown}) {} f({a: class {});',
+    'function f(x: {a: number}) {} f({a: (({x}: {x: number}) => x)({x: 1}));',
+    'function f(x: {a: string}) {} f({a: `x ${({v: 1}).v}`);',
+  ];
+  for (const code of cases) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.braceTargets).toHaveLength(1);
+    expect(check(code.slice(0, -2) + '});', declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
 });
 
 test("does not repair a comma error without an object argument", () => {
