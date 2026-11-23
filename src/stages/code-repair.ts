@@ -360,6 +360,16 @@ function printedPropertyRepairs(code: string, targets: readonly number[]): Repai
   return repairs;
 }
 
+// Replacing a conditional by a property access must not create a reference-sensitive use.
+function referenceSensitiveConditional(node: ts.ConditionalExpression): boolean {
+  let expression: ts.Node = node;
+  while (ts.isParenthesizedExpression(expression.parent)) expression = expression.parent;
+  const parent = expression.parent;
+  return ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === expression) ||
+    (ts.isTaggedTemplateExpression(parent) && parent.tag === expression) ||
+    ((ts.isTypeOfExpression(parent) || ts.isDeleteExpression(parent)) && parent.expression === expression);
+}
+
 // Positions come from the check: TS7053 declarations, unresolved `process`, and missing
 // Promise or global print properties. The AST determines which shapes can be repaired.
 function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string, propertyTargets: PropertyTargets = {}): Repair[] {
@@ -383,7 +393,8 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
         (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
-    if (cwd !== undefined && ts.isConditionalExpression(node) && isCwdProperty(node.condition)) {
+    if (cwd !== undefined && ts.isConditionalExpression(node) && isCwdProperty(node.condition) &&
+        !referenceSensitiveConditional(node)) {
       // Keep the true branch in place so other diagnosed repairs can still apply inside it.
       repairs.push({ start: node.getStart(file), end: node.whenTrue.getStart(file), text: "(" });
       repairs.push({ start: node.whenTrue.end, end: node.end, text: ")" });
@@ -411,7 +422,14 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
 }
 
 function applyRepairs(code: string, repairs: Repair[]): string {
-  repairs.sort((a, b) => a.start - b.start || b.end - a.end);
+  repairs.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    const aInsertion = a.start === a.end;
+    const bInsertion = b.start === b.end;
+    // Reverse application must replace first, then insert before its start boundary.
+    if (aInsertion !== bInsertion) return aInsertion ? -1 : 1;
+    return b.end - a.end;
+  });
   const disjoint: Repair[] = [];
   for (const repair of repairs) {
     const previous = disjoint.at(-1);

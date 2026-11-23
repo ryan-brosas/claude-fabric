@@ -102,6 +102,57 @@ test("repairs an unresolved optional cwd call", () => {
   expect(result.program).toBe('return "/fixture/project";');
 });
 
+test("refuses guarded conditionals in reference-sensitive positions", async () => {
+  const code = 'const obj = { value: "ok", f() { return this.value; } }; await Write("never", "x"); return ((process.cwd ? obj.f : obj.f))();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.cwdTargets).toHaveLength(1);
+  expect(repairCode(code, original.indexTargets, original.cwdTargets, PROJECT)).toBe(code);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-reference-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  for (const expression of [
+    'new ((process.cwd ? obj.C : obj.C))()',
+    '((process.cwd ? obj.tag : obj.tag))`text`',
+    'typeof ((process.cwd ? obj.value : obj.value))',
+    'delete ((process.cwd ? obj.value : obj.value))',
+  ]) {
+    const program = `const obj: { value?: string; C: new () => object; tag: (s: TemplateStringsArray) => string } = { C: class {}, tag: s => s[0] ?? "" }; return ${expression};`;
+    const checked = check(program, declarations);
+    expect(checked.ok).toBe(false);
+    expect(checked.cwdTargets).toHaveLength(1);
+    expect(repairCode(program, checked.indexTargets, checked.cwdTargets, PROJECT)).toBe(program);
+    expect(checkProgram(program, { cwd: PROJECT })).toEqual({ program, checked });
+  }
+});
+
+test("composes cwd fallback replacements with boundary insertions", () => {
+  for (const call of ["process.cwd()", "process.cwd?.()"]) {
+    for (const operator of ["||", "??"]) {
+      const code = `print(${call} ${operator} ".").length;`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe('print(("/fixture/project").length);');
+    }
+  }
+  const inside = 'return process.cwd() || (() => { print("x").length; return "."; })();';
+  const checked = check(inside, declarations);
+  expect(checked.cwdTargets).toHaveLength(1);
+  expect(checked.printPropertyTargets).toHaveLength(1);
+  expect(checkProgram(inside, { cwd: PROJECT })).toMatchObject({
+    program: 'return "/fixture/project";', checked: { ok: true },
+  });
+});
+
 test("repairs cwd calls on the left of nullish and logical fallbacks", () => {
   for (const call of ["process.cwd()", "process.cwd?.()", "(process.cwd())", "(process.cwd?.())"]) {
     for (const operator of ["??", "||"]) {
