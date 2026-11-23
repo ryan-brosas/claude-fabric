@@ -33,7 +33,7 @@ async function inProject<T>(run: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-function hook(path: string) {
+function hook(path: string, sizeOverride?: number) {
   let handler: Handler | undefined;
   const on = (topic: string, candidate: Handler) => {
     if (topic === "session.compact") handler = candidate;
@@ -49,7 +49,7 @@ function hook(path: string) {
   const dollar = {
     session: { info: async () => ({ transcriptPath: path }) },
     fs: {
-      stat: async (name: string) => ({ size: (await stat(name)).size }),
+      stat: async (name: string) => ({ size: sizeOverride ?? (await stat(name)).size }),
       read: async (name: string, options?: { offset?: number; length?: number; as?: string }) => {
         reads.push(options ?? {});
         const bytes = await readFile(name);
@@ -853,6 +853,96 @@ test("a single long turn after a Fabric summary still hands the original event t
   expect(h.reads).toEqual([]);
   expect(h.logs).toEqual([]);
 });
+
+test("an over-bound transcript returns the Carry without a read", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "large.jsonl");
+    const event = fallbackEvent();
+    const first = { ...row(message("user", "Original request", "first"), null), padding: "x".repeat(16 * 1024 * 1024) };
+    await writeRows(path, [first, row(event.messages[2]!, "first")]);
+    const size = (await stat(path)).size;
+    const carried = compact(event.messages);
+    if (!("messages" in carried)) throw new Error("expected a Carry");
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(h.reads).toEqual([]);
+    expect(result).toEqual(carried);
+    expect(result.messages?.[0]?.text).toContain("PRESERVED-CARRY-FACT");
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain(`transcript size ${size} exceeds read bound 16777216 bytes`);
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
+test("a transcript exactly at the byte bound is read and rebuilt", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "at-bound.jsonl");
+    const event = fallbackEvent();
+    const first = { ...row(message("user", `ORIGINAL-BOUND-FACT ${"a".repeat(120000)}`, "first"), null), padding: "" };
+    const last = row(event.messages[2]!, "first");
+    const empty = [first, last].map((item) => JSON.stringify(item)).join("\n") + "\n";
+    first.padding = "x".repeat(16 * 1024 * 1024 - Buffer.byteLength(empty));
+    await writeRows(path, [first, last]);
+    expect((await stat(path)).size).toBe(16 * 1024 * 1024);
+    const h = hook(path);
+    const result = await h.run(event);
+    expect(h.reads).toEqual(Array.from({ length: 8 }, (_, index) => ({ as: "bytes", offset: index * 2 * 1024 * 1024, length: 2 * 1024 * 1024 })));
+    expect(result.messages?.[0]?.text).toContain("ORIGINAL-BOUND-FACT");
+    expect(result.messages?.[0]?.text).not.toContain("[Earlier summary]");
+    expect(h.logs).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+});
+
+test("one byte over the bound returns the Carry without a read", async () => {
+  const event = fallbackEvent();
+  const h = hook("/unused", 16 * 1024 * 1024 + 1);
+  expect(await h.run(event)).toEqual(compact(event.messages));
+  expect(h.reads).toEqual([]);
+  expect(h.logs[0]).toContain("transcript size 16777217 exceeds read bound 16777216 bytes");
+  expect(h.logTargets).toEqual(["debug"]);
+});
+
+test("an over-bound transcript leaves a kept Read result unstubbed", async () => {
+  await inProject(async (dir) => {
+    const path = join(dir, "large-read.jsonl");
+    const text = "text from the whole file\n".repeat(1400);
+    const first = message("user", `Original. ${"x".repeat(70000)}`, "first");
+    const prompt = message("user", "Read the guide.", "prompt");
+    const call: ClaudeMessage = { ...message("assistant", "", "call"), toolUses: [{ tool_use_id: "read-1", tool: "Read", input: { file_path: "docs/guide.md" }, text }] };
+    const result: ClaudeMessage = { ...message("user", "", "result"), toolResults: [{ tool_use_id: "read-1", text, isError: false }] };
+    const last = message("assistant", "Read it.", "last");
+    const messages = [first, prompt, call, result, last];
+    const unstubbed = compact(messages);
+    if (!("messages" in unstubbed)) throw new Error("expected a summary with a kept Read");
+    await writeRows(path, [{ ...row(first, null), padding: "x".repeat(16 * 1024 * 1024) }]);
+    const size = (await stat(path)).size;
+    const h = hook(path);
+    const output = await h.run({ trigger: "manual", messages });
+    expect(output).toEqual(unstubbed);
+    expect(output.messages?.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === "read-1")?.text).toBe(text);
+    expect(h.reads).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("could not verify kept Read for stubbing");
+    expect(h.logs[0]).toContain(`transcript size ${size} exceeds read bound 16777216 bytes`);
+    expect(h.logTargets).toEqual(["debug"]);
+  });
+});
+
+test.each([-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+  "invalid transcript size %s returns the Carry without a read", async (size) => {
+    const event = fallbackEvent();
+    const carried = compact(event.messages);
+    const h = hook("/unused", size);
+    expect(await h.run(event)).toEqual(carried);
+    expect(h.reads).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect(h.logs[0]).toContain("invalid");
+    expect(h.logTargets).toEqual(["debug"]);
+  },
+);
 
 test("a subagent compaction never reads the main conversation's transcript", async () => {
   await inProject(async (dir) => {
