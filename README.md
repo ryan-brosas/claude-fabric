@@ -9,8 +9,61 @@ keep Claude Code's names and fields (`Read`, `Write`, `Edit`, `Grep`, `Glob`, `B
 meant to replace Claude Code's native code mode.
 
 Status: the plugin exposes `fabric_exec` to Claude Code, with Fabric's self-correcting stages
-(argument repair, code repair, output budget, type-error guidance, repeat guard), and its mod
-answers `/compact` with Fabric's deterministic summary.
+(argument repair, code repair, output budget, type-error guidance, repeat guard). Its mod provides
+a deterministic Fabric summary for compaction, with fallback to Claude Code in some cases.
+
+## Benchmarks
+
+### Compaction: memory across six compactions
+
+On `l3-memory`, claude-fabric passed 18 of 20 runs at a median 8.57M tokens, 5% under plain Claude
+Code's median.
+
+| Compactor | Runs passing | Median tokens | Range |
+| --- | --- | --- | --- |
+| Plain Claude Code | 9 of 10 | 9.02M | 8.70M to 10.24M |
+| claude-fabric before | 10 of 10 | 13.33M | Not supplied |
+| claude-fabric now | 18 of 20 | 8.57M | 8.16M to 9.02M |
+
+`l3-memory` is a 100-turn session with 6 compactions and 14 facts stated only in the conversation:
+settings, later corrections and one constraint. A checker grades the files the model writes at the
+end. All rows use DeepSeek v4.1 Flash; plain Claude Code uses its own compaction. Plain Claude Code
+and the first claude-fabric comparison ran on 2026-11-21; the current runs ran on 2026-11-22 on
+main `f92d000`. The first claude-fabric comparison had 10 scored runs; its final summaries held 92
+of 140 facts, and the model got the rest back with recall. `TODO(facts-kept)`: the number of 280
+fact-and-run cells present in the current final summaries is pending.
+
+Both failed current runs wrote one list setting as strings instead of integers, though all four
+values were in their final summaries. Plain Claude Code's one failed run had the same type slip.
+The worst current run used 1.05 times the median tokens. Replaying recorded transcripts through the
+compactor showed that 0 of 120 compactions fell back to Claude Code's own summary; this was not
+established from live logs.
+
+A second task, `l3-parallel`, has 28 turns and 3 compactions, with parallel tool calls right before
+each compaction. It passed 10 of 10 runs and 100 of 100 checks; 0 of 30 compactions fell back.
+
+After compaction, a kept whole-file `Read` result over 16,384 bytes is replaced by a stub of at
+most 1,024 bytes that names the file, its size, the transcript entry and a SHA-256 (#66). Before
+this change, the median was 9.63M tokens over 20 runs.
+
+The DeepSeek comparisons cover one task family on one inexpensive model, with 20 and 10 runs.
+Token counts are mostly cache reads. This is evidence for these tasks, not a claim about sessions in
+general. On Sonnet 5.5, `l3-memory` passed 5 of 5 runs at 15.4M to 15.8M tokens; there is no
+plain-Claude Sonnet number for comparison.
+
+### Code mode: `fabric_exec` against native code mode
+
+`fabric_exec` solved as many runs as native code mode, but used 1.052 times its tokens.
+
+| Arm | Runs passing | Mean tokens |
+| --- | --- | --- |
+| `fabric_exec` | 70 of 75 | 152k |
+| Native code mode | 70 of 75 | 145k |
+| Plain Claude Code | 68 of 74 | 167k |
+
+On 2026-11-19, 15 tasks ran 5 times per arm on Sonnet 5.5. `fabric_exec` costs slightly more than
+native code mode, not less. One plain run left no record, and one hit the turn limit, so the plain
+token mean covers 73 runs.
 
 ## Install
 
@@ -33,7 +86,7 @@ bun install
 bun run spike      # runs sample programs against this repo and prints timings
 bun run typecheck
 bun run test       # starts the MCP server over stdio and calls fabric_exec
-bun run proof:check # proves the compaction laws and matches the generated machines
+bun run proof:check # proves laws, rejects broken variants and checks generated machines
 ```
 
 Needs Bun 1.4+ and ripgrep.
