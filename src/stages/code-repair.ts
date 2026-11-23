@@ -10,6 +10,8 @@
 // diagnostics. Only unambiguous path heads are rewritten; a regex-first tool's positional pattern
 // and an already-quoted argument are left alone.
 
+import ts from "typescript";
+
 const POSITIONAL_PATH_TOOLS = new Set(["Read", "Write", "Edit"]);
 const OBJECT_PATH_TOOLS = new Set(["Read", "Write", "Edit", "Grep", "Glob"]);
 const PATH_KEYS = new Set([
@@ -317,9 +319,36 @@ const collectRepairs = (code: string, start: number, end: number): Repair[] => {
   return repairs;
 };
 
-/** The program with unquoted path arguments and Unicode quotes in path positions quoted. */
-export function repairCode(code: string): string {
-  const repairs = collectRepairs(code, 0, code.length);
+// Positions come from the check: TS7053 declarations and unresolved `process` identifiers.
+function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd?: string): Repair[] {
+  if (!indexTargets.length && !cwdTargets.length) return [];
+  const positions = new Set(indexTargets);
+  const cwdPositions = new Set(cwdTargets);
+  const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
+  const repairs: Repair[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && positions.has(node.name.getStart(file)) &&
+        !node.type && node.initializer && ts.isObjectLiteralExpression(node.initializer) &&
+        node.initializer.properties.length === 0 && ts.isVariableDeclarationList(node.parent) &&
+        (node.parent.flags & ts.NodeFlags.BlockScoped) !== 0) {
+      repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
+    }
+    if (cwd !== undefined && ts.isCallExpression(node) && !node.questionDotToken && !node.typeArguments && node.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken &&
+        node.expression.name.getText(file) === "cwd" && ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "process" && cwdPositions.has(node.expression.expression.getStart(file))) {
+      // The project folder is the cwd of the program tools and the value process.cwd() would have.
+      // JSON.stringify makes it a valid literal even when the folder contains quotes or backslashes.
+      repairs.push({ start: node.getStart(file), end: node.end, text: JSON.stringify(cwd) });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return repairs;
+}
+
+function applyRepairs(code: string, repairs: Repair[]): string {
+  repairs.sort((a, b) => a.start - b.start);
   if (repairs.length === 0) return code;
   let result = code;
   for (let index = repairs.length - 1; index >= 0; index--) {
@@ -328,4 +357,40 @@ export function repairCode(code: string): string {
     result = result.slice(0, repair.start) + repair.text + result.slice(repair.end);
   }
   return result;
+}
+
+/** Returns candidate path and diagnostic-directed repairs. */
+export function repairCode(code: string, indexTargets: readonly number[] = [], cwdTargets: readonly number[] = [], cwd?: string): string {
+  return applyRepairs(code, [...collectRepairs(code, 0, code.length), ...diagnosticRepairs(code, indexTargets, cwdTargets, cwd)]);
+}
+
+// A type mismatch in an object value can be diagnosed on its property name instead of the value.
+function diagnosedPropertyPaths(code: string, paths: Repair[], errorPositions: readonly number[]): Set<Repair> {
+  const diagnosed = new Set<Repair>();
+  if (!paths.length || !errorPositions.length) return diagnosed;
+  const file = ts.createSourceFile("program.ts", code, ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && errorPositions.some((position) =>
+      node.name.getStart(file) <= position && position < node.name.end)) {
+      const start = node.initializer.getStart(file);
+      for (const path of paths) {
+        if (path.start === start && path.end === node.initializer.end) diagnosed.add(path);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return diagnosed;
+}
+
+/** Try targeted repairs first; path repairs need a diagnostic at the value or its property name. */
+export function repairCandidates(code: string, indexTargets: readonly number[], cwdTargets: readonly number[], cwd: string | undefined, errorPositions: readonly number[]): string[] {
+  const targeted = diagnosticRepairs(code, indexTargets, cwdTargets, cwd);
+  const scanned = collectRepairs(code, 0, code.length);
+  const propertyPaths = diagnosedPropertyPaths(code, scanned, errorPositions);
+  const paths = scanned.filter((repair) => propertyPaths.has(repair) ||
+    errorPositions.some((position) => repair.start <= position && position < repair.end));
+  const candidates = [targeted, paths, [...targeted, ...paths]]
+    .map((repairs) => applyRepairs(code, repairs));
+  return [...new Set(candidates)].filter((candidate) => candidate !== code);
 }

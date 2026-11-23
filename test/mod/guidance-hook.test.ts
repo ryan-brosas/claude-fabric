@@ -9,18 +9,18 @@ type Handler = (dollar: unknown, event: unknown, next: (event: unknown) => unkno
 interface Section { id: string; text: string; scope: "shared" | "session" }
 
 // The hooks the mod registered, by topic, driven the way the engine drives them.
-function hooks(): Map<string, Handler> {
+function hooks(options: Record<string, unknown> = {}): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   const on = (topic: string, handler: Handler) => {
     handlers.set(topic, handler);
     return { catch: () => undefined };
   };
-  register(on as never, {} as never);
+  register(on as never, options as never);
   return handlers;
 }
 
-const hook = (): Handler => {
-  const found = hooks().get("prompt.compose");
+const hook = (options: Record<string, unknown> = {}): Handler => {
+  const found = hooks(options).get("prompt.compose");
   if (found === undefined) throw new Error("the mod registered no prompt.compose hook");
   return found;
 };
@@ -57,8 +57,20 @@ describe("the prompt.compose hook", () => {
     expect(result.sections.at(-1)?.text).toContain("For full file text in your context, call `Read` directly: program results are bounded.");
   });
 
+  test("tells the model where to write new files only when fabricOnly is on", async () => {
+    const next = () => answer(base);
+    const on = await hook({ fabricOnly: true })({}, event([FABRIC_EXEC_TOOL]), next) as { sections: readonly Section[] };
+    const off = await hook({ fabricOnly: false })({}, event([FABRIC_EXEC_TOOL]), next) as { sections: readonly Section[] };
+    const sentence = "Call Write, Edit, Bash, Grep and Glob inside a program, not top-level, even to create a file.";
+    expect(on.sections.at(-1)?.text).toContain(sentence);
+    expect(off.sections.at(-1)?.text).toBe(GUIDANCE_TEXT);
+    expect(off.sections.at(-1)?.text).not.toContain(sentence);
+  });
+
   test("adds nothing when the pool has no fabric_exec", async () => {
     expect(await run(["Read", "Bash"], base)).toEqual(answer(base));
+    const on = await hook({ fabricOnly: true })({}, event(["Read", "Bash"]), () => answer(base));
+    expect(on).toEqual(answer(base));
   });
 
   test("adds the section once, not again on a recompose", async () => {

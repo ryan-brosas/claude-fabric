@@ -4,7 +4,7 @@ import { hasKeptReadCandidate, stubKeptReads } from "../compaction/kept-read.ts"
 import { rebuildTranscriptView } from "../compaction/from-transcript.ts";
 import { outcomeConservationProblem } from "../compaction/outcome-conservation.ts";
 import { boundSecret, bridgePathProblem, bridgePaths, isBuiltinTool, type BridgeAnswer, type BridgePaths } from "../bridge/contract.ts";
-import { FABRIC_EXEC_TOOL, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
+import { FABRIC_EXEC_TOOL, FABRIC_ONLY_GUIDANCE_TEXT, GUIDANCE_SECTION, GUIDANCE_TEXT } from "../guidance/guidance.ts";
 import {
   answerOf,
   emptyState,
@@ -249,7 +249,7 @@ export const register: Register = (on, options) => {
     if (!e.tools.includes(FABRIC_EXEC_TOOL)) return composed;
     if (composed.sections.some((section) => section.id === GUIDANCE_SECTION)) return composed;
     return {
-      sections: [...composed.sections, { id: GUIDANCE_SECTION, text: GUIDANCE_TEXT, scope: "session" as const }],
+      sections: [...composed.sections, { id: GUIDANCE_SECTION, text: programsOnly ? FABRIC_ONLY_GUIDANCE_TEXT : GUIDANCE_TEXT, scope: "session" as const }],
     };
   }).catch(($, e, next) => next(e));
 

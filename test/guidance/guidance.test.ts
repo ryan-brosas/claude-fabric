@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import {
   FABRIC_EXEC_TOOL,
+  FABRIC_ONLY_GUIDANCE_TEXT,
   GUIDANCE_MAX_CHARS,
   GUIDANCE_SECTION,
   GUIDANCE_TEXT,
@@ -27,6 +28,23 @@ test("the section directs whole-file context reads to Read", () => {
 
 test("the section stays under the cap that every turn pays", () => {
   expect(GUIDANCE_TEXT.length).toBeLessThan(GUIDANCE_MAX_CHARS);
+  expect(FABRIC_ONLY_GUIDANCE_TEXT.length).toBeLessThan(GUIDANCE_MAX_CHARS);
+});
+
+test("fabricOnly instructs program calls without asserting tool availability", () => {
+  expect(FABRIC_ONLY_GUIDANCE_TEXT).toContain("Call Write, Edit, Bash, Grep and Glob inside a program, not top-level, even to create a file.");
+  expect(FABRIC_ONLY_GUIDANCE_TEXT).not.toContain("are not top-level tools");
+});
+
+test("fabricOnly names the program tools and leaves space for later guidance", () => {
+  expect(FABRIC_ONLY_GUIDANCE_TEXT).toContain("Call Write, Edit, Bash, Grep and Glob inside a program, not top-level, even to create a file.");
+  expect(GUIDANCE_TEXT).not.toContain("not top-level, even to create a file.");
+  expect(FABRIC_ONLY_GUIDANCE_TEXT.length).toBeLessThan(950);
+  for (const name of TOOL_NAMES) expect(FABRIC_ONLY_GUIDANCE_TEXT).toContain(name);
+  for (const phrase of ["async function bodies", "Claude Code's fields", "Promise.all", "Read small files whole", "not raw output", "type-check first", "nothing runs", "store(key, value)", "load(key)", "mcp.<server>.<tool>(args)", "history.recall"]) {
+    expect(FABRIC_ONLY_GUIDANCE_TEXT).toContain(phrase);
+  }
+  expect(guidanceText(["Probe"], true)).toContain("Call Probe with");
 });
 
 test("the section carries the substance a program needs", () => {

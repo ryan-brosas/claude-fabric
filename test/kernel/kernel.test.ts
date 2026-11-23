@@ -197,6 +197,20 @@ test("a failed check with many errors stays within the cap", async () => {
   }
 });
 
+test("URL and URLSearchParams work in the actual worker", async () => {
+  const result = await run(`
+    const url = new URL("/files/%2e%2e?q=one", "https://example.com/base");
+    const params = new URLSearchParams(url.search);
+    if (!URL.canParse(url) || !URL.parse(url.href)) throw new Error("URL statics missing");
+    params.append("q", "two");
+    url.search = params.toString();
+    return { pathname: url.pathname, all: url.searchParams.getAll("q"), href: url.href };
+  `, tmpdir());
+  expect(result.ok).toBe(true);
+  expect(JSON.parse(result.text)).toEqual({ pathname: "/", all: ["one", "two"], href: "https://example.com/?q=one&q=two" });
+  expect(check("return process.cwd();", declarations).ok).toBe(false);
+});
+
 // Dogfooding: programs that waited between calls failed the check, since lib.es2023 has no timers.
 test("a program may wait with setTimeout and cancel with clearTimeout", async () => {
   const waited = await run(

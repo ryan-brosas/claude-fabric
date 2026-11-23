@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { BuiltinLink } from "./builtin.ts";
 import { check } from "./check.ts";
 import { execute } from "./execute.ts";
@@ -10,7 +11,7 @@ import { HISTORY } from "../providers/tools/history.ts";
 import { TOOLS } from "../providers/tools/index.ts";
 import { guestTypes, inputFields, namespaceTypes } from "../registry/generate.ts";
 import { mcpTypes } from "../registry/mcp.ts";
-import { repairCode } from "../stages/code-repair.ts";
+import { repairCandidates } from "../stages/code-repair.ts";
 import { outputBudget } from "../stages/output-budget.ts";
 import { BLOCK, type RepeatGuard, blockText, warnText } from "../stages/repeat-guard.ts";
 import { typeErrorGuidance, type GuidanceTool } from "../stages/type-guidance.ts";
@@ -40,8 +41,8 @@ export interface RunResult { ok: boolean; text: string; ms: { check: number; run
 // Every text that reaches the model passes the one cap.
 const budget = (text: string): Promise<string> => outputBudget({ text, max: MAX_RESULT_CHARS, fallback: bound });
 
-export async function run(code: string, cwd: string, options: RunOptions = {}): Promise<RunResult> {
-  const t0 = performance.now();
+/** Check and, on failure, try a repair without starting a worker or calling tools. */
+export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> & { cwd?: string } = {}) {
   // The tool declarations are constant, but the mcp surface is not: it is printed from the
   // session's catalog, which the mod may send again while the server runs.
   const declarations = guestTypes(TOOLS, STORE, [mcpTypes(options.mcp?.catalog() ?? { servers: [] }), namespaceTypes("history", HISTORY)]);
@@ -52,15 +53,24 @@ export async function run(code: string, cwd: string, options: RunOptions = {}): 
   let program = code;
   let checked = check(code, declarations);
   if (!checked.ok) {
-    const repaired = repairCode(code);
-    if (repaired !== code) {
+    // CLAUDE_PROJECT_DIR can be relative; tools and Bash resolve it from the server directory.
+    const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
+    const candidates = repairCandidates(code, checked.indexTargets ?? [], checked.cwdTargets ?? [], cwd, checked.errorPositions ?? []);
+    for (const repaired of candidates) {
       const retried = check(repaired, declarations);
       if (retried.ok) {
         program = repaired;
         checked = retried;
+        break;
       }
     }
   }
+  return { program, checked };
+}
+
+export async function run(code: string, cwd: string, options: RunOptions = {}): Promise<RunResult> {
+  const t0 = performance.now();
+  const { program, checked } = checkProgram(code, { mcp: options.mcp, cwd });
   const checkMs = performance.now() - t0;
   if (!checked.ok) {
     // The errors are the ones for the code the model sent, so the line numbers match it.

@@ -45,7 +45,7 @@ const builtin: BuiltinLink = "bridge" in started ? started.bridge : {
   error: started.error,
 };
 
-const INTRO = "Run one type-checked TypeScript program that calls tools and returns one result. Use it for file reads, searches, shell commands, and any multi-step or parallel work, instead of many separate tool calls.\n\nThe program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call runs in a fresh worker, and the store below is the only state that carries to the next one.\n\nTools inside the program (same names and fields as Claude Code's tools; a single string means the main field):";
+const INTRO = "Run one type-checked TypeScript program that calls tools and returns one result. Use it for file reads, searches, shell commands, and any multi-step or parallel work, instead of many separate tool calls.\n\nThe program is an async function body: top-level await and return work. Only the returned value and print() output reach you; intermediate data stays in the program. Each call runs in a fresh worker, and the store below is the only state that carries to the next one.\n\nRelative paths resolve against the project folder.\n\nTools inside the program (same names and fields as Claude Code's tools; a single string means the main field):";
 
 // The store globals are not tools: nothing crosses the bridge for them.
 const STORE_INTRO = "\nThe session's store, shared by every fabric_exec call in this session (globals, not tools):";
