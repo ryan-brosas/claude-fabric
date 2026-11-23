@@ -32,8 +32,10 @@ settings, later corrections and one constraint. A checker grades the files the m
 end. All rows use DeepSeek v4.1 Flash; plain Claude Code uses its own compaction. Plain Claude Code
 and the first claude-fabric comparison ran on 2026-11-21; the current runs ran on 2026-11-22 on
 main `f92d000`. The first claude-fabric comparison had 10 scored runs; its final summaries held 92
-of 140 facts, and the model got the rest back with recall. `TODO(facts-kept)`: the number of 280
-fact-and-run cells present in the current final summaries is pending.
+of 140 facts, and the model got the rest back with recall. In each of the 20 current runs, the
+final summary after the sixth compaction held all 14 facts: 280 of 280. Each was the user's own
+sentence, word for word, not a paraphrase. The benchmark scorer graded this result, and its own
+audit passed.
 
 Both failed current runs wrote one list setting as strings instead of integers, though all four
 values were in their final summaries. Plain Claude Code's one failed run had the same type slip.
