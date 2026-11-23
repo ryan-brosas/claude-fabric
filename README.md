@@ -8,11 +8,36 @@ the program returns, so the steps in between never fill the context. Inside the 
 keep Claude Code's names and fields (`Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`). It is
 meant to replace Claude Code's native code mode.
 
+**Alpha.** This alpha version needs more data. The benchmarks below cover short tasks, and there is no
+benchmark yet for long work sessions. Another extension is planned to go with it, most likely
+`fabric-runtime`.
+
 Status: the plugin exposes `fabric_exec` to Claude Code, with Fabric's self-correcting stages
 (argument repair, code repair, output budget, type-error guidance, repeat guard). Its mod provides
 a deterministic Fabric summary for compaction. If a transcript rebuild fails, it carries the earlier
 Fabric summary. It delegates to Claude Code when an over-budget transcript has no older history to
 cut, on an automatic skip, or on an uncaught error or timeout.
+
+## Why
+
+We built this because Claude Code's native code mode, and above all its compaction, were not good
+enough for our daily work.
+
+**Code mode.** Native code mode runs only in an interactive terminal. On our 15 Sonnet 5.5
+benchmark tasks, it took 14.75 requests per run against 4.40 for `fabric_exec`. `fabric_exec` used
+0.775 times its mean tokens, losing no passes (75 of 75 against 73 of 75). We type-check
+`fabric_exec` programs before anything runs, repairing common slips without another model request.
+
+**Compaction.** Claude Code asks a model to summarize, so users' words come back paraphrased and
+exact values can change or disappear. Ours is deterministic and makes no model call: the same
+transcript always gives the same summary without an extra model request. It keeps the user's
+sentences word for word. In the `l3-memory` benchmark (100 turns, 6 compactions), final summaries
+held all 14 facts in all 20 runs, 280 of 280, each as the user's own sentence. `history.recall` and
+`history.expand` read what a summary left out from the transcript. This is best effort: output the
+transcript no longer holds cannot come back. We hand compaction back to Claude Code when an
+over-budget transcript has no older history to cut, on an automatic skip, or on an uncaught error or
+timeout. On that benchmark, median tokens were 8.57M against plain Claude Code's 9.02M, with 18 of
+20 runs passing against 9 of 10. This is one task family on one model; details are under Benchmarks.
 
 ## Benchmarks
 
