@@ -27,11 +27,70 @@ test("leaves a nested missing object brace alone when one insertion cannot close
   expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
 });
 
-test("repairs an outer call argument with a closed nested object", () => {
-  const code = 'function f(x: {a: {b: number}}) {} f({a: {b: 1});';
+test("refuses an ambiguous nested brace and never executes the program", async () => {
+  const code = `function f(x: { data: { id: number; dryRun?: boolean }; dryRun?: boolean }) { return x.dryRun ? "preview" : "delete"; }
+return f({
+  data: {id: 1,
+  dryRun: true});`;
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(check(code.replace('dryRun: true});', 'dryRun: true}});'), declarations).ok).toBe(true);
+  expect(check(code.replace('dryRun: true});', '} , dryRun: true});'), declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-ambiguous-"));
+  try {
+    const exact = await run(code, dir);
+    expect(exact.ok).toBe(false);
+    expect(exact.calls).toBe(0);
+    expect(exact.ms.run).toBe(0);
+    for (const error of original.errors) expect(exact.text).toContain(error);
+
+    const withWrite = 'await Write({file_path: "never", content: "x"});\n' + code;
+    const errors = check(withWrite, declarations).errors;
+    const failed = await run(withWrite, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of errors) expect(failed.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a last nested object even through transparent wrappers", () => {
+  const values = [
+    '{b: 1}',
+    '({b: 1})',
+    '({b: 1} as {b: number})',
+    '({b: 1} satisfies {b: number})',
+    '({b: 1}!)',
+    '(<{b: number}>{b: 1})',
+    '((<{b: number}>({b: 1} as const))!)',
+  ];
+  for (const value of values) {
+    const code = `function f(x: {a: {b: number}}) {} f({a: ${value});`;
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.braceTargets).toHaveLength(1);
+    expect(check(code.slice(0, -2) + '});', declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("repairs an outer object when a nested object is not its last property", () => {
+  const code = 'function f(x: {a: {x: number}, b: number}) {} f({a: {x: 1}, b: 2);';
   const result = checkProgram(code, { cwd: PROJECT });
   expect(result.checked.ok).toBe(true);
-  expect(result.program).toBe('function f(x: {a: {b: number}}) {} f({a: {b: 1}});');
+  expect(result.program).toBe('function f(x: {a: {x: number}, b: number}) {} f({a: {x: 1}, b: 2});');
+});
+
+test("repairs when the last value merely contains an object literal", () => {
+  const code = 'function f(x: {a: number}) {} f({a: ({x: 1}).x);';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('function f(x: {a: number}) {} f({a: ({x: 1}).x});');
 });
 
 test("does not repair a comma error without an object argument", () => {

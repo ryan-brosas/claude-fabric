@@ -476,8 +476,22 @@ function diagnosedPropertyPaths(code: string, paths: Repair[], errorPositions: r
   return diagnosed;
 }
 
+function lastPropertyHasObjectValue(object: ts.ObjectLiteralExpression): boolean {
+  const property = object.properties.at(-1);
+  if (!property || !ts.isPropertyAssignment(property)) return false;
+  let value = property.initializer;
+  while (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isSatisfiesExpression(value) ||
+         ts.isTypeAssertionExpression(value) || ts.isNonNullExpression(value) ||
+         ts.isExpressionWithTypeArguments(value) || ts.isPartiallyEmittedExpression(value)) {
+    value = value.expression;
+  }
+  return ts.isObjectLiteralExpression(value);
+}
+
 // The parser omits the direct close-brace token on an unclosed object literal. Parse in the
-// check's async body so await and recovered call arguments have the same shape.
+// check's async body so await and recovered call arguments have the same shape. If its last
+// property's value is an object (through transparent wrappers), the missing brace's level is
+// ambiguous, so leave the original program and errors alone.
 function missingBraceRepairs(code: string, targets: readonly number[]): Repair[] {
   if (!targets.length) return [];
   const prefix = "export {};\nasync function __fabric_main(): Promise<unknown> {\n";
@@ -489,7 +503,8 @@ function missingBraceRepairs(code: string, targets: readonly number[]): Repair[]
       const last = node.arguments.at(-1);
       const close = node.getChildren(file).find((child) => child.kind === ts.SyntaxKind.CloseParenToken);
       if (last && ts.isObjectLiteralExpression(last) && close && positions.has(close.getStart(file) - prefix.length) &&
-          !last.getChildren(file).some((child) => child.kind === ts.SyntaxKind.CloseBraceToken)) {
+          !last.getChildren(file).some((child) => child.kind === ts.SyntaxKind.CloseBraceToken) &&
+          !lastPropertyHasObjectValue(last)) {
         const position = close.getStart(file) - prefix.length;
         repairs.push({ start: position, end: position, text: "}" });
       }
