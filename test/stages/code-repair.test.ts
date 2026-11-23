@@ -240,6 +240,47 @@ test("refuses a property true branch even when the conditional is used as a valu
   expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
 });
 
+test("refuses a guarded eval callee without changing its original errors or running tools", async () => {
+  const code = 'const x = 42; await Write("never", "x"); return (process.cwd ? eval : eval)("typeof x");';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-eval-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    expect(result.ms.run).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses identifier true branches through transparent wrappers", () => {
+  for (const branch of [
+    'someVar', '(someVar)', '(someVar!)', '(someVar as string)',
+    '(someVar satisfies string)', '(<string>someVar)',
+    '(((someVar!) as string) satisfies string)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const someVar = "y"; return ${condition} ? ${branch} : "x";`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+  const code = 'function someVar<T>() { return 1; } return process.cwd ? someVar<string> : someVar<string>;';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors).toHaveLength(1);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
 test("refuses property and element true branches through transparent wrappers", () => {
   for (const branch of [
     'obj.f', 'obj["f"]', 'obj?.f', 'obj?.["f"]', '(obj.f)', '(obj.f!)',
@@ -388,10 +429,10 @@ test("combines nested guard repairs and discards repairs in an unreachable branc
 });
 
 test("keeps the original errors when a guarded true branch still fails", async () => {
-  const code = 'await Write("never", "x"); return process.cwd ? missing : "fallback";';
+  const code = 'await Write("never", "x"); return process.cwd ? missing() : "fallback";';
   const original = check(code, declarations);
   const repaired = repairCode(code, original.indexTargets, original.cwdTargets, PROJECT);
-  expect(repaired).toBe('await Write("never", "x"); return (missing);');
+  expect(repaired).toBe('await Write("never", "x"); return (missing());');
   expect(check(repaired, declarations).ok).toBe(false);
   expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
   const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-rejected-"));

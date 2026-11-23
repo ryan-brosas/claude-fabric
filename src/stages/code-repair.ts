@@ -360,15 +360,16 @@ function printedPropertyRepairs(code: string, targets: readonly number[]): Repai
   return repairs;
 }
 
-// A conditional produces a value. Replacing it with a reference can change its receiver,
-// and replacing it with a function or class can cause a surrounding name to be inferred.
+// A conditional produces a value. Refuse property or element references (which can change
+// a receiver), bare identifiers (which can make eval direct), and functions or classes
+// (which can cause a surrounding name to be inferred).
 function unsafeConditionalBranch(expression: ts.Expression): boolean {
   while (ts.isParenthesizedExpression(expression) || ts.isNonNullExpression(expression) ||
          ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) ||
          ts.isTypeAssertionExpression(expression) || ts.isExpressionWithTypeArguments(expression) ||
          ts.isPartiallyEmittedExpression(expression)) expression = expression.expression;
   return ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression) ||
-    ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isClassExpression(expression);
+    ts.isIdentifier(expression) || ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isClassExpression(expression);
 }
 
 // Positions come from the check: TS7053 declarations, unresolved `process`, and missing

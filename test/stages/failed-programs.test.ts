@@ -47,8 +47,10 @@ for (const [index, fixture] of liveFixtures.entries()) {
       expect(candidate).not.toBe(fixture.code);
       const errors = check(candidate, guestTypes(TOOLS)).errors.join("\n");
       expect(index).toBe(11);
+      // `undefined` is an identifier too: keep the conditional while repairing its cwd call.
+      expect(candidate).toContain('"/fixture/project" ? undefined : undefined');
       expect(errors).toContain("Type 'undefined' is not assignable to type 'string'");
-      expect(errors).not.toContain("This kind of expression is always truthy");
+      expect(errors).toContain("This kind of expression is always truthy");
       expect(errors).not.toContain("Cannot find name 'process'");
     }
   });
