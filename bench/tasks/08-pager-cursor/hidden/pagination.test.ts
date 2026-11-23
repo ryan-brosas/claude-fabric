@@ -62,9 +62,9 @@ describe("cursor pagination", () => {
   test("ties on createdAt are broken by id", () => {
     const createdAt = "2026-02-01T00:00:00.000Z";
     const repo = new MemoryUserRepository([
-      { id: "b", email: ["b", "example.com"].join("@"), name: "B", createdAt },
-      { id: "a", email: ["a", "example.com"].join("@"), name: "A", createdAt },
-      { id: "c", email: ["c", "example.com"].join("@"), name: "C", createdAt },
+      { id: "b", email: "b@example.com", name: "B", createdAt },
+      { id: "a", email: "a@example.com", name: "A", createdAt },
+      { id: "c", email: "c@example.com", name: "C", createdAt },
     ]);
     const first = listUsers(repo, { limit: 1 });
     expect(first.items.map((user) => user.id)).toEqual(["a"]);
