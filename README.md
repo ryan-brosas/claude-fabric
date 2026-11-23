@@ -97,8 +97,8 @@ That evening, a third run used the plugin with #72 and #74 as well, with a nativ
 median of 106,302 (range 74,953 to 209,984), with 15.44 requests per run. `fabric_exec` used 0.745
 times native's mean and 0.714 times its median. It had 11 requests that did no work: 10 type-check
 failures and 1 other failed program. Against the afternoon build, there was no measurable change:
-requests per run were the same and no pass was lost. The plugin ran #74 without its last commit,
-which only refuses more inputs. One `fabric_exec` run made 3 top-level Bash calls.
+requests per run were the same and no pass was lost. The plugin ran #74 without its last two code
+commits, which only refuse more inputs. One `fabric_exec` run made 3 top-level Bash calls.
 
 Since the 2026-11-19 run, the changes also include the `fabricOnly` option (#22, #23, #36), program
 guidance (#21) and whole-file `Read` guidance (#58, #61). An afternoon arm that added guidance to

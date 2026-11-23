@@ -152,10 +152,13 @@ module in `src/stages/` with its own unit tests in `test/stages/`.
    string, payloads sent as JSON text (or under the old `strings` alias) become the record, display
    is normalized, and keys this tool does not declare are dropped. The MCP input schema is loose
    enough for those repairs to reach `prepareArguments`; the strict envelope judges the call after.
-2. **Code repair** (`src/stages/code-repair.ts`, only after a failed check): unquoted path and URL
-   arguments and Unicode quotes in path positions are quoted, and the repaired program runs only if
-   it passes the check. A program that already passes is never rewritten. Grep's pattern and Bash's
-   command are never touched.
+2. **Code repair** (`src/stages/code-repair.ts`, only after a failed check): quotes unquoted path and
+   URL arguments and normalizes Unicode quotes in path positions. Diagnosed empty objects used as
+   string-keyed accumulators get an annotation. Unresolved `process.cwd()` calls and supported guards
+   become the project folder or reachable branch. It fixes precedence in `await CALL().prop` and discarded
+   global `print(ARG).prop`, and closes an object-literal argument at a diagnosed `)`. The repaired
+   program runs only if it passes the check. A program that already passes is never rewritten. Grep's
+   pattern and Bash's command are never touched.
 3. **Check** (`src/kernel/check.ts`): wrap the code as an async function body and type-check it
    against the declarations from `src/registry/generate.ts` with a warm TypeScript program.
 4. **Type guidance** (`src/stages/type-guidance.ts`, after a failed check): a misplaced envelope
