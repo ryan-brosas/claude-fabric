@@ -106,8 +106,31 @@ native code mode's mean tokens. This remains the only measurement with `fabricOn
 On 2026-11-19, 15 tasks ran 5 times per arm on Sonnet 5.5. One plain run left no record, and one hit
 the turn limit, so the plain token mean covers 73 runs. Native code mode's mean fell from 145k then
 to 111k in the morning rerun, on a newer Claude Code. Compare arms within the same run, not across
-days. These 15 small tasks on one model are evidence for these tasks, not a claim about sessions in
-general.
+days.
+
+#### DeepSeek through CoralBricks
+
+On 2026-11-23, the same driver ran 15 tasks, 5 times per arm, on `deepseek-v4.1-flash` through
+CoralBricks. Both `fabric_exec` arms had `fabricOnly` on. The #70 and #71 arm ran with native code
+mode; the main-build arm ran alone right after them.
+
+| Arm | Runs passing | Mean tokens | Median tokens | Range | Requests per run |
+| --- | --- | --- | --- | --- | --- |
+| `fabric_exec` with #70 and #71 | 75 of 75 | 136,608 | 114,079 | 37,373 to 719,147 | 8.75 |
+| `fabric_exec`, plugin main `facb449` | 74 of 75 | 137,575 | 115,958 | 36,404 to 608,701 | 8.45 |
+| Native code mode | 75 of 75 | 264,083 | 237,414 | 62,577 to 888,795 | 11.63 |
+
+With #70 and #71, `fabric_exec` used 0.517 times native's mean tokens and 0.481 times its median.
+Main had 31 requests that did no work: 18 type-check failures, 12 Bash nonzero exits and 1 other
+failed program. The #70 and #71 build had 13: 8 type-check failures, 2 Bash nonzero exits and 3
+other failed programs. Neither build had refused top-level calls, so the gain came from repairs, not
+wording. The newer build had fewer wasted requests and one more pass, but no token gain. Mean tokens
+and requests per run were similar across builds. Main's failed run was `06-runlog-stats-command`.
+
+In one #70 and #71 run of `10-rename-config-settings`, the session never called `fabric_exec` and
+used top-level Bash and Write, which `fabricOnly` should have kept from it. The cause is unknown.
+The run passed, and its 212,143 tokens are counted. These 15 small tasks are evidence for these
+tasks, not a claim about sessions in general.
 
 ## Install
 
