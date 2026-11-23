@@ -11,6 +11,286 @@ import { repairCandidates, repairCode } from "../../src/stages/code-repair.ts";
 const declarations = guestTypes(TOOLS);
 const PROJECT = "/fixture/project";
 
+test("repairs a missing object brace at the end of a call", () => {
+  const code = 'await Read({file_path: "a.txt");';
+  const original = check(code, declarations);
+  expect(original.errors).toEqual(["line 1:31 ',' expected."]);
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('await Read({file_path: "a.txt"});');
+});
+
+test("refuses an ambiguous shorthand property or argument and never executes the program", async () => {
+  const code = `const dryRun = true;
+function f(x: { id: number; dryRun?: boolean }, y?: boolean) { return x.dryRun ? "delete" : "preview"; }
+return f({id: 1, dryRun);`;
+  const original = check(code, declarations);
+  expect(original.errors).toEqual(["line 3:24 ',' expected."]);
+  const property = code.replace("dryRun);", "dryRun});");
+  const argument = code.replace("dryRun);", "}, dryRun);");
+  expect(check(property, declarations).ok).toBe(true);
+  expect(check(argument, declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-shorthand-"));
+  try {
+    expect((await run(property, dir)).text).toBe("delete");
+    expect((await run(argument, dir)).text).toBe("preview");
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+
+    const withWrite = 'await Write({file_path: "never", content: "x"});\n' + code;
+    const writeErrors = check(withWrite, declarations).errors;
+    const writeResult = await run(withWrite, dir);
+    expect(writeResult.ok).toBe(false);
+    expect(writeResult.calls).toBe(0);
+    expect(writeResult.ms.run).toBe(0);
+    for (const error of writeErrors) expect(writeResult.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a spread in an unclosed object argument", async () => {
+  const code = `const rest = {dryRun: true};
+function f(x: {id: number; dryRun?: boolean}) { return x.dryRun; }
+return f({id: 1, ...rest);`;
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.braceTargets).toHaveLength(1);
+  expect(check(code.replace("...rest);", "...rest});"), declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-spread-"));
+  try {
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses non-assignment elements anywhere in an unclosed object", () => {
+  const cases = [
+    'const dryRun = true; function f(x: {id: number; dryRun: boolean}) {} f({dryRun, id: 1);',
+    'const rest = {dryRun: true}; function f(x: {id: number; dryRun: boolean}) {} f({...rest, id: 1);',
+    'function f(x: {id: number; method(): number}) {} f({id: 1, method() { return 2; });',
+    'function f(x: {id: number; value: number}) {} f({id: 1, get value() { return 2; });',
+    'function f(x: {id: number; value: number}) {} f({id: 1, set value(v: number) {});',
+  ];
+  for (const code of cases) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.braceTargets).toHaveLength(1);
+    expect(check(code.slice(0, -2) + '});', declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("repairs property assignments with computed or quoted names", () => {
+  const code = 'function f(x: {id: number; dryRun: boolean}) { return x.id; } return f({["id"]: 1, "dryRun": true);';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toMatchObject({
+    program: code.slice(0, -2) + '});', checked: { ok: true },
+  });
+});
+
+test("ignores brace characters in string, template, comment, and regex text", () => {
+  const cases = [
+    ['await Edit({file_path: "a{b}.txt", old_string: `x { y`, new_string: "z");',
+      'await Edit({file_path: "a{b}.txt", old_string: `x { y`, new_string: "z"});'],
+    ['function f(x: {a: string, b: string}) {} f({a: /[{]/.source /* { comment */, b: `x ${42} { y`);',
+      'function f(x: {a: string, b: string}) {} f({a: /[{]/.source /* { comment */, b: `x ${42} { y`});'],
+  ] as const;
+  for (const [code, repaired] of cases) {
+    expect(check(code, declarations).ok).toBe(false);
+    expect(checkProgram(code, { cwd: PROJECT })).toMatchObject({ program: repaired, checked: { ok: true } });
+  }
+});
+
+test("leaves a nested missing object brace alone when one insertion cannot close the call argument", () => {
+  const code = 'function f(x: {a: {b: number}}) {} f({a: {b: 1);';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("refuses an ambiguous nested brace and never executes the program", async () => {
+  const code = `function f(x: { data: { id: number; dryRun?: boolean }; dryRun?: boolean }) { return x.dryRun ? "preview" : "delete"; }
+return f({
+  data: {id: 1,
+  dryRun: true});`;
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(check(code.replace('dryRun: true});', 'dryRun: true}});'), declarations).ok).toBe(true);
+  expect(check(code.replace('dryRun: true});', '} , dryRun: true});'), declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-ambiguous-"));
+  try {
+    const exact = await run(code, dir);
+    expect(exact.ok).toBe(false);
+    expect(exact.calls).toBe(0);
+    expect(exact.ms.run).toBe(0);
+    for (const error of original.errors) expect(exact.text).toContain(error);
+
+    const withWrite = 'await Write({file_path: "never", content: "x"});\n' + code;
+    const errors = check(withWrite, declarations).errors;
+    const failed = await run(withWrite, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of errors) expect(failed.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses an ambiguous arrow body and never executes the program", async () => {
+  const code = `function noop() {}
+const dryRun = true;
+function f(x: { action: () => void; dryRun?: boolean }) { return x.dryRun ? "preview" : "delete"; }
+return f({ action: () => { noop(), dryRun });`;
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  const inner = code.replace("noop(), dryRun });", "noop(), dryRun }});");
+  const outer = code.replace("noop(), dryRun });", "noop() }, dryRun });");
+  expect(check(inner, declarations).ok).toBe(true);
+  expect(check(outer, declarations).ok).toBe(true);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-arrow-"));
+  try {
+    expect((await run(inner, dir)).text).toBe("delete");
+    expect((await run(outer, dir)).text).toBe("preview");
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    expect(failed.ms.run).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a last nested object even through transparent wrappers", () => {
+  const values = [
+    '{b: 1}',
+    '({b: 1})',
+    '({b: 1} as {b: number})',
+    '({b: 1} satisfies {b: number})',
+    '({b: 1}!)',
+    '(<{b: number}>{b: 1})',
+    '((<{b: number}>({b: 1} as const))!)',
+  ];
+  for (const value of values) {
+    const code = `function f(x: {a: {b: number}}) {} f({a: ${value});`;
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.braceTargets).toHaveLength(1);
+    expect(check(code.slice(0, -2) + '});', declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("refuses a nested object even when it is not the last property", () => {
+  const code = 'function f(x: {a: {x: number}, b: number}) {} f({a: {x: 1}, b: 2);';
+  const original = check(code, declarations);
+  expect(original.braceTargets).toHaveLength(1);
+  expect(check(code.replace('b: 2);', 'b: 2});'), declarations).ok).toBe(true);
+  // A second opening token is refused without trying to decide whether this nesting is safe.
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("refuses any additional opening brace token inside the object", () => {
+  const cases = [
+    'function f(x: {a: number}) {} f({a: ({x: 1}).x);',
+    'function f(x: {a: unknown}) {} f({a: class {});',
+    'function f(x: {a: number}) {} f({a: (({x}: {x: number}) => x)({x: 1}));',
+    'function f(x: {a: string}) {} f({a: `x ${({v: 1}).v}`);',
+  ];
+  for (const code of cases) {
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.braceTargets).toHaveLength(1);
+    expect(check(code.slice(0, -2) + '});', declarations).ok).toBe(true);
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  }
+});
+
+test("does not repair a comma error without an object argument", () => {
+  const code = 'function f(a: number, b: number) {} f(1 2);';
+  const original = check(code, declarations);
+  expect(original.errors).toContain("line 1:41 ',' expected.");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("keeps the original errors if a brace repair leaves a type error", () => {
+  const code = 'await Read({file_path: "a.txt"); const n: number = "bad";';
+  const original = check(code, declarations);
+  expect(original.errors).toContain("line 1:31 ',' expected.");
+  expect(original.errors.join("\n")).toContain("Type 'string' is not assignable to type 'number'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("only repairs a directly diagnosed call-argument brace", () => {
+  const cases = [
+    'const x = { a: { b: 1 );',
+    'new F({a: 1);',
+    'f(({a: 1));',
+    'f({a: 1}, 2);',
+    'f({a: 1});',
+  ];
+  for (const code of cases) {
+    const position = code.indexOf(")");
+    expect(repairCandidates(code, [], [], undefined, [position], {}, [position])).toEqual([]);
+  }
+});
+
+test("inserts braces only at diagnosed positions and can repair multiple calls", () => {
+  const code = 'await Read({file_path:"a"); await Read({file_path:"b");';
+  const original = check(code, declarations);
+  const first = code.indexOf(")");
+  const second = code.lastIndexOf(")");
+  expect(original.braceTargets).toEqual([first, second]);
+  expect(repairCandidates(code, [], [], undefined, original.errorPositions ?? [], {}, [first]))
+    .toEqual(['await Read({file_path:"a"}); await Read({file_path:"b");']);
+  expect(repairCandidates(code, [], [], undefined, original.errorPositions ?? [], {}, [first - 1])).toEqual([]);
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('await Read({file_path:"a"}); await Read({file_path:"b"});');
+});
+
+test("runs a repaired Read but never executes a candidate with other errors", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-brace-"));
+  try {
+    await Bun.write(join(dir, "a.txt"), "brace repair content");
+    const passed = await run('return await Read({file_path: "a.txt");', dir);
+    expect(passed.ok).toBe(true);
+    expect(passed.calls).toBe(1);
+    expect(passed.text).toContain("brace repair content");
+
+    const code = 'await Write({file_path: "never", content: "x"); const n: number = "bad";';
+    const original = check(code, declarations);
+    const failed = await run(code, dir);
+    expect(failed.ok).toBe(false);
+    expect(failed.calls).toBe(0);
+    for (const error of original.errors) expect(failed.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("repairs a property accessed before awaiting a call", () => {
   const code = 'print(await Bash({command: "pwd"}).output);';
   const result = checkProgram(code, { cwd: PROJECT });
