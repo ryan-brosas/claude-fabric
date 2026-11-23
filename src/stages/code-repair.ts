@@ -360,16 +360,15 @@ function printedPropertyRepairs(code: string, targets: readonly number[]): Repai
   return repairs;
 }
 
-// Replacing a conditional by a property access must not create a reference-sensitive use.
-function referenceSensitiveConditional(node: ts.ConditionalExpression): boolean {
-  let expression: ts.Node = node;
-  while (ts.isParenthesizedExpression(expression.parent) || ts.isNonNullExpression(expression.parent) ||
-         ts.isAsExpression(expression.parent) || ts.isSatisfiesExpression(expression.parent) ||
-         ts.isTypeAssertionExpression(expression.parent)) expression = expression.parent;
-  const parent = expression.parent;
-  return ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === expression) ||
-    (ts.isTaggedTemplateExpression(parent) && parent.tag === expression) ||
-    ((ts.isTypeOfExpression(parent) || ts.isDeleteExpression(parent)) && parent.expression === expression);
+// A conditional produces a value. Replacing it with a reference can change its receiver,
+// and replacing it with a function or class can cause a surrounding name to be inferred.
+function unsafeConditionalBranch(expression: ts.Expression): boolean {
+  while (ts.isParenthesizedExpression(expression) || ts.isNonNullExpression(expression) ||
+         ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) ||
+         ts.isTypeAssertionExpression(expression) || ts.isExpressionWithTypeArguments(expression) ||
+         ts.isPartiallyEmittedExpression(expression)) expression = expression.expression;
+  return ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression) ||
+    ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isClassExpression(expression);
 }
 
 // Positions come from the check: TS7053 declarations, unresolved `process`, and missing
@@ -396,7 +395,7 @@ function diagnosticRepairs(code: string, indexTargets: readonly number[], cwdTar
       repairs.push({ start: node.name.end, end: node.name.end, text: ": Record<string, any>" });
     }
     if (cwd !== undefined && ts.isConditionalExpression(node) &&
-        (isCwdProperty(node.condition) || (cwd && isCwdCall(node.condition))) && !referenceSensitiveConditional(node)) {
+        (isCwdProperty(node.condition) || (cwd && isCwdCall(node.condition))) && !unsafeConditionalBranch(node.whenTrue)) {
       // A cwd call returns a non-empty project folder. Keep the true branch in place so
       // other diagnosed repairs can still apply inside it.
       repairs.push({ start: node.getStart(file), end: node.whenTrue.getStart(file), text: "(" });

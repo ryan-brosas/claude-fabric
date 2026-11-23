@@ -198,11 +198,125 @@ test("refuses cwd call conditions in reference-sensitive positions", async () =>
   }
 });
 
-test("still repairs a wrapped conditional used as a value", () => {
+test("refuses a generic instantiation of a guarded method", async () => {
+  const code = 'const obj = { value: "bound", f<T>() { return this.value; } }; await Write("never", "x"); return ((process.cwd() ? obj.f : obj.f)<string>)();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-generic-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+    expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a guarded anonymous function whose inferred name would change", async () => {
+  const code = 'const f = process.cwd() ? () => 1 : () => 2; return f.name;';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-name-"));
+  try {
+    const result = await run(code, dir);
+    expect(result.ok).toBe(false);
+    expect(result.calls).toBe(0);
+    for (const error of original.errors) expect(result.text).toContain(error);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses a property true branch even when the conditional is used as a value", () => {
   const code = 'const obj = { f() { return "ok"; } }; const fn = (process.cwd ? obj.f : obj.f) as () => string; return fn();';
+  const original = check(code, declarations);
+  expect(original.ok).toBe(false);
+  expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+});
+
+test("refuses property and element true branches through transparent wrappers", () => {
+  for (const branch of [
+    'obj.f', 'obj["f"]', 'obj?.f', 'obj?.["f"]', '(obj.f)', '(obj.f!)',
+    '(obj.f as typeof obj.f)', '(obj.f satisfies typeof obj.f)',
+    '(<typeof obj.f>obj.f)', '(obj.f<string>)', '(((obj["f"]!) as typeof obj.f) satisfies typeof obj.f)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const obj = { f<T>() { return "ok"; } }; const value = ${condition} ? ${branch} : ${branch}; return value;`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+});
+
+test("refuses function and class true branches through transparent wrappers", () => {
+  for (const branch of [
+    '() => 1', '(function () { return 1; })', '(class {})',
+    '(function named() { return 1; })', '(class Named {})',
+    '((() => 1) as () => number)', '((() => 1) satisfies () => number)',
+    '(<() => number>(() => 1))', '((() => 1)!)',
+  ]) {
+    for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+      const code = `const value = ${condition} ? ${branch} : ${branch}; return value.name;`;
+      const original = check(code, declarations);
+      expect(original.ok).toBe(false);
+      expect(original.errors).toHaveLength(1);
+      expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+      expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+    }
+  }
+});
+
+test("repairs guarded template, concatenation, call, and await values", () => {
+  for (const condition of ['process.cwd', 'process.cwd()', 'process.cwd?.()']) {
+    for (const [branch, expected] of [
+      ['`path/${process.cwd()}`', '`path/${"/fixture/project"}`'],
+      ['process.cwd() + "/a"', '"/fixture/project" + "/a"'],
+      ['String("ok")', 'String("ok")'],
+      ['await Promise.resolve("ok")', 'await Promise.resolve("ok")'],
+    ]) {
+      const code = `async function value() { return ${condition} ? ${branch} : "fallback"; } return value();`;
+      const result = checkProgram(code, { cwd: PROJECT });
+      expect(result.checked.ok).toBe(true);
+      expect(result.program).toBe(`async function value() { return (${expected}); } return value();`);
+    }
+  }
+});
+
+test("repairs a call-result true branch even in a conditional callee", () => {
+  const code = 'const make = () => () => "ok"; return (process.cwd ? make() : make())();';
   const result = checkProgram(code, { cwd: PROJECT });
   expect(result.checked.ok).toBe(true);
-  expect(result.program).toBe('const obj = { f() { return "ok"; } }; const fn = ((obj.f)) as () => string; return fn();');
+  expect(result.program).toBe('const make = () => () => "ok"; return ((make()))();');
+});
+
+test("runs repaired guarded values without evaluating their fallbacks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fabric-cwd-values-"));
+  try {
+    for (const [code, expected] of [
+      ['return process.cwd ? `dir:${process.cwd()}` : (await Write("never", "x"), "fallback");', `dir:${dir}`],
+      ['return process.cwd() ? process.cwd() + "/a" : (await Write("never", "x"), "fallback");', `${dir}/a`],
+      ['return process.cwd?.() ? String("call") : (await Write("never", "x"), "fallback");', 'call'],
+      ['return process.cwd ? await Promise.resolve("await") : (await Write("never", "x"), "fallback");', 'await'],
+      ['const make = () => () => "callee"; return (process.cwd ? make() : make())();', 'callee'],
+    ]) {
+      const result = await run(code, dir);
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe(expected);
+      expect(result.calls).toBe(0);
+      expect(await Bun.file(join(dir, "never")).exists()).toBe(false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("composes cwd fallback replacements with boundary insertions", () => {
