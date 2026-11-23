@@ -363,7 +363,9 @@ function printedPropertyRepairs(code: string, targets: readonly number[]): Repai
 // Replacing a conditional by a property access must not create a reference-sensitive use.
 function referenceSensitiveConditional(node: ts.ConditionalExpression): boolean {
   let expression: ts.Node = node;
-  while (ts.isParenthesizedExpression(expression.parent)) expression = expression.parent;
+  while (ts.isParenthesizedExpression(expression.parent) || ts.isNonNullExpression(expression.parent) ||
+         ts.isAsExpression(expression.parent) || ts.isSatisfiesExpression(expression.parent) ||
+         ts.isTypeAssertionExpression(expression.parent)) expression = expression.parent;
   const parent = expression.parent;
   return ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === expression) ||
     (ts.isTaggedTemplateExpression(parent) && parent.tag === expression) ||

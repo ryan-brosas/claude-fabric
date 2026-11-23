@@ -125,6 +125,10 @@ test("refuses guarded conditionals in reference-sensitive positions", async () =
     '((process.cwd ? obj.tag : obj.tag))`text`',
     'typeof ((process.cwd ? obj.value : obj.value))',
     'delete ((process.cwd ? obj.value : obj.value))',
+    'new ((process.cwd ? obj.C : obj.C)!)()',
+    '((process.cwd ? obj.tag : obj.tag) as (s: TemplateStringsArray) => string)`text`',
+    'typeof ((process.cwd ? obj.value : obj.value) satisfies string | undefined)',
+    'delete ((process.cwd ? obj.value : obj.value) as string | undefined)',
   ]) {
     const program = `const obj: { value?: string; C: new () => object; tag: (s: TemplateStringsArray) => string } = { C: class {}, tag: s => s[0] ?? "" }; return ${expression};`;
     const checked = check(program, declarations);
@@ -133,6 +137,30 @@ test("refuses guarded conditionals in reference-sensitive positions", async () =
     expect(repairCode(program, checked.indexTargets, checked.cwdTargets, PROJECT)).toBe(program);
     expect(checkProgram(program, { cwd: PROJECT })).toEqual({ program, checked });
   }
+});
+
+for (const [wrapper, expression] of [
+  ["non-null", '(process.cwd ? obj.f : obj.f)!()'],
+  ["as", '((process.cwd ? obj.f : obj.f) as () => string)()'],
+  ["satisfies", '((process.cwd ? obj.f : obj.f) satisfies () => string)()'],
+  ["type assertion", '(<() => string>(process.cwd ? obj.f : obj.f))()'],
+  ["mixed wrappers", '(((process.cwd ? obj.f : obj.f)! as () => string) satisfies () => string)()'],
+] as const) {
+  test(`refuses a ${wrapper} wrapped conditional callee`, () => {
+    const code = `const obj = { value: "ok", f() { return this.value; } }; return ${expression};`;
+    const original = check(code, declarations);
+    expect(original.ok).toBe(false);
+    expect(original.cwdTargets).toHaveLength(1);
+    expect(original.errors.join("\n")).toContain("Cannot find name 'process'");
+    expect(checkProgram(code, { cwd: PROJECT })).toEqual({ program: code, checked: original });
+  });
+}
+
+test("still repairs a wrapped conditional used as a value", () => {
+  const code = 'const obj = { f() { return "ok"; } }; const fn = (process.cwd ? obj.f : obj.f) as () => string; return fn();';
+  const result = checkProgram(code, { cwd: PROJECT });
+  expect(result.checked.ok).toBe(true);
+  expect(result.program).toBe('const obj = { f() { return "ok"; } }; const fn = ((obj.f)) as () => string; return fn();');
 });
 
 test("composes cwd fallback replacements with boundary insertions", () => {
