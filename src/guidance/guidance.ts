@@ -19,8 +19,18 @@ const list = (names: readonly string[]): string =>
  * The one system prompt section this plugin adds: when to reach for fabric_exec, and the rules a
  * program keeps. It names only what a program may call, and only in Claude Code's vocabulary.
  */
-export const guidanceText = (names: readonly string[] = TOOL_NAMES): string =>
-  [
+export const guidanceText = (names: readonly string[] = TOOL_NAMES, programsOnly = false): string =>
+  programsOnly ? [
+    "Use `fabric_exec` first for reads, searches, edits and commands, even one; call tools directly only for what programs cannot do.",
+    "For full file text in context, call `Read` directly; program results are bounded.",
+    "Programs are async function bodies. Call " + list(names) + " with Claude Code's fields; group independent calls with `Promise.all`.",
+    "Call Write, Edit, Bash, Grep and Glob inside a program, not top-level, even to create a file.",
+    "Grep large files, then Read that range; Read small files whole. Don't `cat` files through Bash.",
+    "Only program returns and `print()` enter context; return what the next step needs, not raw output.",
+    "Programs type-check first; errors show lines and nothing runs.",
+    "`store(key, value)` and `load(key)` keep values across calls; other servers use `mcp.<server>.<tool>(args)`.",
+    "After compaction, use history.recall before asking the user or redoing work.",
+  ].join(" ") : [
     "Reach for `fabric_exec` first: read, search, edit and run commands, even a lone command, in one `fabric_exec` program; call tools directly only for what a program cannot do.",
     "For full file text in your context, call `Read` directly: program results are bounded.",
     "The program is an async function body. Call " + list(names) + " inside it with Claude Code's field names, and put independent calls in one `Promise.all`.",
@@ -33,3 +43,4 @@ export const guidanceText = (names: readonly string[] = TOOL_NAMES): string =>
 
 /** The section's text, built from the tool names the checker and the description already use. */
 export const GUIDANCE_TEXT = guidanceText();
+export const FABRIC_ONLY_GUIDANCE_TEXT = guidanceText(TOOL_NAMES, true);
