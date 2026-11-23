@@ -40,8 +40,8 @@ export interface RunResult { ok: boolean; text: string; ms: { check: number; run
 // Every text that reaches the model passes the one cap.
 const budget = (text: string): Promise<string> => outputBudget({ text, max: MAX_RESULT_CHARS, fallback: bound });
 
-export async function run(code: string, cwd: string, options: RunOptions = {}): Promise<RunResult> {
-  const t0 = performance.now();
+/** Check and, on failure, try a repair without starting a worker or calling tools. */
+export function checkProgram(code: string, options: Pick<RunOptions, "mcp"> = {}) {
   // The tool declarations are constant, but the mcp surface is not: it is printed from the
   // session's catalog, which the mod may send again while the server runs.
   const declarations = guestTypes(TOOLS, STORE, [mcpTypes(options.mcp?.catalog() ?? { servers: [] }), namespaceTypes("history", HISTORY)]);
@@ -61,6 +61,12 @@ export async function run(code: string, cwd: string, options: RunOptions = {}): 
       }
     }
   }
+  return { program, checked };
+}
+
+export async function run(code: string, cwd: string, options: RunOptions = {}): Promise<RunResult> {
+  const t0 = performance.now();
+  const { program, checked } = checkProgram(code, options);
   const checkMs = performance.now() - t0;
   if (!checked.ok) {
     // The errors are the ones for the code the model sent, so the line numbers match it.
