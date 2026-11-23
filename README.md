@@ -100,6 +100,20 @@ failures and 1 other failed program. Against the afternoon build, there was no m
 requests per run were the same and no pass was lost. The plugin ran #74 without its last two code
 commits, which only refuse more inputs. One `fabric_exec` run made 3 top-level Bash calls.
 
+A fourth run later that evening, 2026-11-23, used main through #76 (commit `2430ff6`), which adds
+the missing-brace repair (#76) and all of #74, with a native arm alongside. It used Sonnet 5.5 on
+15 tasks, 5 runs per arm, with `fabricOnly` on. `fabric_exec` passed 75 of 75 at a mean of 86,046
+tokens and a median of 77,488 (range 34,273 to 376,298), with 4.40 requests per run. Native code
+mode passed 73 of 75 at a mean of 111,092 and a median of 106,986 (range 74,240 to 175,847), with
+14.75 requests per run. Both native failures were `06-runlog-stats-command`. `fabric_exec` used
+0.775 times native's mean and 0.724 times its median. It had 10 requests that did no work: 9
+type-check failures and 1 other failed program. No run made a top-level Bash, Edit or Write call.
+One `05-router-encoded-path` run took 14 requests and 376,298 tokens while the model worked out how
+to run the test file; without that run the mean is 82,124. Against the third run there was no
+measurable change: 10 against 11 requests that did no work, 4.40 against 4.37 requests per run, and
+no pass lost. Against the baseline that morning (70 of 75, 4.53 requests per run, 35 requests that
+did no work), the gain holds.
+
 Since the 2026-11-19 run, the changes also include the `fabricOnly` option (#22, #23, #36), program
 guidance (#21) and whole-file `Read` guidance (#58, #61).
 
