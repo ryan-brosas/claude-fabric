@@ -32,11 +32,12 @@ benchmark tasks, it took 14.75 requests per run against 4.40 for `fabric_exec`. 
 exact values can change or disappear. Ours is deterministic and makes no model call: the same
 transcript always gives the same summary without an extra model request. It keeps the user's
 sentences word for word. In the `l3-memory` benchmark (100 turns, 6 compactions), final summaries
-held all 14 facts in all 20 runs, 280 of 280, each as the user's own sentence. Omissions remain
-reachable: `history.recall` and `history.expand` read the original transcript entries. If we cannot
-build a summary safely, we hand compaction back to Claude Code rather than guess. On that benchmark,
-median tokens were 8.57M against plain Claude Code's 9.02M, with 18 of 20 runs passing against 9 of
-10. This is one task family on one model; details are under Benchmarks.
+held all 14 facts in all 20 runs, 280 of 280, each as the user's own sentence. `history.recall` and
+`history.expand` read what a summary left out from the transcript. This is best effort: output the
+transcript no longer holds cannot come back. We hand compaction back to Claude Code when an
+over-budget transcript has no older history to cut, on an automatic skip, or on an uncaught error or
+timeout. On that benchmark, median tokens were 8.57M against plain Claude Code's 9.02M, with 18 of
+20 runs passing against 9 of 10. This is one task family on one model; details are under Benchmarks.
 
 ## Benchmarks
 
